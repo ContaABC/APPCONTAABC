@@ -346,7 +346,7 @@ export default function NotaEmitidaForm({
       setMsg({ tipo: "error", texto: res.error });
     } else {
       setNotaCreadaExito({
-        numeroNota: res.numeroNota,
+        numeroNota: res.numeroNota?? '',
         facturaOriginal: numeroFacturaOriginal,
         tipo: tipoNota,
       });

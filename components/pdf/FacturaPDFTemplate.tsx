@@ -1,5 +1,5 @@
 import React from "react";
-import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer";
+import { Document, Page, Text, View, StyleSheet, Image, DocumentProps } from "@react-pdf/renderer";
 
 const styles = StyleSheet.create({
   page: { padding: 30, fontSize: 10, fontFamily: "Helvetica" },
@@ -19,14 +19,14 @@ const styles = StyleSheet.create({
   qrImage: { width: 80, height: 80 }
 });
 
-interface ItemPDF {
+export interface ItemPDF {
   nombre_item: string;
   cantidad: number;
   valor_unitario: number;
   total: number;
 }
 
-interface FacturaPDFProps {
+export interface FacturaPDFProps extends DocumentProps {
   factura: {
     numero_factura: string;
     fecha_emision: string;
@@ -41,8 +41,8 @@ interface FacturaPDFProps {
   qrBase64: string;
 }
 
-export const FacturaPDFTemplate: React.FC<FacturaPDFProps> = ({ factura, items, qrBase64 }) => (
-  <Document>
+export const FacturaPDFTemplate: React.FC<FacturaPDFProps> = ({ factura, items, qrBase64, ...documentProps }) => (
+  <Document {...documentProps}>
     <Page size="LETTER" style={styles.page}>
       {/* Encabezado */}
       <View style={styles.header}>
