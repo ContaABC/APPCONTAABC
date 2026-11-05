@@ -1,79 +1,280 @@
 import Link from "next/link";
+import { 
+  Settings, 
+  Users, 
+  Truck, 
+  DollarSign, 
+  BarChart3, 
+  ShieldCheck 
+} from "lucide-react";
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-12">
-      {/* Encabezado principal del sistema */}
-      <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 border-b pb-6 border-zinc-200 dark:border-zinc-800">
+    <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-10">
+      {/* Encabezado del Sistema */}
+      <header className="max-w-7xl mx-auto mb-10 border-b pb-6 border-zinc-200 dark:border-zinc-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">ContaABC - Panel Contable NIIF</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight flex items-center gap-3">
+            <ShieldCheck className="w-8 h-8 text-blue-600" />
+            ContaABC — Portal de Gestión Contable NIIF
+          </h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-            Sistema central de gestión financiera y transacciones automatizadas
+            Selecciona un módulo o transacción para comenzar a operar en el sistema.
           </p>
         </div>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex items-center gap-3">
           <Link
             href="/transacciones/nueva"
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition shadow-sm"
+            className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition shadow-sm flex items-center gap-2"
           >
-            + Nueva Transacción
-          </Link>
-          <Link
-            href="/terceros"
-            className="border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 px-4 py-2 rounded-lg font-medium text-sm transition"
-          >
-            Gestión de Terceros
+            <span>+ Nueva Transacción</span>
           </Link>
         </div>
       </header>
 
-      {/* Tarjetas de Resumen General */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-          <h3 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Total Transacciones</h3>
-          <p className="text-3xl font-bold mt-2">0</p>
+      {/* Contenedor de Grupos de Enlaces */}
+      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        
+        {/* GRUPO 1: CONFIGURACIÓN */}
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-zinc-100 dark:border-zinc-800">
+              <Settings className="w-6 h-6 text-indigo-500" />
+              <h2 className="text-lg font-bold">Configuración</h2>
+            </div>
+            <ul className="space-y-2.5 text-sm">
+              <li>
+                <Link href="/api/empresas/nueva" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Nueva Empresa
+                </Link>
+              </li>
+              <li>
+                <Link href="/terceros" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Terceros
+                </Link>
+              </li>
+              <li>
+                <Link href="/configuracion/clases-documento" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Clases de Documento
+                </Link>
+              </li>
+              <li>
+                <Link href="/Sucursales" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Sucursales
+                </Link>
+              </li>
+              <li>
+                <Link href="/ConceptosNiif" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Conceptos NIIF
+                </Link>
+              </li>
+              <li>
+                <Link href="/subconceptos_niif" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Subconceptos NIIF
+                </Link>
+              </li>
+              <li>
+                <Link href="/ActividadesABC" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Actividades ABC
+                </Link>
+              </li>
+              <li>
+                <Link href="/actividades_auxiliares" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Actividades Auxiliares
+                </Link>
+              </li>
+              <li>
+                <Link href="/conceptos_auxiliares" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Conceptos Auxiliares
+                </Link>
+              </li>
+              <li>
+                <Link href="/clase_documento_conceptos" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Relación Clases y Conceptos
+                </Link>
+              </li>
+            </ul>
+          </div>
+          <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-400">
+            Módulo de Parámetros Generales
+          </div>
         </div>
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-          <h3 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Ingresos del Periodo</h3>
-          <p className="text-3xl font-bold text-green-600 mt-2">$0.00</p>
-        </div>
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-          <h3 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Gastos y Costos</h3>
-          <p className="text-3xl font-bold text-red-600 mt-2">$0.00</p>
-        </div>
-      </section>
 
-      {/* Secciones de Transacciones Organizadas por Grupos */}
-      <section className="space-y-6">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-semibold">Transacciones Efectuadas por Grupos</h2>
-          <span className="text-xs text-zinc-500 bg-zinc-200 dark:bg-zinc-800 px-2.5 py-1 rounded-full">
-            Estructura NIIF
-          </span>
+        {/* GRUPO 2: PROVEEDORES */}
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-zinc-100 dark:border-zinc-800">
+              <Truck className="w-6 h-6 text-amber-500" />
+              <h2 className="text-lg font-bold">Proveedores</h2>
+            </div>
+            <ul className="space-y-2.5 text-sm">
+              <li>
+                <Link href="/facturas/cargar" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Cargar Facturas
+                </Link>
+              </li>
+              <li>
+                <Link href="/facturas/consultar" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Consultar Facturas
+                </Link>
+              </li>
+              <li>
+                <Link href="/facturas/notas" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Notas de Facturas
+                </Link>
+              </li>
+            </ul>
+          </div>
+          <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-400">
+            Gestión de Costos y Cuentas por Pagar
+          </div>
         </div>
 
-        {/* Grupo 1: Ingresos */}
-        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden shadow-sm">
-          <div className="bg-zinc-100 dark:bg-zinc-800/60 px-6 py-3 border-b border-zinc-200 dark:border-zinc-700 font-semibold text-sm flex justify-between items-center">
-            <span>Grupo 4: Ingresos Operacionales</span>
-            <span className="text-xs font-normal text-zinc-500">0 Registros</span>
+        {/* GRUPO 3: CLIENTES */}
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-zinc-100 dark:border-zinc-800">
+              <Users className="w-6 h-6 text-emerald-500" />
+              <h2 className="text-lg font-bold">Clientes</h2>
+            </div>
+            <ul className="space-y-2.5 text-sm">
+              <li>
+                <Link href="/facturas/emitir" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Emitir Facturas
+                </Link>
+              </li>
+              <li>
+                <Link href="/facturas-emitidas" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Facturas Emitidas
+                </Link>
+              </li>
+              <li>
+                <Link href="/items" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Gestión de Ítems
+                </Link>
+              </li>
+              <li>
+                <Link href="/notas-emitidas" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Notas Emitidas
+                </Link>
+              </li>
+              <li>
+                <Link href="/notas-emitidas/nueva" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Nueva Nota Emitida
+                </Link>
+              </li>
+            </ul>
           </div>
-          <div className="p-6 text-sm text-zinc-500 dark:text-zinc-400 text-center py-8">
-            No hay transacciones registradas en este grupo. Las nuevas operaciones aparecerán aquí automáticamente.
+          <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-400">
+            Facturación e Ingresos Operacionales
           </div>
         </div>
 
-        {/* Grupo 2: Gastos / Costos */}
-        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden shadow-sm">
-          <div className="bg-zinc-100 dark:bg-zinc-800/60 px-6 py-3 border-b border-zinc-200 dark:border-zinc-700 font-semibold text-sm flex justify-between items-center">
-            <span>Grupo 5 y 6: Costos y Gastos</span>
-            <span className="text-xs font-normal text-zinc-500">0 Registros</span>
+        {/* GRUPO 4: TESORERÍA */}
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-zinc-100 dark:border-zinc-800">
+              <DollarSign className="w-6 h-6 text-purple-500" />
+              <h2 className="text-lg font-bold">Tesorería</h2>
+            </div>
+            <ul className="space-y-2.5 text-sm">
+              <li>
+                <Link href="/cobros/nuevo" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Nuevo Cobro
+                </Link>
+              </li>
+              <li>
+                <Link href="/tesoreria/pagos" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Pagos
+                </Link>
+              </li>
+              <li>
+                <Link href="/tesoreria/consignaciones" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Consignaciones
+                </Link>
+              </li>
+            </ul>
           </div>
-          <div className="p-6 text-sm text-zinc-500 dark:text-zinc-400 text-center py-8">
-            No hay transacciones registradas en este grupo.
+          <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-400">
+            Control de Flujo de Caja y Bancos
           </div>
         </div>
-      </section>
+
+        {/* GRUPO 5: CONTABILIDAD */}
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6 shadow-sm flex flex-col justify-between md:col-span-2 lg:col-span-2">
+          <div>
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-zinc-100 dark:border-zinc-800">
+              <BarChart3 className="w-6 h-6 text-blue-500" />
+              <h2 className="text-lg font-bold">Contabilidad y Reportes NIIF</h2>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              <ul className="space-y-2.5">
+                <li>
+                  <Link href="/consultas" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Consultas Generales
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/consultas/movimientos" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Movimientos Contables
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/consultas/reportes" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Reportes Financieros
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/documentos" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Documentos Contables
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/balance_general" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Balance General
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/estado-resultados" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Estado de Resultados
+                  </Link>
+                </li>
+              </ul>
+              <ul className="space-y-2.5">
+                <li>
+                  <Link href="/retenciones/declaracion" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Declaración de Retenciones
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/retenciones/Certificados" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Certificados de Retención
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/retenciones/conceptos" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Conceptos de Retención
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/consultas/conceptos_niif" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Consultas por Conceptos NIIF
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/cierres" className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span> Cierres Contables
+                  </Link>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-400">
+            Estructura Financiera Oficial, Retenciones y Cierres
+          </div>
+        </div>
+
+      </div>
     </main>
   );
 }
