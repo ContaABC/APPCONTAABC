@@ -7,16 +7,20 @@ import { createClient } from "@supabase/supabase-js";
 
 export default function AsignacionesPage() {
   const [usuarios, setUsuarios] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<any[]>([]);
+  const [sucursales, setSucursales] = useState<any[]>([]);
   const [asignaciones, setAsignaciones] = useState<any[]>([]);
+  
   const [loading, setLoading] = useState(false);
   const [cargandoDatos, setCargandoDatos] = useState(true);
 
-  // Formulario de asignación
+  // Formulario adaptado para selección múltiple o general
   const [form, setForm] = useState({
     usuario_id: "",
-    empresa_id: "",
+    empresa_id: "", // Si está vacío y marca "todas", guardaremos un indicador o iteraremos
     sucursal_id: "",
-    rol: "Acceso Estándar",
+    todas_empresas: false,
+    rol: "Administrador",
   });
 
   const [mensaje, setMensaje] = useState({ texto: "", tipo: "" });
@@ -37,11 +41,16 @@ export default function AsignacionesPage() {
       // 1. Cargar usuarios
       const { data: usuariosData } = await supabase
         .from("usuarios_perfiles")
-        .select("id, nombres, apellidos, cedula");
-
+        .select("id, nombres, apellidos, cedula, tipo_usuario");
       if (usuariosData) setUsuarios(usuariosData);
 
-      // 2. Cargar asignaciones existentes
+      // 2. Cargar empresas reales de tu base de datos (ajusta el nombre de la tabla si es distinto, ej: 'empresas')
+      const { data: empresasData } = await supabase
+        .from("empresas")
+        .select("*");
+      if (empresasData) setEmpresas(empresasData);
+
+      // 3. Cargar asignaciones existentes con el nombre de la empresa si es posible
       const { data: asignacionesData } = await supabase
         .from("usuario_asignaciones")
         .select(`
@@ -59,6 +68,28 @@ export default function AsignacionesPage() {
     setCargandoDatos(false);
   };
 
+  // Cargar sucursales al cambiar de empresa
+  useEffect(() => {
+    if (!form.empresa_id) {
+      setSucursales([]);
+      return;
+    }
+    async function cargarSucursalesEmpresa() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) return;
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data } = await supabase
+        .from("sucursales")
+        .select("*")
+        .eq("empresa_id", form.empresa_id);
+
+      if (data) setSucursales(data);
+    }
+    cargarSucursalesEmpresa();
+  }, [form.empresa_id]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -67,24 +98,38 @@ export default function AsignacionesPage() {
     try {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
       if (!supabaseUrl || !supabaseAnonKey) throw new Error("Faltan variables de entorno de Supabase.");
 
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-      const { error } = await supabase.from("usuario_asignaciones").insert([
-        {
+      if (form.todas_empresas) {
+        // Si selecciona todas las empresas, iteramos y guardamos una asignación por cada empresa disponible
+        if (empresas.length === 0) throw new Error("No hay empresas registradas en el sistema para asignar.");
+
+        const batchInserts = empresas.map((emp) => ({
           usuario_id: form.usuario_id,
-          empresa_id: form.empresa_id,
-          sucursal_id: form.sucursal_id ? form.sucursal_id : null,
+          empresa_id: emp.id,
+          sucursal_id: null, // Aplica a toda la empresa
           rol: form.rol,
-        },
-      ]);
+        }));
 
-      if (error) throw error;
+        const { error } = await supabase.from("usuario_asignaciones").insert(batchInserts);
+        if (error) throw error;
+      } else {
+        // Asignación individual (Empresa específica y opcionalmente sucursal)
+        const { error } = await supabase.from("usuario_asignaciones").insert([
+          {
+            usuario_id: form.usuario_id,
+            empresa_id: form.empresa_id,
+            sucursal_id: form.sucursal_id ? form.sucursal_id : null,
+            rol: form.rol,
+          },
+        ]);
+        if (error) throw error;
+      }
 
-      setMensaje({ texto: "¡Empresa y sucursal asignadas exitosamente!", tipo: "success" });
-      setForm({ usuario_id: "", empresa_id: "", sucursal_id: "", rol: "Acceso Estándar" });
+      setMensaje({ texto: "¡Asignación guardada exitosamente!", tipo: "success" });
+      setForm({ usuario_id: "", empresa_id: "", sucursal_id: "", todas_empresas: false, rol: "Administrador" });
       cargarDatosIniciales();
     } catch (error: any) {
       setMensaje({ texto: error.message || "Error al realizar la asignación.", tipo: "error" });
@@ -142,44 +187,72 @@ export default function AsignacionesPage() {
                   <option value="" className="dark:bg-zinc-900">Seleccione un usuario...</option>
                   {usuarios.map((u) => (
                     <option key={u.id} value={u.id} className="dark:bg-zinc-900">
-                      {u.nombres} {u.apellidos} (CC: {u.cedula})
+                      {u.nombres} {u.apellidos} ({u.tipo_usuario})
                     </option>
                   ))}
                 </select>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-500 mb-1">ID de Empresa (UUID)</label>
+              {/* Opción de Asignar Todas las Empresas */}
+              <div className="bg-indigo-50/50 dark:bg-indigo-950/20 p-3 rounded-xl border border-indigo-100 dark:border-indigo-900/50 flex items-center gap-3">
                 <input 
-                  type="text" 
-                  required
-                  value={form.empresa_id}
-                  onChange={(e) => setForm({...form, empresa_id: e.target.value})}
-                  className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
-                  placeholder="ID de la empresa en tu base de datos"
+                  type="checkbox"
+                  id="todas_empresas"
+                  checked={form.todas_empresas}
+                  onChange={(e) => setForm({...form, todas_empresas: e.target.checked, empresa_id: ""})}
+                  className="w-4 h-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
                 />
+                <label htmlFor="todas_empresas" className="text-xs font-semibold text-indigo-900 dark:text-indigo-200 cursor-pointer">
+                  Otorgar acceso a <strong>TODAS las empresas</strong> (Ideal para Administradores)
+                </label>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-500 mb-1">ID de Sucursal (Opcional)</label>
-                <input 
-                  type="text" 
-                  value={form.sucursal_id}
-                  onChange={(e) => setForm({...form, sucursal_id: e.target.value})}
-                  className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
-                  placeholder="Dejar en blanco si aplica a toda la empresa"
-                />
-              </div>
+              {!form.todas_empresas && (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-500 mb-1">Seleccionar Empresa</label>
+                    <select 
+                      required={!form.todas_empresas}
+                      value={form.empresa_id}
+                      onChange={(e) => setForm({...form, empresa_id: e.target.value})}
+                      className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
+                    >
+                      <option value="" className="dark:bg-zinc-900">Seleccione una empresa...</option>
+                      {empresas.map((emp) => (
+                        <option key={emp.id} value={emp.id} className="dark:bg-zinc-900">
+                          {emp.razon_social || emp.nombre_comercial || `Empresa ID: ${emp.id}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-500 mb-1">Sucursal (Opcional)</label>
+                    <select 
+                      value={form.sucursal_id}
+                      onChange={(e) => setForm({...form, sucursal_id: e.target.value})}
+                      className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
+                    >
+                      <option value="" className="dark:bg-zinc-900">Todas las sucursales de esta empresa</option>
+                      {sucursales.map((suc) => (
+                        <option key={suc.id} value={suc.id} className="dark:bg-zinc-900">
+                          {suc.nombre || `Sucursal ID: ${suc.id}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-500 mb-1">Rol en esta Empresa</label>
+                <label className="block text-xs font-semibold text-zinc-500 mb-1">Rol Asignado</label>
                 <input 
                   type="text" 
                   required
                   value={form.rol}
                   onChange={(e) => setForm({...form, rol: e.target.value})}
                   className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
-                  placeholder="Ej. Contador, Revisor Fiscal, Auxiliar"
+                  placeholder="Ej. Administrador, Contador"
                 />
               </div>
 
@@ -193,7 +266,7 @@ export default function AsignacionesPage() {
             </form>
           </div>
 
-          {/* Listado de Asignaciones Existentes */}
+          {/* Listado de Asignaciones */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm lg:col-span-2">
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
               <Link2 className="w-5 h-5 text-indigo-600" /> Permisos y Accesos Asignados
@@ -210,8 +283,8 @@ export default function AsignacionesPage() {
                     <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-400 text-xs uppercase">
                       <th className="pb-3 font-semibold">Usuario</th>
                       <th className="pb-3 font-semibold">Empresa ID</th>
-                      <th className="pb-3 font-semibold">Sucursal ID</th>
-                      <th className="pb-3 font-semibold">Rol Asignado</th>
+                      <th className="pb-3 font-semibold">Sucursal</th>
+                      <th className="pb-3 font-semibold">Rol</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
@@ -221,9 +294,9 @@ export default function AsignacionesPage() {
                           {asig.usuarios_perfiles?.nombres} {asig.usuarios_perfiles?.apellidos}
                           <span className="block text-xs text-zinc-400">CC: {asig.usuarios_perfiles?.cedula}</span>
                         </td>
-                        <td className="py-3 text-xs font-mono text-zinc-500">{asig.empresa_id}</td>
-                        <td className="py-3 text-xs font-mono text-zinc-500">
-                          {asig.sucursal_id ? asig.sucursal_id : <span className="text-emerald-600 font-sans font-semibold">Todas (Empresa completa)</span>}
+                        <td className="py-3 text-xs font-mono text-zinc-500 truncate max-w-[120px]">{asig.empresa_id}</td>
+                        <td className="py-3 text-xs text-zinc-500">
+                          {asig.sucursal_id ? asig.sucursal_id : <span className="text-emerald-600 font-semibold">Empresa Completa</span>}
                         </td>
                         <td className="py-3">
                           <span className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 px-2 py-1 rounded-lg text-xs font-semibold">
