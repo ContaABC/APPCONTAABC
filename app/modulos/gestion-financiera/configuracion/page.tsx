@@ -2,26 +2,27 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Settings, Plus, CheckCircle2, Layers } from "lucide-react";
+import { ArrowLeft, Settings, CheckCircle2, Layers, Filter } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 
-export default function ConfigurarIndicadoresPage() {
+export default function ConfigurarFormulasIndicadorPage() {
+  const [empresas, setEmpresas] = useState<any[]>([]);
+  const [empresaSeleccionada, setEmpresaSeleccionada] = useState<string>("");
+  
   const [indicadores, setIndicadores] = useState<any[]>([]);
   const [indicadorSeleccionado, setIndicadorSeleccionado] = useState<any>(null);
   
-  // Listas para los tres niveles NIIF
+  // Listas maestras filtradas por empresa
   const [listaConceptos, setListaConceptos] = useState<any[]>([]);
   const [listaSubconceptos, setListaSubconceptos] = useState<any[]>([]);
   const [listaAuxiliares, setListaAuxiliares] = useState<any[]>([]);
 
-  const [loading, setLoading] = useState(false);
+  // Filtros por Elemento (Activo, Pasivo, Patrimonio, Ingresos, Gastos, Costos) para cada sección
+  const [filtroElementoNum, setFiltroElementoNum] = useState<string>("TODOS");
+  const [filtroElementoRest, setFiltroElementoRest] = useState<string>("TODOS");
+  const [filtroElementoDen, setFiltroElementoDen] = useState<string>("TODOS");
 
-  const [nuevoInd, setNuevoInd] = useState({
-    codigo: "",
-    nombre: "",
-    categoria: "Rentabilidad",
-    descripcion_formula: "",
-  });
+  const [loading, setLoading] = useState(false);
 
   const [formConfig, setFormConfig] = useState({
     indicador_id: "",
@@ -36,30 +37,46 @@ export default function ConfigurarIndicadoresPage() {
   const [mensaje, setMensaje] = useState({ texto: "", tipo: "" });
 
   useEffect(() => {
-    cargarCatalogosNIIF();
+    cargarEmpresasEIndicadores();
   }, []);
 
-  const cargarCatalogosNIIF = async () => {
+  // Cargar empresas y catálogo de indicadores al iniciar
+  const cargarEmpresasEIndicadores = async () => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     if (!supabaseUrl || !supabaseAnonKey) return;
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    // 1. Indicadores
+    const { data: empData } = await supabase.from("empresas").select("*").order("razon_social");
+    if (empData && empData.length > 0) {
+      setEmpresas(empData);
+      setEmpresaSeleccionada(String(empData[0].id));
+    }
+
     const { data: indData } = await supabase.from("indicadores_financieros").select("*").order("nombre");
     if (indData) setIndicadores(indData);
+  };
 
-    // 2. Conceptos NIIF
-    const { data: concData } = await supabase.from("conceptos_niif").select("*").order("codigo_concepto");
+  // Recargar catálogos NIIF cada vez que cambie la empresa seleccionada
+  useEffect(() => {
+    if (!empresaSeleccionada) return;
+    cargarCatalogosNIIFEmpresa(empresaSeleccionada);
+  }, [empresaSeleccionada]);
+
+  const cargarCatalogosNIIFEmpresa = async (empId: string) => {
+    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+
+    // 1. Conceptos NIIF de la empresa
+    const { data: concData } = await supabase.from("conceptos_niif").select("*").eq("empresa_id", empId).order("codigo_concepto");
     if (concData) setListaConceptos(concData);
 
-    // 3. Subconceptos NIIF
-    const { data: subData } = await supabase.from("subconceptos_niif").select("*").order("codigo");
+    // 2. Subconceptos NIIF (filtrados por empresa, ya que tu esquema incluye empresa_id)
+    const { data: subData } = await supabase.from("subconceptos_niif").select("*").eq("empresa_id", empId).order("codigo");
     if (subData) setListaSubconceptos(subData);
 
-    // 4. Conceptos Auxiliares
-    const { data: auxData } = await supabase.from("conceptos_auxiliares").select("*").order("codigo_auxiliar");
+    // 3. Conceptos Auxiliares de la empresa
+    const { data: auxData } = await supabase.from("conceptos_auxiliares").select("*").eq("empresa_id", empId).order("codigo_auxiliar");
     if (auxData) setListaAuxiliares(auxData);
   };
 
@@ -70,25 +87,19 @@ export default function ConfigurarIndicadoresPage() {
     setIndicadorSeleccionado(encontrado || null);
   };
 
-  const handleCrearIndicador = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
-    const { error } = await supabase.from("indicadores_financieros").insert([nuevoInd]);
-    if (!error) {
-      setMensaje({ texto: "¡Indicador creado con éxito!", tipo: "success" });
-      setNuevoInd({ codigo: "", nombre: "", categoria: "Rentabilidad", descripcion_formula: "" });
-      cargarCatalogosNIIF();
-    } else {
-      setMensaje({ texto: error.message, tipo: "error" });
-    }
-  };
-
   const handleGuardarConfiguracion = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!empresaSeleccionada) {
+      setMensaje({ texto: "Seleccione una empresa primero.", tipo: "error" });
+      return;
+    }
+
     setLoading(true);
+    setMensaje({ texto: "", tipo: "" });
     const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
     const payload = {
+      empresa_id: Number(empresaSeleccionada),
       indicador_id: Number(formConfig.indicador_id),
       nivel_agrupacion: formConfig.nivel_agrupacion,
       numerador_ids: formConfig.numerador_ids.join(","),
@@ -100,41 +111,66 @@ export default function ConfigurarIndicadoresPage() {
 
     const { error } = await supabase.from("indicadores_formulas_detalle").insert([payload]);
     if (!error) {
-      setMensaje({ texto: "¡Fórmula asociada correctamente al indicador!", tipo: "success" });
+      setMensaje({ texto: "¡Fórmula asociada correctamente para esta empresa!", tipo: "success" });
     } else {
       setMensaje({ texto: error.message, tipo: "error" });
     }
     setLoading(false);
   };
 
-  // Selector dinámico según el nivel elegido por el usuario
-  const obtenerListaSegunNivel = () => {
+  // Obtener elementos según el nivel elegido
+  const obtenerElementosBase = () => {
     if (formConfig.nivel_agrupacion === "concepto_niif") {
-      return listaConceptos.map(c => ({ id: c.id, codigo: c.codigo_concepto, nombre: c.nombre }));
+      return listaConceptos.map(c => ({ id: c.id, codigo: c.codigo_concepto, nombre: c.nombre, elemento: c.elemento || "GENERAL" }));
     } else if (formConfig.nivel_agrupacion === "subconcepto") {
-      return listaSubconceptos.map(s => ({ id: s.id, codigo: s.codigo, nombre: s.nombre }));
+      return listaSubconceptos.map(s => ({ id: s.id, codigo: s.codigo, nombre: s.nombre, elemento: s.elemento || "GENERAL" }));
     } else {
-      return listaAuxiliares.map(a => ({ id: a.id, codigo: a.codigo_auxiliar, nombre: a.nombre }));
+      return listaAuxiliares.map(a => ({ id: a.id, codigo: a.codigo_auxiliar, nombre: a.nombre, elemento: a.elemento || "GENERAL" }));
     }
   };
 
-  const elementosDisponibles = obtenerListaSegunNivel();
+  const elementosBase = obtenerElementosBase();
+
+  // Filtradores por elemento para cada sección de la fórmula
+  const filtrarPorElemento = (filtro: string) => {
+    if (filtro === "TODOS") return elementosBase;
+    return elementosBase.filter(el => el.elemento?.toUpperCase() === filtro.toUpperCase());
+  };
 
   return (
-    <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-10">
-      <div className="max-w-4xl mx-auto space-y-8">
+    <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-12">
+      <div className="max-w-5xl mx-auto space-y-8">
         
         <Link href="/modulos/gestion-financiera" className="inline-flex items-center gap-2 text-sm text-zinc-500 hover:text-blue-600 transition">
           <ArrowLeft className="w-4 h-4" /> Volver a Gestión Financiera
         </Link>
 
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-3xl shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-indigo-50 dark:bg-indigo-950/50 rounded-2xl text-indigo-600">
-            <Settings className="w-7 h-7" />
+        {/* Encabezado */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-3xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-indigo-50 dark:bg-indigo-950/50 rounded-2xl text-indigo-600">
+              <Settings className="w-7 h-7" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold">Parametrización de Fórmulas NIIF</h1>
+              <p className="text-sm text-zinc-500">Configuración avanzada por empresa y filtrado por elemento contable</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold">Creador y Configurador de Indicadores NIIF</h1>
-            <p className="text-sm text-zinc-500">Configura reglas por Concepto, Subconcepto o Auxiliar con guía teórica</p>
+
+          {/* Selector Global de Empresa para esta pantalla */}
+          <div className="w-full md:w-72">
+            <label className="block text-xs font-semibold text-zinc-400 mb-1">Empresa en Configuración</label>
+            <select
+              value={empresaSeleccionada}
+              onChange={(e) => setEmpresaSeleccionada(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-sm font-bold text-indigo-600 focus:outline-none"
+            >
+              {empresas.map((emp) => (
+                <option key={emp.id} value={emp.id} className="dark:bg-zinc-900">
+                  {emp.razon_social || emp.nombre_comercial}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -147,202 +183,200 @@ export default function ConfigurarIndicadoresPage() {
           </div>
         )}
 
-        {/* 1. CREAR NUEVO INDICADOR */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-3xl shadow-sm space-y-4">
+        {/* FORMULARIO DE PARAMETRIZACIÓN */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-8 rounded-3xl shadow-sm space-y-6">
           <h2 className="text-lg font-bold flex items-center gap-2">
-            <Plus className="w-5 h-5 text-indigo-600" /> 1. Registrar Nuevo Indicador en el Catálogo
+            <Layers className="w-5 h-5 text-indigo-600" /> Editor de Reglas Matemáticas por Indicador
           </h2>
-          <form onSubmit={handleCrearIndicador} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div>
-              <label className="block text-xs font-semibold text-zinc-500 mb-1">Código Único (Ej: PRUEBA_ACIDA)</label>
-              <input 
-                type="text" 
-                required 
-                value={nuevoInd.codigo}
-                onChange={(e) => setNuevoInd({...nuevoInd, codigo: e.target.value.toUpperCase()})}
-                className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent"
-                placeholder="EJ_INDICADOR"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-zinc-500 mb-1">Nombre del Indicador</label>
-              <input 
-                type="text" 
-                required 
-                value={nuevoInd.nombre}
-                onChange={(e) => setNuevoInd({...nuevoInd, nombre: e.target.value})}
-                className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent"
-                placeholder="Ej. Capital de Trabajo"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-zinc-500 mb-1">Categoría</label>
-              <select 
-                value={nuevoInd.categoria}
-                onChange={(e) => setNuevoInd({...nuevoInd, categoria: e.target.value})}
-                className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent"
-              >
-                <option value="Rentabilidad" className="dark:bg-zinc-900">Rentabilidad</option>
-                <option value="Liquidez" className="dark:bg-zinc-900">Liquidez</option>
-                <option value="Endeudamiento" className="dark:bg-zinc-900">Endeudamiento</option>
-                <option value="Eficiencia" className="dark:bg-zinc-900">Eficiencia</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-zinc-500 mb-1">Descripción de la Fórmula</label>
-              <input 
-                type="text" 
-                required 
-                value={nuevoInd.descripcion_formula}
-                onChange={(e) => setNuevoInd({...nuevoInd, descripcion_formula: e.target.value})}
-                className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent"
-                placeholder="Ej. (Activo - Inventario) / Pasivo"
-              />
-            </div>
-            <div className="md:col-span-2">
-              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl transition">
-                Guardar Indicador en el Catálogo
-              </button>
-            </div>
-          </form>
-        </div>
 
-        {/* 2. CONFIGURAR REGLA MATEMÁTICA */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-3xl shadow-sm space-y-4">
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <Layers className="w-5 h-5 text-indigo-600" /> 2. Configurar Regla Matemática y Jerarquía NIIF
-          </h2>
-          <form onSubmit={handleGuardarConfiguracion} className="space-y-4 text-sm">
-            <div>
-              <label className="block text-xs font-semibold text-zinc-500 mb-1">Seleccionar Indicador</label>
-              <select 
-                required
-                value={formConfig.indicador_id}
-                onChange={handleSeleccionarIndicador}
-                className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent"
-              >
-                <option value="" className="dark:bg-zinc-900">Seleccione un indicador del catálogo...</option>
-                {indicadores.map((ind) => (
-                  <option key={ind.id} value={ind.id} className="dark:bg-zinc-900">{ind.nombre} ({ind.categoria})</option>
-                ))}
-              </select>
-
-              {/* Tarjeta de apoyo con la fórmula teórica oficial */}
-              {indicadorSeleccionado && (
-                <div className="mt-3 p-3.5 bg-blue-50/60 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 rounded-2xl flex items-start gap-3">
-                  <div className="p-1.5 bg-blue-600 text-white rounded-xl mt-0.5">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                  </div>
-                  <div className="text-xs space-y-1">
-                    <p className="font-bold text-blue-900 dark:text-blue-200">Fórmula Teórica Oficial:</p>
-                    <p className="font-mono text-blue-700 dark:text-blue-300 bg-white dark:bg-zinc-900 px-2.5 py-1 rounded-lg border border-blue-100 dark:border-blue-900">
-                      {indicadorSeleccionado.descripcion_formula || "Sin fórmula detallada registrada en el catálogo."}
-                    </p>
-                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                      Categoría: <span className="font-semibold">{indicadorSeleccionado.categoria}</span> | Mapea los elementos correspondientes abajo.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-zinc-500 mb-1">Nivel de Agrupación NIIF</label>
-              <select 
-                value={formConfig.nivel_agrupacion}
-                onChange={(e) => setFormConfig({...formConfig, nivel_agrupacion: e.target.value, numerador_ids: [], numerador_restando_ids: [], denominador_ids: []})}
-                className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent font-semibold text-indigo-600"
-              >
-                <option value="concepto_niif" className="dark:bg-zinc-900">1. Concepto General NIIF (Abarca todo)</option>
-                <option value="subconcepto" className="dark:bg-zinc-900">2. Subconcepto NIIF (Nivel intermedio)</option>
-                <option value="concepto_auxiliar" className="dark:bg-zinc-900">3. Concepto Auxiliar (Detalle máximo)</option>
-              </select>
-            </div>
-
-            <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-2xl border border-zinc-200 dark:border-zinc-800 space-y-3">
-              <h3 className="font-bold text-xs uppercase text-zinc-500">Estructura del Numerador</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-500 mb-1">Elementos a Sumar (+)</label>
-                  <select 
-                    multiple
-                    className="w-full h-36 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
-                    value={formConfig.numerador_ids}
-                    onChange={(e) => {
-                      const values = Array.from(e.target.selectedOptions, option => option.value);
-                      setFormConfig({...formConfig, numerador_ids: values});
-                    }}
-                  >
-                    {elementosDisponibles.map((el) => (
-                      <option key={el.id} value={el.id} className="dark:bg-zinc-900">
-                        {el.codigo} - {el.nombre}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="text-[10px] text-zinc-400 mt-1 block">Usa Ctrl / Cmd para seleccionar varios.</span>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-500 mb-1">Elementos a Restar (-) [Ej: Inventarios]</label>
-                  <select 
-                    multiple
-                    className="w-full h-36 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
-                    value={formConfig.numerador_restando_ids}
-                    onChange={(e) => {
-                      const values = Array.from(e.target.selectedOptions, option => option.value);
-                      setFormConfig({...formConfig, numerador_restando_ids: values});
-                    }}
-                  >
-                    {elementosDisponibles.map((el) => (
-                      <option key={el.id} value={el.id} className="dark:bg-zinc-900">
-                        {el.codigo} - {el.nombre}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-2xl border border-zinc-200 dark:border-zinc-800 space-y-3">
-              <h3 className="font-bold text-xs uppercase text-zinc-500">Estructura del Denominador y Tipo de Operación</h3>
+          <form onSubmit={handleGuardarConfiguracion} className="space-y-6 text-sm">
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label className="block text-xs font-semibold text-zinc-500 mb-1">Elementos del Denominador (Divisor)</label>
+                <label className="block text-xs font-semibold text-zinc-500 mb-1">Seleccionar Indicador Financiero</label>
                 <select 
-                  multiple
-                  className="w-full h-36 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
-                  value={formConfig.denominador_ids}
-                  onChange={(e) => {
-                    const values = Array.from(e.target.selectedOptions, option => option.value);
-                    setFormConfig({...formConfig, denominador_ids: values});
-                  }}
+                  required
+                  value={formConfig.indicador_id}
+                  onChange={handleSeleccionarIndicador}
+                  className="w-full px-3 py-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent font-medium"
                 >
-                  {elementosDisponibles.map((el) => (
-                    <option key={el.id} value={el.id} className="dark:bg-zinc-900">
-                      {el.codigo} - {el.nombre}
-                    </option>
+                  <option value="" className="dark:bg-zinc-900">Seleccione un indicador...</option>
+                  {indicadores.map((ind) => (
+                    <option key={ind.id} value={ind.id} className="dark:bg-zinc-900">{ind.nombre} ({ind.categoria})</option>
                   ))}
                 </select>
+
+                {/* Tarjeta con fórmula teórica */}
+                {indicadorSeleccionado && (
+                  <div className="mt-3 p-3.5 bg-blue-50/60 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 rounded-2xl space-y-1">
+                    <p className="font-bold text-xs text-blue-900 dark:text-blue-200">Fórmula Teórica Oficial:</p>
+                    <p className="font-mono text-xs text-blue-700 dark:text-blue-300 bg-white dark:bg-zinc-900 px-2.5 py-1 rounded-lg border border-blue-100">
+                      {indicadorSeleccionado.descripcion_formula || "Sin fórmula detallada."}
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-500 mb-1">Tipo de Resultado Final</label>
+                <label className="block text-xs font-semibold text-zinc-500 mb-1">Nivel de Agrupación NIIF</label>
                 <select 
-                  value={formConfig.operacion_tipo}
-                  onChange={(e) => setFormConfig({...formConfig, operacion_tipo: e.target.value})}
-                  className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent"
+                  value={formConfig.nivel_agrupacion}
+                  onChange={(e) => setFormConfig({...formConfig, nivel_agrupacion: e.target.value, numerador_ids: [], numerador_restando_ids: [], denominador_ids: []})}
+                  className="w-full px-3 py-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent font-semibold text-indigo-600"
                 >
-                  <option value="DIVISION_PORCENTAJE" className="dark:bg-zinc-900">Porcentaje (× 100) [Ej. Margen Neto, Endeudamiento]</option>
-                  <option value="DIVISION_RAZON" className="dark:bg-zinc-900">Razón / Índice [Ej. Razón Corriente, Prueba Ácida]</option>
+                  <option value="concepto_niif" className="dark:bg-zinc-900">1. Concepto General NIIF</option>
+                  <option value="subconcepto" className="dark:bg-zinc-900">2. Subconcepto NIIF (Recomendado)</option>
+                  <option value="concepto_auxiliar" className="dark:bg-zinc-900">3. Concepto Auxiliar (Detalle máximo)</option>
                 </select>
+                <p className="text-[11px] text-zinc-400 mt-2">
+                  Selecciona el nivel jerárquico contable que deseas asociar a la fórmula de este indicador.
+                </p>
               </div>
+            </div>
+
+            {/* MARCO 1: NUMERADOR A SUMAR CON FILTRO POR ELEMENTO */}
+            <div className="p-5 bg-zinc-50 dark:bg-zinc-800/40 rounded-2xl border border-zinc-200 dark:border-zinc-800 space-y-3">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
+                <h3 className="font-bold text-xs uppercase text-zinc-700 dark:text-zinc-300">Elementos del Numerador a Sumar (+)</h3>
+                
+                {/* Filtro por Elemento Contable */}
+                <div className="flex items-center gap-2 text-xs">
+                  <Filter className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="text-zinc-400">Filtrar Elemento:</span>
+                  <select
+                    value={filtroElementoNum}
+                    onChange={(e) => setFiltroElementoNum(e.target.value)}
+                    className="px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent font-semibold text-indigo-600"
+                  >
+                    <option value="TODOS" className="dark:bg-zinc-900">Todos</option>
+                    <option value="Activo" className="dark:bg-zinc-900">Activo</option>
+                    <option value="Pasivo" className="dark:bg-zinc-900">Pasivo</option>
+                    <option value="Patrimonio" className="dark:bg-zinc-900">Patrimonio</option>
+                    <option value="Ingresos" className="dark:bg-zinc-900">Ingresos</option>
+                    <option value="Gastos" className="dark:bg-zinc-900">Gastos</option>
+                    <option value="Costos" className="dark:bg-zinc-900">Costos</option>
+                  </select>
+                </div>
+              </div>
+
+              <select 
+                multiple
+                className="w-full h-40 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs font-mono"
+                value={formConfig.numerador_ids}
+                onChange={(e) => {
+                  const values = Array.from(e.target.selectedOptions, option => option.value);
+                  setFormConfig({...formConfig, numerador_ids: values});
+                }}
+              >
+                {filtrarPorElemento(filtroElementoNum).map((el) => (
+                  <option key={el.id} value={el.id} className="dark:bg-zinc-900 py-1">
+                    [{el.elemento}] {el.codigo} - {el.nombre}
+                  </option>
+                ))}
+              </select>
+              <span className="text-[10px] text-zinc-400 block">Mantén presionado Ctrl / Cmd para marcar múltiples opciones.</span>
+            </div>
+
+            {/* MARCO 2: NUMERADOR A RESTAR CON FILTRO POR ELEMENTO */}
+            <div className="p-5 bg-zinc-50 dark:bg-zinc-800/40 rounded-2xl border border-zinc-200 dark:border-zinc-800 space-y-3">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
+                <h3 className="font-bold text-xs uppercase text-zinc-700 dark:text-zinc-300">Elementos del Numerador a Restar (-) [Ej: Inventarios para Prueba Ácida]</h3>
+                
+                <div className="flex items-center gap-2 text-xs">
+                  <Filter className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="text-zinc-400">Filtrar Elemento:</span>
+                  <select
+                    value={filtroElementoRest}
+                    onChange={(e) => setFiltroElementoRest(e.target.value)}
+                    className="px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent font-semibold text-indigo-600"
+                  >
+                    <option value="TODOS" className="dark:bg-zinc-900">Todos</option>
+                    <option value="Activo" className="dark:bg-zinc-900">Activo</option>
+                    <option value="Pasivo" className="dark:bg-zinc-900">Pasivo</option>
+                    <option value="Patrimonio" className="dark:bg-zinc-900">Patrimonio</option>
+                    <option value="Ingresos" className="dark:bg-zinc-900">Ingresos</option>
+                    <option value="Gastos" className="dark:bg-zinc-900">Gastos</option>
+                    <option value="Costos" className="dark:bg-zinc-900">Costos</option>
+                  </select>
+                </div>
+              </div>
+
+              <select 
+                multiple
+                className="w-full h-36 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs font-mono"
+                value={formConfig.numerador_restando_ids}
+                onChange={(e) => {
+                  const values = Array.from(e.target.selectedOptions, option => option.value);
+                  setFormConfig({...formConfig, numerador_restando_ids: values});
+                }}
+              >
+                {filtrarPorElemento(filtroElementoRest).map((el) => (
+                  <option key={el.id} value={el.id} className="dark:bg-zinc-900 py-1">
+                    [{el.elemento}] {el.codigo} - {el.nombre}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* MARCO 3: DENOMINADOR CON FILTRO POR ELEMENTO */}
+            <div className="p-5 bg-zinc-50 dark:bg-zinc-800/40 rounded-2xl border border-zinc-200 dark:border-zinc-800 space-y-3">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
+                <h3 className="font-bold text-xs uppercase text-zinc-700 dark:text-zinc-300">Elementos del Denominador (Divisor)</h3>
+                
+                <div className="flex items-center gap-2 text-xs">
+                  <Filter className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="text-zinc-400">Filtrar Elemento:</span>
+                  <select
+                    value={filtroElementoDen}
+                    onChange={(e) => setFiltroElementoDen(e.target.value)}
+                    className="px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent font-semibold text-indigo-600"
+                  >
+                    <option value="TODOS" className="dark:bg-zinc-900">Todos</option>
+                    <option value="Activo" className="dark:bg-zinc-900">Activo</option>
+                    <option value="Pasivo" className="dark:bg-zinc-900">Pasivo</option>
+                    <option value="Patrimonio" className="dark:bg-zinc-900">Patrimonio</option>
+                    <option value="Ingresos" className="dark:bg-zinc-900">Ingresos</option>
+                    <option value="Gastos" className="dark:bg-zinc-900">Gastos</option>
+                    <option value="Costos" className="dark:bg-zinc-900">Costos</option>
+                  </select>
+                </div>
+              </div>
+
+              <select 
+                multiple
+                className="w-full h-36 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs font-mono"
+                value={formConfig.denominador_ids}
+                onChange={(e) => {
+                  const values = Array.from(e.target.selectedOptions, option => option.value);
+                  setFormConfig({...formConfig, denominador_ids: values});
+                }}
+              >
+                {filtrarPorElemento(filtroElementoDen).map((el) => (
+                  <option key={el.id} value={el.id} className="dark:bg-zinc-900 py-1">
+                    [{el.elemento}] {el.codigo} - {el.nombre}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-500 mb-1">Tipo de Resultado Final</label>
+              <select 
+                value={formConfig.operacion_tipo}
+                onChange={(e) => setFormConfig({...formConfig, operacion_tipo: e.target.value})}
+                className="w-full px-3 py-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent font-medium"
+              >
+                <option value="DIVISION_PORCENTAJE" className="dark:bg-zinc-900">Porcentaje (× 100) [Ej. Margen Neto, Endeudamiento]</option>
+                <option value="DIVISION_RAZON" className="dark:bg-zinc-900">Razón / Índice [Ej. Razón Corriente, Prueba Ácida]</option>
+              </select>
             </div>
 
             <button 
               type="submit" 
               disabled={loading}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition shadow-sm disabled:opacity-50"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-2xl transition shadow-sm disabled:opacity-50 text-sm"
             >
-              {loading ? "Guardando..." : "Guardar Configuración del Indicador"}
+              {loading ? "Guardando Parametrización..." : "Guardar Regla de Indicador NIIF"}
             </button>
           </form>
         </div>
