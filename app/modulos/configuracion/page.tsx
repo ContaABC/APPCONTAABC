@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Settings, ArrowLeft, ArrowRight, FolderKanban } from "lucide-react";
+import { Settings, ArrowLeft, ArrowRight, Users } from "lucide-react";
 
 export default function ConfiguracionPage() {
   const opciones = [
@@ -21,6 +21,28 @@ export default function ConfiguracionPage() {
         <Link href="/" className="inline-flex items-center gap-2 text-sm text-zinc-500 hover:text-blue-600 mb-6 transition">
           <ArrowLeft className="w-4 h-4" /> Volver al Menú Principal
         </Link>
+        
+        {/* Enlace rápido a Gestión de Usuarios */}
+        <div className="mb-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-2xl p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-white/10 rounded-xl">
+              <Users className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h2 className="font-bold">Control de Acceso y Usuarios</h2>
+              <p className="text-xs text-blue-100">Administra perfiles, contraseñas y asignación de empresas.</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Link href="/usuarios" className="bg-white text-blue-600 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-blue-50 transition">
+              Usuarios
+            </Link>
+            <Link href="/usuarios/asignaciones" className="bg-blue-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-blue-800 transition">
+              Asignaciones
+            </Link>
+          </div>
+        </div>
+
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-8 shadow-sm">
           <div className="flex items-center gap-3 mb-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
             <div className="p-3 bg-indigo-50 dark:bg-indigo-950/50 rounded-2xl text-indigo-600">
