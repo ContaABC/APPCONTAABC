@@ -14,135 +14,89 @@ export default function Home() {
   const grupos = [
     {
       nombre: "Configuración",
-      ruta: "#",
+      descripcion: "Empresas, terceros, sucursales y parámetros generales.",
+      ruta: "/modulos/configuracion",
       icono: Settings,
-      color: "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50",
-      opciones: [
-        { name: "Empresas", href: "/api/empresas/nueva" },
-        { name: "Terceros", href: "/terceros" },
-        { name: "Clases de Documentos", href: "/configuracion/clases-documento" },
-        { name: "Sucursales", href: "/Sucursales" },
-        { name: "Conceptos NIIF", href: "/ConceptosNiif" },
-        { name: "Subconceptos NIIF", href: "/subconceptos_niif" },
-        { name: "Actividades ABC", href: "/ActividadesABC" },
-        { name: "Actividades Auxiliares", href: "/actividades_auxiliares" },
-        { name: "Conceptos Auxiliares", href: "/conceptos_auxiliares" },
-        { name: "Enlace Clases y Conceptos", href: "/clase_documento_conceptos" },
-      ]
+      color: "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 border-indigo-100 dark:border-indigo-900/50",
     },
     {
       nombre: "Proveedores",
-      ruta: "#",
+      descripcion: "Carga, consulta y notas de facturas de proveedores.",
+      ruta: "/modulos/proveedores",
       icono: Truck,
-      color: "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50",
-      opciones: [
-        { name: "Facturas de Proveedores", href: "/facturas/cargar" },
-        { name: "Consultar Facturas", href: "/facturas/consultar" },
-        { name: "Notas de Proveedores", href: "/facturas/notas" },
-      ]
+      color: "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 border-amber-100 dark:border-amber-900/50",
     },
     {
       nombre: "Clientes",
-      ruta: "#",
+      descripcion: "Facturación a clientes, recibos de caja, ítems y notas.",
+      ruta: "/modulos/clientes",
       icono: Users,
-      color: "text-emerald-600 dark:text-emerald-400 bg-emerald-50-50 dark:bg-emerald-950/50",
-      opciones: [
-        { name: "Facturas para Clientes", href: "/facturas/emitir" },
-        { name: "Consulta Facturas Clientes", href: "/facturas-emitidas" },
-        { name: "Recibos de Caja Clientes", href: "/cobros/nuevo" },
-        { name: "Items de Facturación", href: "/items" },
-        { name: "Notas para Clientes", href: "/notas-emitidas" },
-        { name: "Consulta de Notas Clientes", href: "/notas-emitidas/nueva" },
-      ]
+      color: "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border-emerald-100 dark:border-emerald-900/50",
     },
     {
       nombre: "Tesorería",
-      ruta: "#",
+      descripcion: "Control de flujo de caja, egresos y consignaciones.",
+      ruta: "/modulos/tesoreria",
       icono: DollarSign,
-      color: "text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/50",
-      opciones: [
-        { name: "Egresos", href: "/tesoreria/pagos" },
-        { name: "Consignaciones", href: "/tesoreria/consignaciones" },
-      ]
+      color: "text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/50 border-purple-100 dark:border-purple-900/50",
     },
     {
       nombre: "Consultas",
-      ruta: "#",
+      descripcion: "Verificación de saldos, movimientos y reportes detallados.",
+      ruta: "/modulos/consultas",
       icono: Search,
-      color: "text-cyan-600 dark:text-cyan-400 bg-cyan-50 dark:bg-cyan-950/50",
-      opciones: [
-        { name: "Consulta y Verificación de Saldos", href: "/consultas" },
-        { name: "Consulta de Movimientos", href: "/consultas/movimientos" },
-        { name: "Reportes Contables", href: "/consultas/reportes" },
-        { name: "Consulta de Conceptos NIIF", href: "/consultas/conceptos_niif" },
-      ]
+      color: "text-cyan-600 dark:text-cyan-400 bg-cyan-50 dark:bg-cyan-950/50 border-cyan-100 dark:border-cyan-900/50",
     },
     {
       nombre: "Contabilidad",
-      ruta: "#",
+      descripcion: "Balance general, estado de resultados, retenciones y cierres.",
+      ruta: "/modulos/contabilidad",
       icono: BarChart3,
-      color: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50",
-      opciones: [
-        { name: "Reportes Contables", href: "/documentos" },
-        { name: "Balance General", href: "/balance_general" },
-        { name: "Estado de Resultados", href: "/estado-resultados" },
-        { name: "Declaración de Retenciones", href: "/retenciones/declaracion" },
-        { name: "Certificados de Retención", href: "/retenciones/Certificados" },
-        { name: "Conceptos de Retención", href: "/retenciones/conceptos" },
-        { name: "Cierres Contables", href: "/cierres" },
-      ]
+      color: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 border-blue-100 dark:border-blue-900/50",
     },
   ];
 
   return (
-    <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-4 md:p-8">
+    <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-12">
       
-      {/* Encabezado ultra compacto */}
-      <header className="max-w-7xl mx-auto mb-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-6 py-3 rounded-xl shadow-sm flex justify-between items-center">
+      {/* Encabezado Principal */}
+      <header className="max-w-6xl mx-auto mb-10 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-8 py-5 rounded-2xl shadow-sm flex justify-between items-center">
         <div className="flex items-center gap-3">
-          <ShieldCheck className="w-6 h-6 text-blue-600" />
-          <h1 className="text-xl font-bold tracking-tight">ContaABC — Menú Principal</h1>
+          <ShieldCheck className="w-8 h-8 text-blue-600" />
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight">ContaABC</h1>
+            <p className="text-xs text-zinc-500">Sistema de Gestión Contable NIIF</p>
+          </div>
         </div>
-        <span className="text-xs font-bold text-emerald-600 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">En Línea</span>
+        <span className="text-xs font-bold text-emerald-600 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/20">En Línea</span>
       </header>
 
-      {/* Cuadrícula compacta de 3 columnas para que quepa todo sin scroll excesivo */}
-      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+      {/* Cuadrícula de 6 Grupos (Limita la altura y evita scroll innecesario) */}
+      <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {grupos.map((grupo, index) => {
           const IconComponent = grupo.icono;
           return (
-            <div 
+            <Link 
               key={index}
-              className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between"
+              href={grupo.ruta}
+              className="group bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6 shadow-sm hover:shadow-xl hover:border-blue-500/50 transition-all duration-300 flex flex-col justify-between"
             >
               <div>
-                {/* Cabecera de Tarjeta */}
-                <div className="flex items-center gap-2.5 mb-3 pb-2.5 border-b border-zinc-100 dark:border-zinc-800">
-                  <div className={`p-2 rounded-lg ${grupo.color}`}>
-                    <IconComponent className="w-5 h-5" />
+                <div className="flex items-center justify-between mb-4">
+                  <div className={`p-3 rounded-xl border ${grupo.color}`}>
+                    <IconComponent className="w-6 h-6" />
                   </div>
-                  <h2 className="text-base font-bold">{grupo.nombre}</h2>
+                  <ArrowRight className="w-5 h-5 text-zinc-400 group-hover:text-blue-600 group-hover:translate-x-1 transition-all" />
                 </div>
-
-                {/* Lista directa de opciones funcionales */}
-                <ul className="space-y-1.5 text-xs font-medium">
-                  {grupo.opciones.map((op, i) => (
-                    <li key={i}>
-                      <Link 
-                        href={op.href} 
-                        className="text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center justify-between py-1 px-2 rounded hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
-                      >
-                        <span className="flex items-center gap-2 truncate">
-                          <span className="w-1 h-1 rounded-full bg-zinc-400"></span>
-                          <span className="truncate">{op.name}</span>
-                        </span>
-                        <ArrowRight className="w-3 h-3 text-zinc-400 flex-shrink-0" />
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+                <h2 className="text-xl font-bold mb-2 group-hover:text-blue-600 transition-colors">{grupo.nombre}</h2>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                  {grupo.descripcion}
+                </p>
               </div>
-            </div>
+              <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-xs font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1">
+                <span>Explorar opciones</span>
+              </div>
+            </Link>
           );
         })}
       </div>
