@@ -14,33 +14,47 @@ export async function calcularIndicadoresDinamicos(empresaId: string, sucursalId
   try {
     const supabase = getSupabaseAdmin();
 
-    // 1. Obtener fórmulas y su indicador asociado
-    const { data: formulas, error: formulaError } = await supabase
+    // 1. Consultar fórmulas filtradas por empresa (y opcionalmente por sucursal si está seleccionada)
+    let formulaQuery = supabase
       .from("indicadores_formulas_detalle")
       .select(`
         *,
         indicadores_financieros (codigo, nombre, categoria)
       `);
 
-    if (formulaError) throw formulaError;
-    if (!formulas || formulas.length === 0) {
-      return { success: true, indicadores: {}, mensaje: "No hay fórmulas configuradas en el sistema." };
+    if (empresaId !== "todas") {
+      formulaQuery = formulaQuery.eq("empresa_id", Number(empresaId));
+    }
+    if (sucursalId !== "todas") {
+      formulaQuery = formulaQuery.eq("sucursal_id", Number(sucursalId));
     }
 
-    // 2. Obtener movimientos contables
-    let query = supabase.from("movimientos_contables").select("*");
-    if (empresaId !== "todas") query = query.eq("empresa_id", Number(empresaId));
-    if (sucursalId !== "todas") query = query.eq("sucursal_id", Number(sucursalId));
+    const { data: formulas, error: formulaError } = await formulaQuery;
+    if (formulaError) throw formulaError;
 
-    const { data: movimientos, error: movError } = await query;
+    if (!formulas || formulas.length === 0) {
+      return { success: true, indicadores: {}, mensaje: "No hay fórmulas configuradas para este nivel." };
+    }
+
+    // 2. Obtener movimientos contables aplicando los filtros de Empresa y Sucursal
+    let movQuery = supabase.from("movimientos_contables").select("*");
+    
+    if (empresaId !== "todas") {
+      movQuery = movQuery.eq("empresa_id", Number(empresaId));
+    }
+    if (sucursalId !== "todas") {
+      movQuery = movQuery.eq("sucursal_id", Number(sucursalId));
+    }
+
+    const { data: movimientos, error: movError } = await movQuery;
     if (movError) throw movError;
 
-    // Función para sumar saldos según IDs de conceptos auxiliares
+    // Función para sumar saldos según los IDs configurados
     const sumarConceptos = (idsString: string) => {
       if (!idsString) return 0;
       const ids = idsString.split(",").map(id => id.trim());
       return movimientos?.reduce((acc, mov) => {
-        const movId = String(mov.concepto_auxiliar_id || mov.concepto_niif_id || "");
+        const movId = String(mov.concepto_auxiliar_id || mov.subconcepto_niif_id || mov.concepto_niif_id || "");
         if (ids.includes(movId)) {
           return acc + (Number(mov.debito || 0) - Number(mov.credito || 0));
         }
@@ -54,7 +68,6 @@ export async function calcularIndicadoresDinamicos(empresaId: string, sucursalId
       const codigo = formula.indicadores_financieros?.codigo;
       if (!codigo) continue;
 
-      // Calcular Numerador con soporte para suma y resta (ej. Activo - Inventarios)
       const sumaNum = Math.abs(sumarConceptos(formula.numerador_ids));
       const restaNum = Math.abs(sumarConceptos(formula.numerador_restando_ids));
       const valorNumerador = Math.max(0, sumaNum - restaNum);
