@@ -35,17 +35,48 @@ export default function GestionFinancieraPage() {
 
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
       
-      // 1. Cargar empresas ORDENADAS ALFABÉTICAMENTE
+      // 1. Cargar empresas ordenadas alfabéticamente
       const { data: empData } = await supabase
         .from("empresas")
         .select("*")
         .order("razon_social", { ascending: true });
-      if (empData) setEmpresas(empData);
+      
+      if (empData) {
+        setEmpresas(empData);
+      }
 
       ejecutarConsulta("todas", "todas", "2026", "10");
     }
     init();
   }, []);
+
+  // Cargar sucursales reales de la empresa seleccionada
+  useEffect(() => {
+    if (empresaId === "todas") {
+      setSucursales([]);
+      setSucursalId("todas");
+      return;
+    }
+    async function cargarSucursalesEmpresa() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) return;
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data, error } = await supabase
+        .from("sucursales")
+        .select("*")
+        .eq("empresa_id", Number(empresaId));
+
+      if (!error && data) {
+        setSucursales(data);
+        setSucursalId("todas"); // Reiniciar a todas por defecto al cambiar de empresa
+      } else {
+        setSucursales([]);
+      }
+    }
+    cargarSucursalesEmpresa();
+  }, [empresaId]);
 
   const ejecutarConsulta = async (emp: string, suc: string, yr: string, mth: string) => {
     setLoading(true);
@@ -83,7 +114,7 @@ export default function GestionFinancieraPage() {
             </div>
             <div>
               <h1 className="text-2xl font-bold">Gestión Financiera y Analítica NIIF</h1>
-              <p className="text-sm text-zinc-500">Panel directivo conectado al catálogo dinámico de indicadores</p>
+              <p className="text-sm text-zinc-500">Panel directivo filtrado por Empresa y Sucursal en tiempo real</p>
             </div>
           </div>
           {loading && (
@@ -93,14 +124,14 @@ export default function GestionFinancieraPage() {
           )}
         </div>
 
-        {/* Filtros */}
+        {/* Filtros de Empresa y Sucursal */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
           <div>
             <label className="block text-xs font-semibold text-zinc-500 mb-1">Empresa</label>
             <select
               value={empresaId}
               onChange={(e) => setEmpresaId(e.target.value)}
-              className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-sm focus:outline-none focus:border-blue-600"
+              className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-sm focus:outline-none focus:border-blue-600 font-semibold"
             >
               <option value="todas" className="dark:bg-zinc-900">Todas (Consolidado Corporativo)</option>
               {empresas.map((emp) => (
@@ -172,7 +203,7 @@ export default function GestionFinancieraPage() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {Object.keys(indicadores).length === 0 ? (
               <div className="col-span-4 p-8 text-center bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl text-zinc-400 text-sm">
-                No hay indicadores configurados todavía. Haz clic en <span className="text-indigo-600 font-semibold">"Crear y Configurar Indicadores NIIF"</span> para agregar el primero.
+                No hay indicadores configurados para esta selección. Haz clic en <span className="text-indigo-600 font-semibold">"Crear y Configurar Indicadores NIIF"</span> para agregar fórmulas.
               </div>
             ) : (
               Object.entries(indicadores).map(([codigo, valor]) => (
@@ -183,13 +214,6 @@ export default function GestionFinancieraPage() {
               ))
             )}
           </div>
-        </div>
-
-        {/* ESTADO VACÍO PARA GRÁFICAS SI NO HAY MOVIMIENTOS */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-8 rounded-3xl shadow-sm text-center space-y-3">
-          <BarChart3 className="w-10 h-10 text-zinc-300 mx-auto" />
-          <h3 className="font-bold text-zinc-700 dark:text-zinc-300">Sin movimientos históricos suficientes para graficar</h3>
-          <p className="text-xs text-zinc-400 max-w-md mx-auto">Las gráficas de tendencias se poblarán automáticamente en cuanto registres comprobantes contables y asientos en el sistema.</p>
         </div>
 
       </div>
