@@ -17,8 +17,7 @@ export default function AsignacionesPage() {
   // Estados del formulario
   const [usuarioIdSeleccionado, setUsuarioIdSeleccionado] = useState("");
   const [empresasSeleccionadas, setEmpresasSeleccionadas] = useState<{ [key: number]: boolean }>({});
-  const [sucursalesSeleccionadas, setSucursalesSeleccionadas] = useState<{ [key: number]: boolean }>({});
-  const [rol, setRol] = useState("Acceso Estándar");
+  const [rol, setRol] = useState("Operador");
 
   const [mensaje, setMensaje] = useState({ texto: "", tipo: "" });
 
@@ -34,19 +33,15 @@ export default function AsignacionesPage() {
     if (supabaseUrl && supabaseAnonKey) {
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-      // 1. Usuarios
-      const { data: usuariosData } = await supabase.from("usuarios_perfiles").select("id, nombres, apellidos, cedula");
+      // 1. Usuarios (traemos también el tipo_usuario para heredar el rol)
+      const { data: usuariosData } = await supabase.from("usuarios_perfiles").select("id, nombres, apellidos, cedula, tipo_usuario");
       if (usuariosData) setUsuarios(usuariosData);
 
       // 2. Empresas
       const { data: empresasData } = await supabase.from("empresas").select("*");
       if (empresasData) setEmpresas(empresasData);
 
-      // 3. Sucursales
-      const { data: sucursalesData } = await supabase.from("sucursales").select("*");
-      if (sucursalesData) setSucursales(sucursalesData);
-
-      // 4. Asignaciones con nombres de usuario y empresas
+      // 3. Asignaciones con nombres de usuario y empresas
       const { data: asignacionesData } = await supabase
         .from("usuario_asignaciones")
         .select(`
@@ -62,6 +57,16 @@ export default function AsignacionesPage() {
       if (asignacionesData) setAsignaciones(asignacionesData);
     }
     setCargandoDatos(false);
+  };
+
+  // Cuando se selecciona un usuario, heredamos su tipo como rol predeterminado
+  const handleUsuarioChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const id = e.target.value;
+    setUsuarioIdSeleccionado(id);
+    const usuarioEncontrado = usuarios.find((u) => u.id === id);
+    if (usuarioEncontrado && usuarioEncontrado.tipo_usuario) {
+      setRol(usuarioEncontrado.tipo_usuario);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -81,7 +86,6 @@ export default function AsignacionesPage() {
 
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-      // Obtenemos las empresas marcadas
       const empresasIdsList = Object.keys(empresasSeleccionadas)
         .filter((id) => empresasSeleccionadas[Number(id)])
         .map((id) => Number(id));
@@ -90,7 +94,7 @@ export default function AsignacionesPage() {
         throw new Error("Seleccione al menos una empresa.");
       }
 
-      // 1. Limpiamos las asignaciones anteriores de este usuario para evitar duplicados y actualizar limpiamente
+      // Limpiamos asignaciones previas para actualizar limpiamente
       const { error: deleteError } = await supabase
         .from("usuario_asignaciones")
         .delete()
@@ -98,11 +102,10 @@ export default function AsignacionesPage() {
 
       if (deleteError) throw deleteError;
 
-      // 2. Creamos los nuevos registros múltiples
       const batchInserts = empresasIdsList.map((empId) => ({
         usuario_id: usuarioIdSeleccionado,
         empresa_id: empId,
-        sucursal_id: null, // Opcional: puedes mapear sucursales seleccionadas si aplica
+        sucursal_id: null,
         rol: rol,
       }));
 
@@ -129,11 +132,7 @@ export default function AsignacionesPage() {
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
     const { error } = await supabase.from("usuario_asignaciones").delete().eq("id", idAsignacion);
 
-    if (!error) {
-      cargarDatosIniciales();
-    } else {
-      alert("Error al eliminar la asignación.");
-    }
+    if (!error) cargarDatosIniciales();
   };
 
   return (
@@ -151,14 +150,13 @@ export default function AsignacionesPage() {
             </div>
             <div>
               <h1 className="text-2xl font-bold">Asignación Múltiple de Empresas</h1>
-              <p className="text-sm text-zinc-500">Selecciona múltiples empresas para un usuario específico</p>
+              <p className="text-sm text-zinc-500">Selecciona múltiples empresas heredando el rol del usuario</p>
             </div>
           </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* Formulario de Asignación Múltiple */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm lg:col-span-1">
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
               <PlusCircle className="w-5 h-5 text-indigo-600" /> Gestionar Accesos
@@ -179,13 +177,13 @@ export default function AsignacionesPage() {
                 <select 
                   required
                   value={usuarioIdSeleccionado}
-                  onChange={(e) => setUsuarioIdSeleccionado(e.target.value)}
+                  onChange={handleUsuarioChange}
                   className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
                 >
                   <option value="" className="dark:bg-zinc-900">Seleccione un usuario...</option>
                   {usuarios.map((u) => (
                     <option key={u.id} value={u.id} className="dark:bg-zinc-900">
-                      {u.nombres} {u.apellidos} (CC: {u.cedula})
+                      {u.nombres} {u.apellidos} ({u.tipo_usuario})
                     </option>
                   ))}
                 </select>
@@ -212,15 +210,16 @@ export default function AsignacionesPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-500 mb-1">Rol Asignado</label>
-                <input 
-                  type="text" 
-                  required
+                <label className="block text-xs font-semibold text-zinc-500 mb-1">Rol Asignado (Heredado del Tipo de Usuario)</label>
+                <select 
                   value={rol}
                   onChange={(e) => setRol(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
-                  placeholder="Ej. Administrador, Contador"
-                />
+                  className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600 font-semibold text-indigo-600"
+                >
+                  <option value="Administrador" className="dark:bg-zinc-900">Administrador</option>
+                  <option value="Operador" className="dark:bg-zinc-900">Operador</option>
+                  <option value="Auditor" className="dark:bg-zinc-900">Auditor</option>
+                </select>
               </div>
 
               <button 
@@ -233,7 +232,6 @@ export default function AsignacionesPage() {
             </form>
           </div>
 
-          {/* Listado de Asignaciones con opción de Borrar */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm lg:col-span-2">
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
               <Link2 className="w-5 h-5 text-indigo-600" /> Permisos y Accesos Asignados

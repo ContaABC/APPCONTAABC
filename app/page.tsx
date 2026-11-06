@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
@@ -12,11 +13,40 @@ import {
   Search, 
   ShieldCheck, 
   ArrowRight,
-  LogOut
+  LogOut,
+  UserCheck
 } from "lucide-react";
 
 export default function Home() {
   const router = useRouter();
+  const [usuarioActual, setUsuarioActual] = useState<any>(null);
+
+  useEffect(() => {
+    async function obtenerUsuarioLogueado() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) return;
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (user) {
+        // Consultar su perfil en la tabla usuarios_perfiles
+        const { data: perfil } = await supabase
+          .from("usuarios_perfiles")
+          .select("*")
+          .eq("id", user.id)
+          .single();
+
+        if (perfil) {
+          setUsuarioActual(perfil);
+        } else {
+          setUsuarioActual({ nombres: user.email, tipo_usuario: "Usuario" });
+        }
+      }
+    }
+    obtenerUsuarioLogueado();
+  }, []);
 
   const handleLogout = async () => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -77,7 +107,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-12">
       
-      {/* Encabezado Principal */}
+      {/* Encabezado Principal con Nombre del Usuario Logueado */}
       <header className="max-w-6xl mx-auto mb-10 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-8 py-5 rounded-2xl shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div className="flex items-center gap-3">
           <ShieldCheck className="w-8 h-8 text-blue-600" />
@@ -87,14 +117,26 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <span className="text-xs font-bold text-emerald-600 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/20">En Línea</span>
-          <button
-            onClick={handleLogout}
-            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 dark:bg-red-950/50 dark:hover:bg-red-900/50 rounded-xl border border-red-200 dark:border-red-900/50 transition shadow-sm"
-          >
-            <LogOut className="w-4 h-4" /> Cerrar Sesión
-          </button>
+        <div className="flex items-center gap-4 flex-wrap">
+          {usuarioActual && (
+            <div className="flex items-center gap-2 bg-zinc-100 dark:bg-zinc-800 px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700">
+              <UserCheck className="w-4 h-4 text-blue-600" />
+              <div className="text-xs">
+                <p className="font-bold text-zinc-800 dark:text-zinc-200">{usuarioActual.nombres} {usuarioActual.apellidos}</p>
+                <span className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold uppercase">{usuarioActual.tipo_usuario}</span>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-emerald-600 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/20">En Línea</span>
+            <button
+              onClick={handleLogout}
+              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 dark:bg-red-950/50 dark:hover:bg-red-900/50 rounded-xl border border-red-200 dark:border-red-900/50 transition shadow-sm"
+            >
+              <LogOut className="w-4 h-4" /> Cerrar Sesión
+            </button>
+          </div>
         </div>
       </header>
 
