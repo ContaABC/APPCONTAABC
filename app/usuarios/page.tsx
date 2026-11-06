@@ -2,10 +2,9 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Users, UserPlus, Shield, CheckCircle2, XCircle } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { ArrowLeft, Users, UserPlus, Shield, CheckCircle2, XCircle, Trash2, Power } from "lucide-react";
+import { createClient } from "@supabase/supabase-js"; 
 
-// Función auxiliar en el cliente para registrar usando API o Supabase directamente
 export default function UsuariosPage() {
   const [usuarios, setUsuarios] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -28,7 +27,6 @@ export default function UsuariosPage() {
 
   const cargarUsuarios = async () => {
     setCargandoLista(true);
-    // Usamos el cliente público de Supabase con las variables de entorno públicas
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     
@@ -54,21 +52,20 @@ export default function UsuariosPage() {
     try {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      
-      if (!supabaseUrl || !supabaseAnonKey) throw new Error("Faltan variables de entorno de Supabase.");
+      if (!supabaseUrl || !supabaseAnonKey) throw new Error("Faltan variables de entorno.");
 
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-      // 1. Crear el usuario en Supabase Auth
+      // 1. Crear el usuario en Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,
       });
 
       if (authError) throw authError;
-      if (!authData.user) throw new Error("No se pudo crear el usuario en el sistema de autenticación.");
+      if (!authData.user) throw new Error("No se pudo crear el usuario.");
 
-      // 2. Insertar en la tabla perfiles
+      // 2. Insertar perfil
       const { error: profileError } = await supabase.from("usuarios_perfiles").insert([
         {
           id: authData.user.id,
@@ -83,14 +80,45 @@ export default function UsuariosPage() {
 
       if (profileError) throw profileError;
 
-      setMensaje({ texto: "¡Usuario registrado y vinculado exitosamente!", tipo: "success" });
+      setMensaje({ texto: "¡Usuario registrado exitosamente!", tipo: "success" });
+      // Limpiamos totalmente el formulario, incluyendo correo y contraseña
       setFormData({ nombres: "", apellidos: "", cedula: "", email: "", password: "", tipo_usuario: "Operador" });
-      
       cargarUsuarios();
     } catch (error: any) {
       setMensaje({ texto: error.message || "Error al registrar el usuario.", tipo: "error" });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleEstado = async (id: string, estadoActual: boolean) => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return;
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const { error } = await supabase
+      .from("usuarios_perfiles")
+      .update({ activo: !estadoActual })
+      .eq("id", id);
+
+    if (!error) cargarUsuarios();
+  };
+
+  const handleEliminarUsuario = async (id: string) => {
+    if (!confirm("¿Está seguro de eliminar este perfil de usuario?")) return;
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return;
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const { error } = await supabase.from("usuarios_perfiles").delete().eq("id", id);
+
+    if (!error) {
+      cargarUsuarios();
+    } else {
+      alert("Error al eliminar el usuario.");
     }
   };
 
@@ -102,7 +130,6 @@ export default function UsuariosPage() {
           <ArrowLeft className="w-4 h-4" /> Volver al Menú Principal
         </Link>
 
-        {/* Encabezado con botón de acceso a Asignaciones */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8 bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-blue-50 dark:bg-blue-950/50 rounded-xl text-blue-600">
@@ -110,7 +137,7 @@ export default function UsuariosPage() {
             </div>
             <div>
               <h1 className="text-2xl font-bold">Gestión de Usuarios y Accesos</h1>
-              <p className="text-sm text-zinc-500">Control de perfiles, cédulas y tipos de usuario</p>
+              <p className="text-sm text-zinc-500">Control de perfiles, estados y credenciales</p>
             </div>
           </div>
           <Link
@@ -123,7 +150,7 @@ export default function UsuariosPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* Formulario de Registro */}
+          {/* Formulario */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm lg:col-span-1">
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
               <UserPlus className="w-5 h-5 text-blue-600" /> Nuevo Usuario
@@ -242,6 +269,7 @@ export default function UsuariosPage() {
                       <th className="pb-3 font-semibold">Correo</th>
                       <th className="pb-3 font-semibold">Tipo</th>
                       <th className="pb-3 font-semibold">Estado</th>
+                      <th className="pb-3 font-semibold text-right">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
@@ -263,6 +291,22 @@ export default function UsuariosPage() {
                           }`}>
                             {u.activo ? 'Activo' : 'Inactivo'}
                           </span>
+                        </td>
+                        <td className="py-3 text-right space-x-2">
+                          <button
+                            onClick={() => handleToggleEstado(u.id, u.activo)}
+                            className={`p-1.5 rounded-lg transition ${u.activo ? 'bg-amber-50 text-amber-600 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}
+                            title={u.activo ? "Deshabilitar usuario" : "Activar usuario"}
+                          >
+                            <Power className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleEliminarUsuario(u.id)}
+                            className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition"
+                            title="Eliminar usuario"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </td>
                       </tr>
                     ))}
