@@ -16,6 +16,7 @@ import {
   LogOut,
   UserCheck,
   Building,
+  TrendingUp,
   Layers,
   FileText
 } from "lucide-react";
@@ -120,6 +121,15 @@ export default function Home() {
       badge: "Financiero",
       color: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 border-blue-100 dark:border-blue-900/50",
     },
+    // En app/page.tsx, dentro del arreglo `grupos`:
+{
+  nombre: "Gestión Financiera",
+  descripcion: "Indicadores de rentabilidad, liquidez, endeudamiento y gráficas NIIF.",
+  ruta: "/modulos/gestion-financiera",
+  icono: TrendingUp, // Asegúrate de importar TrendingUp de 'lucide-react'
+  badge: "Gerencial",
+  color: "text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/50 border-rose-100 dark:border-rose-900/50",
+}
   ];
 
   return (

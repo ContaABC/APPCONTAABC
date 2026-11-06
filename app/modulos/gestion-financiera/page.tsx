@@ -1,0 +1,237 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import Link from "next/link";
+import { 
+  ArrowLeft, 
+  TrendingUp, 
+  DollarSign, 
+  PieChart, 
+  BarChart2, 
+  Settings,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle
+} from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
+import { calcularIndicadoresConConceptosNIIF } from "./finance-actions";
+
+export default function GestionFinancieraPage() {
+  const [empresas, setEmpresas] = useState<any[]>([]);
+  const [sucursales, setSucursales] = useState<any[]>([]);
+  
+  // Filtros globales de consulta
+  const [empresaId, setEmpresaId] = useState<string>("todas");
+  const [sucursalId, setSucursalId] = useState<string>("todas");
+  const [anio, setAnio] = useState<string>("2026");
+  const [mes, setMes] = useState<string>("10");
+
+  const [loading, setLoading] = useState(false);
+  const [mensajeError, setMensajeError] = useState("");
+  
+  // Estado que almacena los indicadores devueltos por Supabase
+  const [indicadores, setIndicadores] = useState<{ [key: string]: number }>({});
+
+  useEffect(() => {
+    async function init() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) return;
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data: empData } = await supabase.from("empresas").select("*");
+      if (empData) setEmpresas(empData);
+
+      // Ejecutar cálculo inicial al cargar la página
+      ejecutarConsulta("todas", "todas", "2026", "10");
+    }
+    init();
+  }, []);
+
+  // Cargar sucursales al cambiar de empresa
+  useEffect(() => {
+    if (empresaId === "todas") {
+      setSucursales([]);
+      setSucursalId("todas");
+      return;
+    }
+    async function cargarSucursales() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) return;
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data } = await supabase.from("sucursales").select("*").eq("empresa_id", empresaId);
+      if (data) setSucursales(data);
+    }
+    cargarSucursales();
+  }, [empresaId]);
+
+  const ejecutarConsulta = async (emp: string, suc: string, yr: string, mth: string) => {
+    setLoading(true);
+    setMensajeError("");
+
+    const res = await calcularIndicadoresConConceptosNIIF(emp, suc, yr, mth);
+    if (res.success && res.indicadores) {
+      setIndicadores(res.indicadores);
+    } else {
+      setMensajeError(res.error || "No se pudieron calcular los indicadores.");
+    }
+    setLoading(false);
+  };
+
+  return (
+    <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-10">
+      <div className="max-w-7xl mx-auto space-y-8">
+        
+        {/* Navegación y Enlaces Superiores */}
+        <div className="flex justify-between items-center">
+          <Link href="/" className="inline-flex items-center gap-2 text-sm text-zinc-500 hover:text-blue-600 transition">
+            <ArrowLeft className="w-4 h-4" /> Volver al Menú Principal
+          </Link>
+          <Link 
+            href="/modulos/gestion-financiera/configuracion" 
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 text-indigo-600 rounded-xl border border-indigo-200 dark:border-indigo-900 transition shadow-sm"
+          >
+            <Settings className="w-4 h-4" /> Configurar Fórmulas NIIF
+          </Link>
+        </div>
+
+        {/* Cabecera del Módulo */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-3xl shadow-sm flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-blue-50 dark:bg-blue-950/50 rounded-2xl text-blue-600">
+              <TrendingUp className="w-7 h-7" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold">Gestión Financiera y Analítica NIIF</h1>
+              <p className="text-sm text-zinc-500">Indicadores conectados en tiempo real a conceptos auxiliares NIIF</p>
+            </div>
+          </div>
+          {loading && (
+            <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 bg-blue-50 dark:bg-blue-950 px-3 py-1.5 rounded-full border border-blue-200">
+              <RefreshCw className="w-4 h-4 animate-spin" /> Procesando saldos NIIF...
+            </div>
+          )}
+        </div>
+
+        {/* Barra de Filtros Gerenciales */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <div>
+            <label className="block text-xs font-semibold text-zinc-500 mb-1">Empresa</label>
+            <select
+              value={empresaId}
+              onChange={(e) => setEmpresaId(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-sm focus:outline-none focus:border-blue-600"
+            >
+              <option value="todas" className="dark:bg-zinc-900">Todas (Consolidado Corporativo)</option>
+              {empresas.map((emp) => (
+                <option key={emp.id} value={emp.id} className="dark:bg-zinc-900">{emp.razon_social || emp.nombre_comercial}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-zinc-500 mb-1">Sucursal</label>
+            <select
+              value={sucursalId}
+              onChange={(e) => setSucursalId(e.target.value)}
+              disabled={empresaId === "todas"}
+              className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-sm focus:outline-none focus:border-blue-600 disabled:opacity-50"
+            >
+              <option value="todas" className="dark:bg-zinc-900">Todas las Sucursales</option>
+              {sucursales.map((suc) => (
+                <option key={suc.id} value={suc.id} className="dark:bg-zinc-900">{suc.nombre}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-zinc-500 mb-1">Periodo (Año / Mes)</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={anio}
+                onChange={(e) => setAnio(e.target.value)}
+                className="w-1/2 px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-sm text-center"
+              />
+              <select
+                value={mes}
+                onChange={(e) => setMes(e.target.value)}
+                className="w-1/2 px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-sm"
+              >
+                <option value="1" className="dark:bg-zinc-900">Ene</option>
+                <option value="2" className="dark:bg-zinc-900">Feb</option>
+                <option value="3" className="dark:bg-zinc-900">Mar</option>
+                <option value="4" className="dark:bg-zinc-900">Abr</option>
+                <option value="5" className="dark:bg-zinc-900">May</option>
+                <option value="6" className="dark:bg-zinc-900">Jun</option>
+                <option value="7" className="dark:bg-zinc-900">Jul</option>
+                <option value="8" className="dark:bg-zinc-900">Ago</option>
+                <option value="9" className="dark:bg-zinc-900">Sep</option>
+                <option value="10" className="dark:bg-zinc-900">Oct</option>
+                <option value="11" className="dark:bg-zinc-900">Nov</option>
+                <option value="12" className="dark:bg-zinc-900">Dic</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <button
+              onClick={() => ejecutarConsulta(empresaId, sucursalId, anio, mes)}
+              disabled={loading}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-sm transition shadow-sm disabled:opacity-50"
+            >
+              {loading ? "Calculando..." : "Actualizar Indicadores"}
+            </button>
+          </div>
+        </div>
+
+        {mensajeError && (
+          <div className="p-4 rounded-2xl bg-red-50 text-red-600 border border-red-200 text-xs font-semibold flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{mensajeError}</span>
+          </div>
+        )}
+
+        {/* SECCIÓN DE VISUALIZACIÓN DE INDICADORES CALCULADOS */}
+        <div className="space-y-6">
+          <h2 className="text-lg font-bold flex items-center gap-2">
+            <PieChart className="w-5 h-5 text-blue-600" /> Indicadores Financieros Clave (Tiempo Real)
+          </h2>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+              <p className="text-xs text-zinc-500 font-semibold uppercase">Margen Neto</p>
+              <h3 className="text-2xl font-black text-emerald-600 mt-2">
+                {indicadores["MARGEN_NETO"] !== undefined ? `${indicadores["MARGEN_NETO"]}%` : "0.00%"}
+              </h3>
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+              <p className="text-xs text-zinc-500 font-semibold uppercase">Razón Corriente</p>
+              <h3 className="text-2xl font-black text-blue-600 mt-2">
+                {indicadores["RAZON_CORRIENTE"] !== undefined ? indicadores["RAZON_CORRIENTE"] : "0.00"}
+              </h3>
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+              <p className="text-xs text-zinc-500 font-semibold uppercase">Prueba Ácida</p>
+              <h3 className="text-2xl font-black text-indigo-600 mt-2">
+                {indicadores["PRUEBA_ACIDA"] !== undefined ? indicadores["PRUEBA_ACIDA"] : "0.00"}
+              </h3>
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+              <p className="text-xs text-zinc-500 font-semibold uppercase">Endeudamiento</p>
+              <h3 className="text-2xl font-black text-amber-600 mt-2">
+                {indicadores["ENDEUDAMIENTO"] !== undefined ? `${indicadores["ENDEUDAMIENTO"]}%` : "0.00%"}
+              </h3>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  );
+}
