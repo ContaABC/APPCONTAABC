@@ -43,12 +43,20 @@ export default function ConfigurarIndicadoresPage() {
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
     // 1. Cargar indicadores creados
-    const { data: indData } = await supabase.from("indicadores_financieros").select("*").order("nombre");
+    const { data: indData, error: errInd } = await supabase.from("indicadores_financieros").select("*").order("nombre");
     if (indData) setIndicadores(indData);
 
-    // 2. Cargar conceptos auxiliares NIIF reales de tu base de datos
-    const { data: auxData } = await supabase.from("conceptos_auxiliares_niif").select("*");
-    if (auxData) setConceptosAuxiliares(auxData);
+    // 2. Cargar conceptos auxiliares desde la tabla correcta 'conceptos_auxiliares'
+    const { data: auxData, error: errAux } = await supabase
+      .from("conceptos_auxiliares")
+      .select("id, codigo_auxiliar, nombre")
+      .order("codigo_auxiliar");
+    
+    if (errAux) {
+      console.error("Error al cargar conceptos auxiliares:", errAux.message);
+    } else if (auxData) {
+      setConceptosAuxiliares(auxData);
+    }
   };
 
   const handleCrearIndicador = async (e: React.FormEvent) => {
@@ -202,18 +210,20 @@ export default function ConfigurarIndicadoresPage() {
                 <div>
                   <label className="block text-xs font-semibold text-zinc-500 mb-1">Conceptos a Sumar (+)</label>
                   <select 
-                    multiple
-                    className="w-full h-32 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
-                    value={formConfig.numerador_ids}
-                    onChange={(e) => {
-                      const values = Array.from(e.target.selectedOptions, option => option.value);
-                      setFormConfig({...formConfig, numerador_ids: values});
-                    }}
-                  >
-                    {conceptosAuxiliares.map((c) => (
-                      <option key={c.id} value={c.id} className="dark:bg-zinc-900">{c.codigo} - {c.nombre}</option>
-                    ))}
-                  </select>
+  multiple
+  className="w-full h-32 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
+  value={formConfig.numerador_ids}
+  onChange={(e) => {
+    const values = Array.from(e.target.selectedOptions, option => option.value);
+    setFormConfig({...formConfig, numerador_ids: values});
+  }}
+>
+  {conceptosAuxiliares.map((c) => (
+    <option key={c.id} value={c.id} className="dark:bg-zinc-900">
+      {c.codigo_auxiliar} - {c.nombre}
+    </option>
+  ))}
+</select>
                   <span className="text-[10px] text-zinc-400 mt-1 block">Mantén presionado Ctrl / Cmd para seleccionar varios.</span>
                 </div>
 
