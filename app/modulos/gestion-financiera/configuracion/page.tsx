@@ -2,15 +2,20 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Settings, Plus, CheckCircle2, Trash2, Layers } from "lucide-react";
+import { ArrowLeft, Settings, Plus, CheckCircle2, Layers } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 
 export default function ConfigurarIndicadoresPage() {
   const [indicadores, setIndicadores] = useState<any[]>([]);
-  const [conceptosAuxiliares, setConceptosAuxiliares] = useState<any[]>([]);
+  const [indicadorSeleccionado, setIndicadorSeleccionado] = useState<any>(null);
+  
+  // Listas para los tres niveles NIIF
+  const [listaConceptos, setListaConceptos] = useState<any[]>([]);
+  const [listaSubconceptos, setListaSubconceptos] = useState<any[]>([]);
+  const [listaAuxiliares, setListaAuxiliares] = useState<any[]>([]);
+
   const [loading, setLoading] = useState(false);
 
-  // Formulario para crear un nuevo Indicador Personalizado
   const [nuevoInd, setNuevoInd] = useState({
     codigo: "",
     nombre: "",
@@ -18,10 +23,9 @@ export default function ConfigurarIndicadoresPage() {
     descripcion_formula: "",
   });
 
-  // Formulario para asociar la regla de cálculo
   const [formConfig, setFormConfig] = useState({
     indicador_id: "",
-    nivel_agrupacion: "concepto_auxiliar",
+    nivel_agrupacion: "concepto_auxiliar", // 'concepto_niif', 'subconcepto', 'concepto_auxiliar'
     numerador_ids: [] as string[],
     operacion_numerador: "SUMA",
     numerador_restando_ids: [] as string[],
@@ -32,31 +36,38 @@ export default function ConfigurarIndicadoresPage() {
   const [mensaje, setMensaje] = useState({ texto: "", tipo: "" });
 
   useEffect(() => {
-    cargarDatos();
+    cargarCatalogosNIIF();
   }, []);
 
-  const cargarDatos = async () => {
+  const cargarCatalogosNIIF = async () => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     if (!supabaseUrl || !supabaseAnonKey) return;
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    // 1. Cargar indicadores creados
-    const { data: indData, error: errInd } = await supabase.from("indicadores_financieros").select("*").order("nombre");
+    // 1. Indicadores
+    const { data: indData } = await supabase.from("indicadores_financieros").select("*").order("nombre");
     if (indData) setIndicadores(indData);
 
-    // 2. Cargar conceptos auxiliares desde la tabla correcta 'conceptos_auxiliares'
-    const { data: auxData, error: errAux } = await supabase
-      .from("conceptos_auxiliares")
-      .select("id, codigo_auxiliar, nombre")
-      .order("codigo_auxiliar");
-    
-    if (errAux) {
-      console.error("Error al cargar conceptos auxiliares:", errAux.message);
-    } else if (auxData) {
-      setConceptosAuxiliares(auxData);
-    }
+    // 2. Conceptos NIIF
+    const { data: concData } = await supabase.from("conceptos_niif").select("*").order("codigo_concepto");
+    if (concData) setListaConceptos(concData);
+
+    // 3. Subconceptos NIIF
+    const { data: subData } = await supabase.from("subconceptos_niif").select("*").order("codigo");
+    if (subData) setListaSubconceptos(subData);
+
+    // 4. Conceptos Auxiliares
+    const { data: auxData } = await supabase.from("conceptos_auxiliares").select("*").order("codigo_auxiliar");
+    if (auxData) setListaAuxiliares(auxData);
+  };
+
+  const handleSeleccionarIndicador = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const id = e.target.value;
+    setFormConfig({...formConfig, indicador_id: id});
+    const encontrado = indicadores.find(ind => String(ind.id) === id);
+    setIndicadorSeleccionado(encontrado || null);
   };
 
   const handleCrearIndicador = async (e: React.FormEvent) => {
@@ -66,7 +77,7 @@ export default function ConfigurarIndicadoresPage() {
     if (!error) {
       setMensaje({ texto: "¡Indicador creado con éxito!", tipo: "success" });
       setNuevoInd({ codigo: "", nombre: "", categoria: "Rentabilidad", descripcion_formula: "" });
-      cargarDatos();
+      cargarCatalogosNIIF();
     } else {
       setMensaje({ texto: error.message, tipo: "error" });
     }
@@ -96,6 +107,19 @@ export default function ConfigurarIndicadoresPage() {
     setLoading(false);
   };
 
+  // Selector dinámico según el nivel elegido por el usuario
+  const obtenerListaSegunNivel = () => {
+    if (formConfig.nivel_agrupacion === "concepto_niif") {
+      return listaConceptos.map(c => ({ id: c.id, codigo: c.codigo_concepto, nombre: c.nombre }));
+    } else if (formConfig.nivel_agrupacion === "subconcepto") {
+      return listaSubconceptos.map(s => ({ id: s.id, codigo: s.codigo, nombre: s.nombre }));
+    } else {
+      return listaAuxiliares.map(a => ({ id: a.id, codigo: a.codigo_auxiliar, nombre: a.nombre }));
+    }
+  };
+
+  const elementosDisponibles = obtenerListaSegunNivel();
+
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-10">
       <div className="max-w-4xl mx-auto space-y-8">
@@ -110,7 +134,7 @@ export default function ConfigurarIndicadoresPage() {
           </div>
           <div>
             <h1 className="text-2xl font-bold">Creador y Configurador de Indicadores NIIF</h1>
-            <p className="text-sm text-zinc-500">Crea nuevos indicadores gerenciales y define sus reglas matemáticas</p>
+            <p className="text-sm text-zinc-500">Configura reglas por Concepto, Subconcepto o Auxiliar con guía teórica</p>
           </div>
         </div>
 
@@ -186,7 +210,7 @@ export default function ConfigurarIndicadoresPage() {
         {/* 2. CONFIGURAR REGLA MATEMÁTICA */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-3xl shadow-sm space-y-4">
           <h2 className="text-lg font-bold flex items-center gap-2">
-            <Layers className="w-5 h-5 text-indigo-600" /> 2. Configurar Regla Matemática y Conceptos NIIF
+            <Layers className="w-5 h-5 text-indigo-600" /> 2. Configurar Regla Matemática y Jerarquía NIIF
           </h2>
           <form onSubmit={handleGuardarConfiguracion} className="space-y-4 text-sm">
             <div>
@@ -194,7 +218,7 @@ export default function ConfigurarIndicadoresPage() {
               <select 
                 required
                 value={formConfig.indicador_id}
-                onChange={(e) => setFormConfig({...formConfig, indicador_id: e.target.value})}
+                onChange={handleSeleccionarIndicador}
                 className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent"
               >
                 <option value="" className="dark:bg-zinc-900">Seleccione un indicador del catálogo...</option>
@@ -202,44 +226,77 @@ export default function ConfigurarIndicadoresPage() {
                   <option key={ind.id} value={ind.id} className="dark:bg-zinc-900">{ind.nombre} ({ind.categoria})</option>
                 ))}
               </select>
+
+              {/* Tarjeta de apoyo con la fórmula teórica oficial */}
+              {indicadorSeleccionado && (
+                <div className="mt-3 p-3.5 bg-blue-50/60 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 rounded-2xl flex items-start gap-3">
+                  <div className="p-1.5 bg-blue-600 text-white rounded-xl mt-0.5">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  </div>
+                  <div className="text-xs space-y-1">
+                    <p className="font-bold text-blue-900 dark:text-blue-200">Fórmula Teórica Oficial:</p>
+                    <p className="font-mono text-blue-700 dark:text-blue-300 bg-white dark:bg-zinc-900 px-2.5 py-1 rounded-lg border border-blue-100 dark:border-blue-900">
+                      {indicadorSeleccionado.descripcion_formula || "Sin fórmula detallada registrada en el catálogo."}
+                    </p>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      Categoría: <span className="font-semibold">{indicadorSeleccionado.categoria}</span> | Mapea los elementos correspondientes abajo.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-500 mb-1">Nivel de Agrupación NIIF</label>
+              <select 
+                value={formConfig.nivel_agrupacion}
+                onChange={(e) => setFormConfig({...formConfig, nivel_agrupacion: e.target.value, numerador_ids: [], numerador_restando_ids: [], denominador_ids: []})}
+                className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent font-semibold text-indigo-600"
+              >
+                <option value="concepto_niif" className="dark:bg-zinc-900">1. Concepto General NIIF (Abarca todo)</option>
+                <option value="subconcepto" className="dark:bg-zinc-900">2. Subconcepto NIIF (Nivel intermedio)</option>
+                <option value="concepto_auxiliar" className="dark:bg-zinc-900">3. Concepto Auxiliar (Detalle máximo)</option>
+              </select>
             </div>
 
             <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-2xl border border-zinc-200 dark:border-zinc-800 space-y-3">
-              <h3 className="font-bold text-xs uppercase text-zinc-500">Estructura del Numerador (Suma o Resta de Conceptos)</h3>
+              <h3 className="font-bold text-xs uppercase text-zinc-500">Estructura del Numerador</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-500 mb-1">Conceptos a Sumar (+)</label>
+                  <label className="block text-xs font-semibold text-zinc-500 mb-1">Elementos a Sumar (+)</label>
                   <select 
-  multiple
-  className="w-full h-32 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
-  value={formConfig.numerador_ids}
-  onChange={(e) => {
-    const values = Array.from(e.target.selectedOptions, option => option.value);
-    setFormConfig({...formConfig, numerador_ids: values});
-  }}
->
-  {conceptosAuxiliares.map((c) => (
-    <option key={c.id} value={c.id} className="dark:bg-zinc-900">
-      {c.codigo_auxiliar} - {c.nombre}
-    </option>
-  ))}
-</select>
-                  <span className="text-[10px] text-zinc-400 mt-1 block">Mantén presionado Ctrl / Cmd para seleccionar varios.</span>
+                    multiple
+                    className="w-full h-36 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
+                    value={formConfig.numerador_ids}
+                    onChange={(e) => {
+                      const values = Array.from(e.target.selectedOptions, option => option.value);
+                      setFormConfig({...formConfig, numerador_ids: values});
+                    }}
+                  >
+                    {elementosDisponibles.map((el) => (
+                      <option key={el.id} value={el.id} className="dark:bg-zinc-900">
+                        {el.codigo} - {el.nombre}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-[10px] text-zinc-400 mt-1 block">Usa Ctrl / Cmd para seleccionar varios.</span>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-500 mb-1">Conceptos a Restar (-) [Ej: Inventarios para Prueba Ácida]</label>
+                  <label className="block text-xs font-semibold text-zinc-500 mb-1">Elementos a Restar (-) [Ej: Inventarios]</label>
                   <select 
                     multiple
-                    className="w-full h-32 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
+                    className="w-full h-36 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
                     value={formConfig.numerador_restando_ids}
                     onChange={(e) => {
                       const values = Array.from(e.target.selectedOptions, option => option.value);
                       setFormConfig({...formConfig, numerador_restando_ids: values});
                     }}
                   >
-                    {conceptosAuxiliares.map((c) => (
-                      <option key={c.id} value={c.id} className="dark:bg-zinc-900">{c.codigo} - {c.nombre}</option>
+                    {elementosDisponibles.map((el) => (
+                      <option key={el.id} value={el.id} className="dark:bg-zinc-900">
+                        {el.codigo} - {el.nombre}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -249,18 +306,20 @@ export default function ConfigurarIndicadoresPage() {
             <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-2xl border border-zinc-200 dark:border-zinc-800 space-y-3">
               <h3 className="font-bold text-xs uppercase text-zinc-500">Estructura del Denominador y Tipo de Operación</h3>
               <div>
-                <label className="block text-xs font-semibold text-zinc-500 mb-1">Conceptos del Denominador (Divisor)</label>
+                <label className="block text-xs font-semibold text-zinc-500 mb-1">Elementos del Denominador (Divisor)</label>
                 <select 
                   multiple
-                  className="w-full h-32 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
+                  className="w-full h-36 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
                   value={formConfig.denominador_ids}
                   onChange={(e) => {
                     const values = Array.from(e.target.selectedOptions, option => option.value);
                     setFormConfig({...formConfig, denominador_ids: values});
                   }}
                 >
-                  {conceptosAuxiliares.map((c) => (
-                    <option key={c.id} value={c.id} className="dark:bg-zinc-900">{c.codigo} - {c.nombre}</option>
+                  {elementosDisponibles.map((el) => (
+                    <option key={el.id} value={el.id} className="dark:bg-zinc-900">
+                      {el.codigo} - {el.nombre}
+                    </option>
                   ))}
                 </select>
               </div>
