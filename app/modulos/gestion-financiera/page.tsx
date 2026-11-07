@@ -8,7 +8,9 @@ import {
   PieChart, 
   Settings,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Scale,
+  FileText
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { calcularIndicadoresDinamicos } from "./finance-actions";
@@ -26,8 +28,15 @@ export default function GestionFinancieraPage() {
 
   const [loading, setLoading] = useState(false);
   const [mensajeError, setMensajeError] = useState("");
+  
   const [indicadores, setIndicadores] = useState<{ [key: string]: number }>({});
+  const [balance, setBalance] = useState<{ [key: string]: number }>({});
+  const [resultadosOp, setResultadosOp] = useState<{ [key: string]: number }>({});
+  
   const [historico, setHistorico] = useState<any[]>([]);
+  const [historicoBalance, setHistoricoBalance] = useState<any[]>([]);
+  const [historicoResultados, setHistoricoResultados] = useState<any[]>([]);
+  
   const [consultado, setConsultado] = useState(false);
 
   useEffect(() => {
@@ -76,18 +85,27 @@ export default function GestionFinancieraPage() {
     const res = await calcularIndicadoresDinamicos(empresaId, sucursalId, anio, mes);
     if (res.success) {
       setIndicadores(res.indicadores || {});
+      setBalance(res.balance || {});
+      setResultadosOp(res.resultadosOp || {});
       setHistorico(res.historico || []);
+      setHistoricoBalance(res.historicoBalance || []);
+      setHistoricoResultados(res.historicoResultados || []);
       setConsultado(true);
     } else {
-      setMensajeError(res.error || "No se pudieron calcular los indicadores.");
+      setMensajeError(res.error || "No se pudieron calcular los datos.");
     }
     setLoading(false);
+  };
+
+  const fmt = (val: number | undefined) => {
+    if (val === undefined || isNaN(val)) return "0";
+    return val.toLocaleString("es-CO", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   };
 
   if (!isMounted) return null;
 
   const clavesIndicadores = Object.keys(indicadores);
-  const coloresGrafico = ["#2563eb", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4"];
+  const coloresGrafico = ["#06b6d4", "#2563eb", "#f59e0b", "#10b981", "#ec4899", "#8b5cf6"];
 
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-4 md:p-6">
@@ -184,68 +202,150 @@ export default function GestionFinancieraPage() {
           </div>
         )}
 
-        {/* CONTENEDOR DE TARJETAS */}
-        <div className="space-y-2">
-          <h2 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-            <PieChart className="w-3.5 h-3.5 text-blue-600" /> Tarjetas de Indicadores (Mes Seleccionado)
-          </h2>
-
-          {!consultado ? (
-            <div className="p-6 text-center bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-zinc-400 text-xs">
-              Seleccione Empresa y Sucursal para visualizar los resultados.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-              {Object.entries(indicadores).map(([codigo, valor]) => (
-                <div key={codigo} className="bg-white dark:bg-zinc-900 p-3.5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wide">{codigo}</p>
-                  <h3 className="text-lg font-black text-blue-600 mt-1">{valor}</h3>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* SECCIÓN DE GRÁFICOS RECHARTS */}
-        {consultado && historico.length > 0 && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2">
+        {!consultado ? (
+          <div className="p-12 text-center bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-zinc-400 text-xs">
+            Seleccione Empresa y Sucursal para visualizar el panel directivo financiero.
+          </div>
+        ) : (
+          /* ESTRUCTURA A 2 COLUMNAS PERFECTAS */
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             
-            {/* GRÁFICO DE LÍNEAS */}
-            <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Tendencia Anual (Mes 1 al 12)</h3>
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={historico}>
-                    <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                    <XAxis dataKey="mes" tick={{fontSize: 10}} />
-                    <YAxis tick={{fontSize: 10}} />
-                    <Tooltip />
-                    <Legend wrapperStyle={{fontSize: '11px'}} />
-                    {clavesIndicadores.map((key, idx) => (
-                      <Line key={key} type="monotone" dataKey={key} stroke={coloresGrafico[idx % coloresGrafico.length]} strokeWidth={2} dot={{r: 3}} />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
+            {/* COLUMNA IZQUIERDA: INDICADORES FINANCIEROS Y SU GRÁFICA */}
+            <div className="space-y-4">
+              <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-3">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-blue-600 flex items-center gap-1.5">
+                  <PieChart className="w-4 h-4" /> Indicadores Financieros (Mes Seleccionado)
+                </h2>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {Object.entries(indicadores).map(([codigo, valor], idx) => {
+                    const colorLinea = coloresGrafico[idx % coloresGrafico.length];
+                    return (
+                      <div key={codigo} className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                        <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wide">{codigo}</p>
+                        <h3 className="text-base font-black mt-0.5 text-right" style={{ color: colorLinea }}>
+                          {fmt(valor)}
+                        </h3>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
+
+              {/* GRÁFICA DE INDICADORES */}
+              {historico.length > 0 && (
+                <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Tendencia Anual - Indicadores</h3>
+                  <div className="h-64 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={historico}>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                        <XAxis dataKey="mes" tick={{fontSize: 10}} />
+                        <YAxis tick={{fontSize: 10}} />
+                        <Tooltip />
+                        <Legend wrapperStyle={{fontSize: '10px'}} />
+                        {clavesIndicadores.map((key, idx) => (
+                          <Line key={key} type="monotone" dataKey={key} stroke={coloresGrafico[idx % coloresGrafico.length]} strokeWidth={2} dot={{r: 2}} />
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* GRÁFICO DE BARRAS */}
-            <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Comportamiento Mensual del Año</h3>
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={historico}>
-                    <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                    <XAxis dataKey="mes" tick={{fontSize: 10}} />
-                    <YAxis tick={{fontSize: 10}} />
-                    <Tooltip />
-                    <Legend wrapperStyle={{fontSize: '11px'}} />
-                    {clavesIndicadores.map((key, idx) => (
-                      <Bar key={key} dataKey={key} fill={coloresGrafico[idx % coloresGrafico.length]} radius={[4, 4, 0, 0]} />
-                    ))}
-                  </BarChart>
-                </ResponsiveContainer>
+            {/* COLUMNA DERECHA: BALANCE GENERAL (ARRIBA) Y ESTADO DE RESULTADOS (ABAJO) */}
+            <div className="space-y-4">
+              
+              {/* 1. BALANCE GENERAL */}
+              <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-3">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 flex items-center gap-1.5">
+                  <Scale className="w-4 h-4" /> Balance General (Activo, Pasivo, Patrimonio)
+                </h2>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                    <p className="text-[10px] text-zinc-400 font-bold uppercase">Activo</p>
+                    <h3 className="text-sm font-black text-[#4f46e5] mt-0.5 text-right">{fmt(balance.ACTIVO)}</h3>
+                  </div>
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                    <p className="text-[10px] text-zinc-400 font-bold uppercase">Pasivo</p>
+                    <h3 className="text-sm font-black text-[#f43f5e] mt-0.5 text-right">{fmt(balance.PASIVO)}</h3>
+                  </div>
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                    <p className="text-[10px] text-zinc-400 font-bold uppercase" title="Incluye Utilidad del Periodo">Patrimonio (+Utilidad)</p>
+                    <h3 className="text-sm font-black text-[#10b981] mt-0.5 text-right">{fmt(balance.PATRIMONIO)}</h3>
+                  </div>
+                </div>
               </div>
+
+              {/* GRÁFICA DE BALANCE */}
+              {historicoBalance.length > 0 && (
+                <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Evolución Anual - Balance General</h3>
+                  <div className="h-56 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={historicoBalance}>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                        <XAxis dataKey="mes" tick={{fontSize: 10}} />
+                        <YAxis tick={{fontSize: 10}} />
+                        <Tooltip />
+                        <Legend wrapperStyle={{fontSize: '10px'}} />
+                        <Bar dataKey="ACTIVO" fill="#4f46e5" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="PASIVO" fill="#f43f5e" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="PATRIMONIO" fill="#10b981" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {/* 2. ESTADO DE RESULTADOS */}
+              <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-3">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-emerald-600 flex items-center gap-1.5">
+                  <FileText className="w-4 h-4" /> Estado de Resultados (Ingresos, Gastos, Costos, Utilidad)
+                </h2>
+                
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                    <p className="text-[9px] text-zinc-400 font-bold uppercase">Ingresos</p>
+                    <h3 className="text-sm font-black text-emerald-600 mt-0.5 text-right">{fmt(resultadosOp.INGRESOS)}</h3>
+                  </div>
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                    <p className="text-[9px] text-zinc-400 font-bold uppercase">Costos</p>
+                    <h3 className="text-sm font-black text-amber-600 mt-0.5 text-right">{fmt(resultadosOp.COSTOS)}</h3>
+                  </div>
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                    <p className="text-[9px] text-zinc-400 font-bold uppercase">Gastos</p>
+                    <h3 className="text-sm font-black text-rose-600 mt-0.5 text-right">{fmt(resultadosOp.GASTOS)}</h3>
+                  </div>
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                    <p className="text-[9px] text-zinc-400 font-bold uppercase">Utilidad</p>
+                    <h3 className="text-sm font-black text-blue-600 mt-0.5 text-right">{fmt(resultadosOp.UTILIDAD)}</h3>
+                  </div>
+                </div>
+
+                {/* GRÁFICA DE RESULTADOS & UTILIDAD */}
+                {historicoResultados.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Tendencia Anual - Resultados y Utilidad</h3>
+                    <div className="h-56 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={historicoResultados}>
+                          <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                          <XAxis dataKey="mes" tick={{fontSize: 10}} />
+                          <YAxis tick={{fontSize: 10}} />
+                          <Tooltip />
+                          <Legend wrapperStyle={{fontSize: '10px'}} />
+                          <Line type="monotone" dataKey="INGRESOS" stroke="#10b981" strokeWidth={2} dot={{r: 2}} />
+                          <Line type="monotone" dataKey="COSTOS" stroke="#f59e0b" strokeWidth={2} dot={{r: 2}} />
+                          <Line type="monotone" dataKey="GASTOS" stroke="#ef4444" strokeWidth={2} dot={{r: 2}} />
+                          <Line type="monotone" dataKey="UTILIDAD" stroke="#2563eb" strokeWidth={3} dot={{r: 3}} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+              </div>
+
             </div>
 
           </div>

@@ -152,7 +152,7 @@ export default function ConfigurarFormulasIndicadorPage() {
     
     const { error } = await supabase.from("indicadores_financieros").insert([nuevoInd]);
     if (!error) {
-      setMensaje({ texto: "¡Indicador creado con éxito!", tipo: "success" });
+      setMensaje({ texto: "¡Indicador o Métrica creado con éxito!", tipo: "success" });
       setNuevoInd({ codigo: "", nombre: "", categoria: "Rentabilidad", descripcion_formula: "" });
       const { data: indData } = await supabase.from("indicadores_financieros").select("*").order("nombre");
       if (indData) setIndicadores(indData);
@@ -228,7 +228,7 @@ export default function ConfigurarFormulasIndicadorPage() {
               <ArrowLeft className="w-4 h-4" />
             </Link>
             <h1 className="text-sm font-bold flex items-center gap-1.5">
-              <Settings className="w-4 h-4 text-indigo-600" /> Parametrización de Indicadores NIIF
+              <Settings className="w-4 h-4 text-indigo-600" /> Parametrización de Indicadores y Métricas NIIF
             </h1>
           </div>
 
@@ -266,21 +266,21 @@ export default function ConfigurarFormulasIndicadorPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           
-          {/* NUEVO INDICADOR */}
+          {/* NUEVO INDICADOR / MÉTRICA */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-xl shadow-sm space-y-3 lg:col-span-1">
             <h2 className="text-xs font-bold flex items-center gap-1.5 text-indigo-600 uppercase">
-              <Plus className="w-3.5 h-3.5" /> Registrar Nuevo Indicador
+              <Plus className="w-3.5 h-3.5" /> Registrar Indicador o Métrica (Ej: ACTIVO, INGRESOS)
             </h2>
             <form onSubmit={handleCrearIndicador} className="space-y-2.5 text-xs">
               <div>
-                <label className="block text-[10px] font-semibold text-zinc-400 mb-0.5">Código Único</label>
+                <label className="block text-[10px] font-semibold text-zinc-400 mb-0.5">Código Único (Ej: ACTIVO, PASIVO)</label>
                 <input 
                   type="text" 
                   required 
                   value={nuevoInd.codigo}
                   onChange={(e) => setNuevoInd({...nuevoInd, codigo: e.target.value.toUpperCase()})}
                   className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent"
-                  placeholder="MARGEN_NETO"
+                  placeholder="ACTIVO"
                 />
               </div>
               <div>
@@ -291,7 +291,7 @@ export default function ConfigurarFormulasIndicadorPage() {
                   value={nuevoInd.nombre}
                   onChange={(e) => setNuevoInd({...nuevoInd, nombre: e.target.value})}
                   className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent"
-                  placeholder="Ej. Margen Neto"
+                  placeholder="Ej. Activo Total"
                 />
               </div>
               <div>
@@ -301,25 +301,25 @@ export default function ConfigurarFormulasIndicadorPage() {
                   onChange={(e) => setNuevoInd({...nuevoInd, categoria: e.target.value})}
                   className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent"
                 >
+                  <option value="Balance" className="dark:bg-zinc-900">Balance (Activo, Pasivo, etc.)</option>
+                  <option value="Resultados" className="dark:bg-zinc-900">Resultados (Ingresos, Gastos, etc.)</option>
                   <option value="Rentabilidad" className="dark:bg-zinc-900">Rentabilidad</option>
                   <option value="Liquidez" className="dark:bg-zinc-900">Liquidez</option>
-                  <option value="Endeudamiento" className="dark:bg-zinc-900">Endeudamiento</option>
-                  <option value="Eficiencia" className="dark:bg-zinc-900">Eficiencia</option>
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-semibold text-zinc-400 mb-0.5">Fórmula Teórica</label>
+                <label className="block text-[10px] font-semibold text-zinc-400 mb-0.5">Descripción</label>
                 <input 
                   type="text" 
                   required 
                   value={nuevoInd.descripcion_formula}
                   onChange={(e) => setNuevoInd({...nuevoInd, descripcion_formula: e.target.value})}
                   className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent"
-                  placeholder="Ej. (A - B) / (C - D)"
+                  placeholder="Ej. Suma de cuentas de activo"
                 />
               </div>
               <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg transition">
-                Guardar Indicador
+                Guardar Indicador / Métrica
               </button>
             </form>
           </div>
@@ -327,13 +327,13 @@ export default function ConfigurarFormulasIndicadorPage() {
           {/* EDITOR DE REGLAS */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-xl shadow-sm space-y-3 lg:col-span-2">
             <h2 className="text-xs font-bold flex items-center gap-1.5 text-indigo-600 uppercase">
-              <Layers className="w-3.5 h-3.5" /> Editor de Reglas Matemáticas
+              <Layers className="w-3.5 h-3.5" /> Editor de Reglas Matemáticas (Numerador y Denominador)
             </h2>
 
             <form onSubmit={handleGuardarConfiguracion} className="space-y-3 text-xs">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                 <div>
-                  <label className="block text-[10px] font-semibold text-zinc-400 mb-0.5">Seleccionar Indicador</label>
+                  <label className="block text-[10px] font-semibold text-zinc-400 mb-0.5">Seleccionar Indicador o Métrica</label>
                   <select 
                     required
                     value={formConfig.indicador_id}
@@ -342,7 +342,7 @@ export default function ConfigurarFormulasIndicadorPage() {
                   >
                     <option value="" className="dark:bg-zinc-900">Seleccione indicador...</option>
                     {indicadores.map((ind) => (
-                      <option key={ind.id} value={ind.id} className="dark:bg-zinc-900">{ind.nombre}</option>
+                      <option key={ind.id} value={ind.id} className="dark:bg-zinc-900">{ind.nombre} ({ind.codigo})</option>
                     ))}
                   </select>
                 </div>
@@ -363,7 +363,7 @@ export default function ConfigurarFormulasIndicadorPage() {
 
               {indicadorSeleccionado && (
                 <div className="p-2 bg-blue-50/60 dark:bg-blue-950/40 border border-blue-200 rounded-lg text-[11px]">
-                  <span className="font-bold text-blue-900 dark:text-blue-200">Fórmula: </span>
+                  <span className="font-bold text-blue-900 dark:text-blue-200">Descripción: </span>
                   <span className="font-mono text-blue-700 dark:text-blue-300">{indicadorSeleccionado.descripcion_formula}</span>
                 </div>
               )}
@@ -371,7 +371,7 @@ export default function ConfigurarFormulasIndicadorPage() {
               {/* NUMERADOR SUMA (+) */}
               <div className="p-2.5 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg border border-zinc-200 dark:border-zinc-800 space-y-1.5">
                 <div className="flex justify-between items-center">
-                  <span className="font-bold text-[10px] uppercase text-zinc-700 dark:text-zinc-300">Numerador (+)</span>
+                  <span className="font-bold text-[10px] uppercase text-zinc-700 dark:text-zinc-300">Numerador / Elementos (+)</span>
                   <div className="flex gap-1.5 text-[10px]">
                     <select
                       value={filtroElementoNum}
@@ -454,7 +454,7 @@ export default function ConfigurarFormulasIndicadorPage() {
               {/* DENOMINADOR SUMA (+) */}
               <div className="p-2.5 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg border border-zinc-200 dark:border-zinc-800 space-y-1.5">
                 <div className="flex justify-between items-center">
-                  <span className="font-bold text-[10px] uppercase text-zinc-700 dark:text-zinc-300">Denominador (+)</span>
+                  <span className="font-bold text-[10px] uppercase text-zinc-700 dark:text-zinc-300">Denominador / Divisor (+) (Opcional para métricas simples como Activo)</span>
                   <div className="flex gap-1.5 text-[10px]">
                     <select
                       value={filtroElementoDen}
@@ -541,7 +541,7 @@ export default function ConfigurarFormulasIndicadorPage() {
                   onChange={(e) => setFormConfig({...formConfig, operacion_tipo: e.target.value})}
                   className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent font-medium"
                 >
-                  <option value="DIVISION_RAZON" className="dark:bg-zinc-900">Razón / Índice (Ej. 2.5)</option>
+                  <option value="DIVISION_RAZON" className="dark:bg-zinc-900">Razón / Índice (Ej. 2.5 o Valor Total)</option>
                   <option value="DIVISION_PORCENTAJE" className="dark:bg-zinc-900">Porcentaje (Ej. 45.2%)</option>
                 </select>
               </div>
