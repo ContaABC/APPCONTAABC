@@ -284,6 +284,7 @@ export default function EmitirFacturaPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMensaje(null);
+    setPdfUrlGenerada(null); // Limpiar PDF anterior si existía
 
     if (errorPeriodo) {
       setMensaje({
@@ -354,37 +355,13 @@ export default function EmitirFacturaPage() {
       setMensaje({
         tipo: 'ok',
         texto: `¡Factura ${res.numeroFactura} registrada exitosamente! Documento Contable N°: ${res.numeroDocumentoContable}.`,
-        });
+      });
 
-      // --- ABRIR / DESCARGAR PDF AUTOMÁTICAMENTE ---
+      // Guardamos la URL en el estado para habilitar el botón de visualización
       if (res.pdfUrl) {
         setPdfUrlGenerada(res.pdfUrl);
       }
-{mensaje && (
-        <div
-          className={`p-4 mb-6 rounded-lg text-sm font-medium flex flex-col gap-2 ${
-            mensaje.tipo === 'ok'
-              ? 'bg-green-50 text-green-700 border border-green-200'
-              : 'bg-red-50 text-red-700 border border-red-200'
-          }`}
-        >
-          <span>{mensaje.texto}</span>
 
-          {/* Botón directo que el navegador Nombrará como seguro para abrir */}
-          {pdfUrlGenerada && mensaje.tipo === 'ok' && (
-            <div>
-              <a
-                href={pdfUrlGenerada}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-4 py-2 bg-green-700 hover:bg-green-800 text-white font-bold rounded shadow text-xs transition-colors"
-              >
-                📄 Ver / Descargar PDF de la Factura
-              </a>
-            </div>
-          )}
-        </div>
-      )}
       // Limpiar formulario
       setItemsDetalle([]);
       setBusquedaItems({});
@@ -415,15 +392,29 @@ export default function EmitirFacturaPage() {
         Emitir Nueva Factura de Venta
       </h1>
 
+      {/* BLOQUE ÚNICO DE MENSAJES Y BOTÓN DE DESCARGA PDF */}
       {mensaje && (
         <div
-          className={`p-4 mb-6 rounded-lg text-sm font-medium ${
+          className={`p-4 mb-6 rounded-lg text-sm font-medium flex flex-col gap-2 ${
             mensaje.tipo === 'ok'
               ? 'bg-green-50 text-green-700 border border-green-200'
               : 'bg-red-50 text-red-700 border border-red-200'
           }`}
         >
-          {mensaje.texto}
+          <span>{mensaje.texto}</span>
+
+          {pdfUrlGenerada && mensaje.tipo === 'ok' && (
+            <div>
+              <a
+                href={pdfUrlGenerada}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-green-700 hover:bg-green-800 text-white font-bold rounded shadow text-xs transition-colors"
+              >
+                📄 Ver / Descargar PDF de la Factura
+              </a>
+            </div>
+          )}
         </div>
       )}
 
@@ -609,7 +600,6 @@ export default function EmitirFacturaPage() {
             </button>
           </div>
 
-          {/* QUITAMOS EL OVERFLOW-X-AUTO DEL CONTENEDOR PRINCIPAL O LO MANEJAMOS VISIBLE */}
           <div className="relative">
             <table className="w-full text-left text-xs text-gray-600 border-collapse">
               <thead className="bg-gray-100 text-gray-700 uppercase font-semibold">
@@ -642,7 +632,6 @@ export default function EmitirFacturaPage() {
                     return (
                       <tr key={fila.id}>
                         <td className="p-2 relative overflow-visible">
-                          {/* INPUT DE BÚSQUEDA PREDICTIVA */}
                           <input
                             type="text"
                             placeholder="Escriba para buscar ítem..."
@@ -659,7 +648,6 @@ export default function EmitirFacturaPage() {
                             className="w-full p-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500"
                           />
 
-                          {/* MENÚ DESPLEGABLE FLOTANTE CON POSICIONAMIENTO ASEGURADO */}
                           {filaActivaMenu === fila.id && (
                             <div 
                               ref={menuRef} 
@@ -750,7 +738,6 @@ export default function EmitirFacturaPage() {
           </div>
         </div>
 
-        {/* RESUMEN DE TOTALES (SIN RETENCIONES) */}
         <div className="flex justify-end p-4 bg-gray-50 rounded-lg border border-gray-200">
           <div className="w-full md:w-1/2 bg-blue-50 p-4 rounded-lg flex flex-col space-y-1.5 border border-blue-100">
             <div className="flex justify-between text-xs text-gray-700">
