@@ -360,7 +360,31 @@ export default function EmitirFacturaPage() {
       if (res.pdfUrl) {
         setPdfUrlGenerada(res.pdfUrl);
       }
+{mensaje && (
+        <div
+          className={`p-4 mb-6 rounded-lg text-sm font-medium flex flex-col gap-2 ${
+            mensaje.tipo === 'ok'
+              ? 'bg-green-50 text-green-700 border border-green-200'
+              : 'bg-red-50 text-red-700 border border-red-200'
+          }`}
+        >
+          <span>{mensaje.texto}</span>
 
+          {/* Botón directo que el navegador Nombrará como seguro para abrir */}
+          {pdfUrlGenerada && mensaje.tipo === 'ok' && (
+            <div>
+              <a
+                href={pdfUrlGenerada}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-green-700 hover:bg-green-800 text-white font-bold rounded shadow text-xs transition-colors"
+              >
+                📄 Ver / Descargar PDF de la Factura
+              </a>
+            </div>
+          )}
+        </div>
+      )}
       // Limpiar formulario
       setItemsDetalle([]);
       setBusquedaItems({});
