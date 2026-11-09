@@ -74,7 +74,7 @@ export async function obtenerClasesDocumento(empresaId: string | number) {
   }
 }
 
-// 4. Obtener Conceptos Auxiliares / Cuentas P.U.C.
+// 4. Obtener Conceptos Auxiliares 
 export async function obtenerConceptosAuxiliares(empresaId: string | number) {
   try {
     const supabase = getSupabaseClient();
@@ -197,6 +197,7 @@ export async function registrarAsientoCierreRetenciones({
   tipoRetencion,
   periodoDesde,
   periodoHasta,
+  fechaContable,
   totales,
   detallesAgrupados,
 }: {
@@ -207,6 +208,7 @@ export async function registrarAsientoCierreRetenciones({
   tipoRetencion: string;
   periodoDesde: string;
   periodoHasta: string;
+  fechaContable: string;
   totales: { base: number; retencionReal: number; retencionAproximada: number };
   detallesAgrupados: any[];
 }) {
