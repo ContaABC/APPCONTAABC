@@ -42,7 +42,7 @@ export default function EmitirFacturaPage() {
   // Estados para Control de Periodo Contable
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
-
+  
   const [itemsDetalle, setItemsDetalle] = useState<ItemSeleccionado[]>([]);
 
   // Estados para autocompletado de ítems activos por fila
@@ -52,6 +52,7 @@ export default function EmitirFacturaPage() {
 
   const [cargando, setCargando] = useState(false);
   const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error'; texto: string } | null>(null);
+  const [pdfUrlGenerada, setPdfUrlGenerada] = useState<string | null>(null);
 
   const limpiarMensaje = () => {
     if (mensaje) setMensaje(null);
@@ -357,7 +358,7 @@ export default function EmitirFacturaPage() {
 
       // --- ABRIR / DESCARGAR PDF AUTOMÁTICAMENTE ---
       if (res.pdfUrl) {
-        window.open(res.pdfUrl, '_blank');
+        setPdfUrlGenerada(res.pdfUrl);
       }
 
       // Limpiar formulario

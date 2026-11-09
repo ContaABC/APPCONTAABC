@@ -24,6 +24,7 @@ export default function ConsultarFacturasEmitidasPage() {
   const [estadoPago, setEstadoPago] = useState<string>("todos");
   const [mostrarSubtotales, setMostrarSubtotales] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+ // const [pdfUrlGenerada, setPdfUrlGenerada] = useState<string | null>(null);
 
   // Modal para ver Asiento Contable
   const [facturaAsientoSeleccionada, setFacturaAsientoSeleccionada] = useState<any | null>(null);
