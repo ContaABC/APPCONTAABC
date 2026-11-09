@@ -13,6 +13,7 @@ import {
   ejecutarPagoFacturas,
   obtenerConceptosAuxiliaresPorFormaPago,
 } from "./pagos-actions";
+import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
 
 export default function PagosProveedoresPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
@@ -55,13 +56,43 @@ export default function PagosProveedoresPage() {
   const [formaPago, setFormaPago] = useState<string>("Transferencia / Consignación");
   const [cuentaBancoId, setCuentaBancoId] = useState<string>("");
   const [conceptoAuxiliarId, setConceptoAuxiliarId] = useState<string>("");
-  const [fechaContable, setFechaContable] = useState<string>(new Date().toISOString().split("T")[0]);
+  const [fechaContable, setFechaContable] = useState<string>("");
   const [glosa, setGlosa] = useState<string>("Pago masivo de facturas a proveedores");
   const [procesando, setProcesando] = useState<boolean>(false);
 
+  // Estados para Control de Periodo Contable (NUEVO)
+  const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
+  const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
+
   useEffect(() => {
     setIsMounted(true);
+    setFechaContable(new Date().toISOString().split("T")[0]);
   }, []);
+
+  // Función de validación de periodo en tiempo real (NUEVO)
+  const verificarPeriodo = async (fecha: string) => {
+    if (!empresaId || !sucursalId || !fecha) {
+      setErrorPeriodo(null);
+      return;
+    }
+
+    setValidandoPeriodo(true);
+    setErrorPeriodo(null);
+
+    const res = await validarPeriodoContable(empresaId, sucursalId, fecha);
+    if (!res.valido) {
+      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
+    }
+
+    setValidandoPeriodo(false);
+  };
+
+  // Validar automáticamente al cambiar empresa, sucursal o fecha contable
+  useEffect(() => {
+    if (empresaId && sucursalId && fechaContable) {
+      verificarPeriodo(fechaContable);
+    }
+  }, [empresaId, sucursalId]);
 
   useEffect(() => {
     async function init() {
@@ -457,6 +488,12 @@ export default function PagosProveedoresPage() {
 
   const handleSubmitPago = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (errorPeriodo) {
+      alert("No se puede procesar el pago porque el periodo contable no es válido o está cerrado.");
+      return;
+    }
+
     const idsActivos = Object.keys(facturasSeleccionadas).filter((id) => facturasSeleccionadas[id]);
 
     if (idsActivos.length === 0) {
@@ -614,14 +651,28 @@ export default function PagosProveedoresPage() {
           </select>
         </div>
 
+        {/* Fecha del Pago con Validación en Tiempo Real (MODIFICADO) */}
         <div className="md:col-span-2">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Fecha del Pago</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Fecha del Pago *</label>
           <input
             type="date"
             value={fechaContable}
-            onChange={(e) => setFechaContable(e.target.value)}
+            onChange={(e) => {
+              setFechaContable(e.target.value);
+              if (errorPeriodo) setErrorPeriodo(null);
+            }}
+            onBlur={() => verificarPeriodo(fechaContable)}
+            required
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 outline-none"
           />
+          {validandoPeriodo && (
+            <p className="text-[9px] text-blue-600 mt-0.5 animate-pulse">Verificando periodo...</p>
+          )}
+          {errorPeriodo && (
+            <p className="text-[10px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1 rounded mt-0.5">
+              ⚠️ {errorPeriodo}
+            </p>
+          )}
         </div>
 
         {formaPago !== "Efectivo" ? (
@@ -668,7 +719,6 @@ export default function PagosProveedoresPage() {
           </select>
         </div>
 
-        {/* COMPONENTES ESPECÍFICOS SEGÚN EL MODO MASIVO SELECCIONADO */}
         {tipoPagoMasivo === "EXCEL" && (
           <div className="md:col-span-12 bg-indigo-50 p-3 rounded border border-indigo-200 flex items-center justify-between">
             <div>
@@ -796,10 +846,11 @@ export default function PagosProveedoresPage() {
             <span className="font-mono font-bold text-emerald-700 text-base">{fmt(totalGeneralPago)}</span>
           </div>
 
+          {/* Botón de Ejecución bloqueado si hay error de periodo (MODIFICADO) */}
           <button
             type="button"
             onClick={handleSubmitPago}
-            disabled={!isMounted || procesando || totalGeneralPago <= 0 || (tipoPagoMasivo === "AUTOMATICO_VALOR" && valorNetoObjetivo > saldoMaximoProveedor)}
+            disabled={!isMounted || procesando || totalGeneralPago <= 0 || (tipoPagoMasivo === "AUTOMATICO_VALOR" && valorNetoObjetivo > saldoMaximoProveedor) || Boolean(errorPeriodo)}
             suppressHydrationWarning
             className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded shadow transition text-xs"
           >

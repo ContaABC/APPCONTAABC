@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { obtenerEmpresas, obtenerSucursales } from "@/app/consultas/movimientos/movimientos-actions";
 import { obtenerClasesDocumentosPorTipo, obtenerAuxiliaresParaDocumentos, obtenerTerceros, obtenerTitulosValoresPorCuenta, guardarDocumentoContable } from "./documentos-actions";
+import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
 
 export default function DocumentosContablesPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
@@ -23,6 +24,10 @@ export default function DocumentosContablesPage() {
   const [fechaContable, setFechaContable] = useState<string>(new Date().toISOString().split("T")[0]);
   const [glosaConcepto, setGlosaConcepto] = useState<string>("");
 
+  // Estados para Control de Periodo Contable (NUEVO)
+  const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
+  const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
+
   // Detalle dinámico: Cada fila mantiene su propio estado y sus propios títulos disponibles
   const [detalles, setDetalles] = useState<Array<{
     concepto_auxiliar_id: string;
@@ -41,6 +46,31 @@ export default function DocumentosContablesPage() {
 
   const [loading, setLoading] = useState<boolean>(false);
   const dropdownRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
+
+  // Función de validación de periodo en tiempo real (NUEVO)
+  const verificarPeriodo = async (fecha: string) => {
+    if (!empresaId || !sucursalId || !fecha) {
+      setErrorPeriodo(null);
+      return;
+    }
+
+    setValidandoPeriodo(true);
+    setErrorPeriodo(null);
+
+    const res = await validarPeriodoContable(empresaId, sucursalId, fecha);
+    if (!res.valido) {
+      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
+    }
+
+    setValidandoPeriodo(false);
+  };
+
+  // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha contable cargada
+  useEffect(() => {
+    if (empresaId && sucursalId && fechaContable) {
+      verificarPeriodo(fechaContable);
+    }
+  }, [empresaId, sucursalId]);
 
   useEffect(() => {
     setIsMounted(true);
@@ -147,12 +177,10 @@ export default function DocumentosContablesPage() {
     nuevosDetalles[index].showAuxDropdown = false;
 
     if (aux.tipo_entidad === "Cuentas_Bancarias") {
-      // Usamos el id de la cuenta auxiliar (que corresponde al banco)
       const bancoId = aux.id;
       nuevosDetalles[index].cuenta_financiera_id = String(bancoId);
       nuevosDetalles[index].titulo_valor_id = ""; // Reiniciar cheque seleccionado
 
-      // Consultar únicamente los cheques de este banco específico para esta fila
       const resTv = await obtenerTitulosValoresPorCuenta(empresaId, bancoId);
       if (resTv.success) {
         nuevosDetalles[index].titulosDisponibles = resTv.data || [];
@@ -218,6 +246,13 @@ export default function DocumentosContablesPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Doble control de seguridad para impedir envíos si el periodo tiene errores
+    if (errorPeriodo) {
+      alert("No se puede guardar el comprobante porque el periodo contable no es válido.");
+      return;
+    }
+
     if (!empresaId || !sucursalId || !claseDocumentoId) {
       alert("Seleccione la empresa, sucursal y la clase de documento.");
       return;
@@ -282,7 +317,7 @@ export default function DocumentosContablesPage() {
           <button
             type="button"
             onClick={() => setEsBancario(true)}
-            className={`px-4 py-2 font-bold rounded transition text-xs {esBancario ? "bg-indigo-600 text-white shadow" : "text-slate-700 hover:text-slate-900 bg-white"}`}
+            className={`px-4 py-2 font-bold rounded transition text-xs ${esBancario ? "bg-indigo-600 text-white shadow" : "text-slate-700 hover:text-slate-900 bg-white"}`}
           >
             🏦 Documento Bancario / Tesorería
           </button>
@@ -295,9 +330,9 @@ export default function DocumentosContablesPage() {
         </span>
         <button
           type="submit"
-          disabled={loading || Math.abs(diferencia) > 0.01}
+          disabled={loading || Math.abs(diferencia) > 0.01 || Boolean(errorPeriodo)}
           className={`px-4 py-2 font-bold rounded text-white shadow transition ${
-            Math.abs(diferencia) <= 0.01 && !loading ? "bg-indigo-600 hover:bg-indigo-700" : "bg-slate-400 cursor-not-allowed"
+            Math.abs(diferencia) <= 0.01 && !loading && !errorPeriodo ? "bg-indigo-600 hover:bg-indigo-700" : "bg-slate-400 cursor-not-allowed"
           }`}
         >
           {loading ? "Guardando..." : "💾 Guardar Comprobante"}
@@ -364,9 +399,22 @@ export default function DocumentosContablesPage() {
           <input
             type="date"
             value={fechaContable}
-            onChange={(e) => setFechaContable(e.target.value)}
+            onChange={(e) => {
+              const nuevaFecha = e.target.value;
+              setFechaContable(nuevaFecha);
+              if (errorPeriodo) setErrorPeriodo(null);
+            }}
+            onBlur={() => verificarPeriodo(fechaContable)} // <--- Validación al perder el foco
             className="w-full bg-white border border-slate-300 rounded px-1 py-1 text-slate-800 outline-none text-[10px]"
           />
+          {validandoPeriodo && (
+            <p className="text-[9px] text-blue-500 mt-0.5 animate-pulse">Verificando periodo...</p>
+          )}
+          {errorPeriodo && (
+            <p className="text-[10px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1 rounded mt-0.5">
+              ⚠️ {errorPeriodo}
+            </p>
+          )}
         </div>
 
         <div className="md:col-span-12 mt-1">
@@ -424,54 +472,53 @@ export default function DocumentosContablesPage() {
                     <td className="p-2 text-center font-mono text-slate-500">{index + 1}</td>
                     
                     {/* AUTOCOMPLETE AUXILIAR */}
-<td className="p-2 relative overflow-visible" ref={(el) => { dropdownRefs.current[index] = el; }}>
-  <input
-    type="text"
-    value={fila.busquedaAuxiliar}
-    onChange={(e) => {
-      const val = e.target.value;
-      const nuevos = [...detalles];
-      nuevos[index].busquedaAuxiliar = val;
-      nuevos[index].showAuxDropdown = true;
-      if (!val) {
-        nuevos[index].concepto_auxiliar_id = "";
-        nuevos[index].cuenta_financiera_id = "";
-        nuevos[index].titulosDisponibles = [];
-        nuevos[index].titulo_valor_id = "";
-      }
-      setDetalles(nuevos);
-    }}
-    onFocus={() => {
-      const nuevos = [...detalles];
-      // Si ya tenía algo escrito o seleccionado, permitimos ver la lista completa o re-filtrar al hacer foco
-      nuevos[index].showAuxDropdown = true;
-      setDetalles(nuevos);
-    }}
-    placeholder="Escriba código o nombre..."
-    required
-    className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
-  />
+                    <td className="p-2 relative overflow-visible" ref={(el) => { dropdownRefs.current[index] = el; }}>
+                      <input
+                        type="text"
+                        value={fila.busquedaAuxiliar}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const nuevos = [...detalles];
+                          nuevos[index].busquedaAuxiliar = val;
+                          nuevos[index].showAuxDropdown = true;
+                          if (!val) {
+                            nuevos[index].concepto_auxiliar_id = "";
+                            nuevos[index].cuenta_financiera_id = "";
+                            nuevos[index].titulosDisponibles = [];
+                            nuevos[index].titulo_valor_id = "";
+                          }
+                          setDetalles(nuevos);
+                        }}
+                        onFocus={() => {
+                          const nuevos = [...detalles];
+                          nuevos[index].showAuxDropdown = true;
+                          setDetalles(nuevos);
+                        }}
+                        placeholder="Escriba código o nombre..."
+                        required
+                        className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
+                      />
 
-  {fila.showAuxDropdown && (
-    <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-300 rounded-md shadow-2xl max-h-56 overflow-y-auto z-[9999]">
-      {auxiliaresFiltrados.length > 0 ? (
-        auxiliaresFiltrados.map((aux: any) => (
-          <div
-            key={aux.id}
-            onClick={() => seleccionarAuxiliar(index, aux)}
-            className="px-3 py-2 hover:bg-indigo-50 cursor-pointer text-slate-700 border-b border-slate-100 last:border-none text-xs"
-          >
-            <span className="font-bold text-indigo-700">[{aux.codigo}]</span> {aux.nombre} <span className="text-[9px] text-slate-400">({aux.tipo_entidad})</span>
-          </div>
-        ))
-      ) : (
-        <div className="px-3 py-3 text-slate-400 text-center text-xs">No se encontraron cuentas</div>
-      )}
-    </div>
-  )}
-</td>
+                      {fila.showAuxDropdown && (
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-300 rounded-md shadow-2xl max-h-56 overflow-y-auto z-[9999]">
+                          {auxiliaresFiltrados.length > 0 ? (
+                            auxiliaresFiltrados.map((aux: any) => (
+                              <div
+                                key={aux.id}
+                                onClick={() => seleccionarAuxiliar(index, aux)}
+                                className="px-3 py-2 hover:bg-indigo-50 cursor-pointer text-slate-700 border-b border-slate-100 last:border-none text-xs"
+                              >
+                                <span className="font-bold text-indigo-700">[{aux.codigo}]</span> {aux.nombre} <span className="text-[9px] text-slate-400">({aux.tipo_entidad})</span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="px-3 py-3 text-slate-400 text-center text-xs">No se encontraron cuentas</div>
+                          )}
+                        </div>
+                      )}
+                    </td>
 
-                    {/* TÍTULO VALOR: LISTA INDEPENDIENTE Y PROPIA DE ESTA FILA SEGÚN SU BANCO */}
+                    {/* TÍTULO VALOR */}
                     {esBancario && (
                       <td className="p-2">
                         <select
@@ -490,7 +537,7 @@ export default function DocumentosContablesPage() {
                       </td>
                     )}
 
-                    {/* TERCERO (BLOQUEADO SI TIENE TÍTULO VALOR ASOCIADO EN ESTA FILA) */}
+                    {/* TERCERO */}
                     <td className="p-2">
                       <select
                         value={fila.tercero_id}
@@ -527,7 +574,7 @@ export default function DocumentosContablesPage() {
                       />
                     </td>
 
-                    {/* CRÉDITO (FIJO Y BLOQUEADO SI ES CHEQUE DEVUELTO EN ESTA FILA) */}
+                    {/* CRÉDITO */}
                     <td className="p-2">
                       <input
                         type="text"

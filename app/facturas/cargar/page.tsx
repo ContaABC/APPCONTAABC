@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import XmlUploader from "@/components/xml-uploader";
 import XmlUploaderMasivo from "@/components/xml-uploader-masivo";
+import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
 
 interface UserType {
   id: string;
@@ -47,8 +48,37 @@ export default function CargarFacturasPage() {
     new Date().toISOString().split("T")[0]
   );
 
+  // Estados para Control de Periodo Contable (NUEVO)
+  const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
+  const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
+
   const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Función de validación de periodo en tiempo real (NUEVO)
+  const verificarPeriodo = async (fecha: string) => {
+    if (!selectedCompanyId || !selectedBranchId || !fecha) {
+      setErrorPeriodo(null);
+      return;
+    }
+
+    setValidandoPeriodo(true);
+    setErrorPeriodo(null);
+
+    const res = await validarPeriodoContable(selectedCompanyId, selectedBranchId, fecha);
+    if (!res.valido) {
+      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
+    }
+
+    setValidandoPeriodo(false);
+  };
+
+  // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha cargada
+  useEffect(() => {
+    if (selectedCompanyId && selectedBranchId && fechaContabilizacion) {
+      verificarPeriodo(fechaContabilizacion);
+    }
+  }, [selectedCompanyId, selectedBranchId]);
 
   const fetchBranches = useCallback(async (companyId: string) => {
     try {
@@ -271,27 +301,47 @@ export default function CargarFacturasPage() {
           <input
             type="date"
             value={fechaContabilizacion}
-            onChange={(e) => setFechaContabilizacion(e.target.value)}
+            onChange={(e) => {
+              const nuevaFecha = e.target.value;
+              setFechaContabilizacion(nuevaFecha);
+              if (errorPeriodo) setErrorPeriodo(null);
+            }}
+            onBlur={() => verificarPeriodo(fechaContabilizacion)} // <--- Validación al perder el foco
             className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500"
           />
+          {validandoPeriodo && (
+            <p className="text-[9px] text-blue-500 mt-0.5 animate-pulse">Verificando periodo...</p>
+          )}
+          {errorPeriodo && (
+            <p className="text-[10px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1 rounded mt-0.5">
+              ⚠️ {errorPeriodo}
+            </p>
+          )}
         </div>
       </div>
 
-      {/* Renderizado Condicional del Componente según la Pestaña Activa */}
-      {activeTab === "individual" ? (
-        <XmlUploader
-          selectedCompanyId={selectedCompanyId}
-          selectedBranchId={selectedBranchId}
-          selectedDocumentClassId={selectedDocumentClassId}
-          fechaContabilizacion={fechaContabilizacion}
-        />
+      {/* Alerta global preventiva si el periodo contable no es válido */}
+      {errorPeriodo ? (
+        <div className="p-3 bg-rose-50 border border-rose-300 text-rose-800 rounded text-xs font-semibold flex items-center justify-between">
+          <span>🛑 No es posible realizar la carga de facturas XML porque el periodo contable seleccionado no se encuentra habilitado o está cerrado.</span>
+        </div>
       ) : (
-        <XmlUploaderMasivo
-          selectedCompanyId={selectedCompanyId}
-          selectedBranchId={selectedBranchId}
-          selectedDocumentClassId={selectedDocumentClassId}
-          fechaContabilizacion={fechaContabilizacion}
-        />
+        /* Renderizado Condicional del Componente según la Pestaña Activa */
+        activeTab === "individual" ? (
+          <XmlUploader
+            selectedCompanyId={selectedCompanyId}
+            selectedBranchId={selectedBranchId}
+            selectedDocumentClassId={selectedDocumentClassId}
+            fechaContabilizacion={fechaContabilizacion}
+          />
+        ) : (
+          <XmlUploaderMasivo
+            selectedCompanyId={selectedCompanyId}
+            selectedBranchId={selectedBranchId}
+            selectedDocumentClassId={selectedDocumentClassId}
+            fechaContabilizacion={fechaContabilizacion}
+          />
+        )
       )}
     </div>
   );

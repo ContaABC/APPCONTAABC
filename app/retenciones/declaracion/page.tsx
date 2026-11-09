@@ -9,6 +9,7 @@ import {
   obtenerMovimientosRetencionesPorPeriodo,
   registrarAsientoCierreRetenciones,
 } from "./actions-declaracion";
+import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
 
 export default function DeclaracionRetencionesPage() {
   const [empresas, setEmpresas] = useState<any[]>([]);
@@ -25,7 +26,12 @@ export default function DeclaracionRetencionesPage() {
   const [tipoRetencion, setTipoRetencion] = useState<string>("RENTA"); // RENTA, IVA, ICA
   const [periodoDesde, setPeriodoDesde] = useState<string>("");
   const [periodoHasta, setPeriodoHasta] = useState<string>("");
+  const [fechaContable, setFechaContable] = useState<string>(""); // <--- 2. Estado para la Fecha Contable del Cierre
   const [aproximarAlMil, setAproximarAlMil] = useState<boolean>(true);
+
+  // Estados para Control de Periodo Contable (NUEVO)
+  const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
+  const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
   // Datos y Resultados
   const [movimientos, setMovimientos] = useState<any[]>([]);
@@ -33,6 +39,37 @@ export default function DeclaracionRetencionesPage() {
   const [procesandoCierre, setProcesandoCierre] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Inicializar fecha contable con el día de hoy al montar
+  useEffect(() => {
+    const hoyStr = new Date().toISOString().split("T")[0];
+    setFechaContable(hoyStr);
+  }, []);
+
+  // Función de validación de periodo en tiempo real (NUEVO)
+  const verificarPeriodo = async (fecha: string) => {
+    if (!empresaId || !sucursalId || !fecha) {
+      setErrorPeriodo(null);
+      return;
+    }
+
+    setValidandoPeriodo(true);
+    setErrorPeriodo(null);
+
+    const res = await validarPeriodoContable(empresaId, sucursalId, fecha);
+    if (!res.valido) {
+      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
+    }
+
+    setValidandoPeriodo(false);
+  };
+
+  // Validar automáticamente al cambiar empresa o sucursal si ya hay fecha contable
+  useEffect(() => {
+    if (empresaId && sucursalId && fechaContable) {
+      verificarPeriodo(fechaContable);
+    }
+  }, [empresaId, sucursalId]);
 
   // 1. Cargar Empresas al montar
   useEffect(() => {
@@ -195,6 +232,10 @@ export default function DeclaracionRetencionesPage() {
 
   // 6. Generar Asiento
   async function handleGenerarAsientoCierre() {
+    if (errorPeriodo) {
+      setErrorMsg("No se puede generar el asiento porque el periodo contable no es válido o está cerrado.");
+      return;
+    }
     if (datosAgrupadosPorConcepto.length === 0) {
       setErrorMsg("No hay datos agrupados para generar el asiento de cierre.");
       return;
@@ -220,6 +261,7 @@ export default function DeclaracionRetencionesPage() {
       tipoRetencion,
       periodoDesde,
       periodoHasta,
+      fechaContable, // <--- 3. Pasar la fecha contable elegida al Server Action
       totales: totalesDeclaracion,
       detallesAgrupados: datosAgrupadosPorConcepto,
     });
@@ -267,7 +309,7 @@ export default function DeclaracionRetencionesPage() {
             <option value="">Todas las sucursales</option>
             {sucursales.map((suc) => (
               <option key={suc.id} value={suc.id}>
-                {suc.codigo_sucursal} - {suc.nombre} {suc.ciudad ? `(${suc.ciudad})` : ""}
+                {suc.codigo_sucursal} {suc.nombre} {suc.ciudad ? `(${suc.ciudad})` : ""}
               </option>
             ))}
           </select>
@@ -309,6 +351,7 @@ export default function DeclaracionRetencionesPage() {
 
         <div className="flex flex-col justify-end">
           <button
+            type="button"
             onClick={consultarRetenciones}
             disabled={loading}
             className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded shadow-2xs transition text-xs cursor-pointer"
@@ -318,8 +361,8 @@ export default function DeclaracionRetencionesPage() {
         </div>
       </div>
 
-      {/* Selectores del Comprobante Contable */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-100 text-[11px]">
+      {/* Selectores del Comprobante Contable y Fecha Contable (MODIFICADO) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-100 text-[11px]">
         <div>
           <label className="block text-[9px] font-bold text-indigo-800 uppercase mb-1">Clase de Documento Contable</label>
           <select
@@ -330,7 +373,7 @@ export default function DeclaracionRetencionesPage() {
             <option value="">-- Seleccione Clase de Documento --</option>
             {clasesDocumento.map((doc) => (
               <option key={doc.id} value={doc.id}>
-                {doc.codigo_clase} - {doc.nombre_clase}
+                {doc.codigo_clase} {doc.nombre_clase}
               </option>
             ))}
           </select>
@@ -346,10 +389,34 @@ export default function DeclaracionRetencionesPage() {
             <option value="">-- Seleccione Cuenta Crédito --</option>
             {conceptosAuxiliares.map((aux) => (
               <option key={aux.id} value={aux.id}>
-                {aux.codigo_auxiliar} - {aux.nombre}
+                {aux.codigo_auxiliar} {aux.nombre}
               </option>
             ))}
           </select>
+        </div>
+
+        {/* <--- 4. Campo de Fecha Contable para el asiento de cierre con validación en tiempo real */}
+        <div>
+          <label className="block text-[9px] font-bold text-indigo-800 uppercase mb-1">Fecha Contable de Cierre *</label>
+          <input
+            type="date"
+            value={fechaContable}
+            onChange={(e) => {
+              setFechaContable(e.target.value);
+              if (errorPeriodo) setErrorPeriodo(null);
+            }}
+            onBlur={() => verificarPeriodo(fechaContable)}
+            required
+            className="w-full bg-white border border-indigo-200 rounded px-2 py-1 text-xs text-slate-800 font-medium outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+          {validandoPeriodo && (
+            <p className="text-[9px] text-indigo-600 mt-0.5 animate-pulse">Verificando periodo...</p>
+          )}
+          {errorPeriodo && (
+            <p className="text-[10px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1 rounded mt-0.5">
+              ⚠️ {errorPeriodo}
+            </p>
+          )}
         </div>
       </div>
 
@@ -432,9 +499,11 @@ export default function DeclaracionRetencionesPage() {
           <div className="text-right text-[11px] text-slate-500">
             Se contabilizará el asiento aplicando los débitos, el crédito principal y las cuentas de ajuste dinámicas.
           </div>
+          {/* <--- 5. Bloqueo preventivo en el botón si el periodo contable no es válido */}
           <button
+            type="button"
             onClick={handleGenerarAsientoCierre}
-            disabled={procesandoCierre}
+            disabled={procesandoCierre || Boolean(errorPeriodo)}
             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded shadow transition flex items-center gap-2 cursor-pointer"
           >
             {procesandoCierre ? "Generando Asiento..." : "⚖️ Generar Asiento Contable de Cierre"}

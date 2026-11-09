@@ -10,7 +10,9 @@ import {
   RefreshCw,
   AlertCircle,
   Scale,
-  FileText
+  FileText,
+  ArrowUpRight,
+  ArrowDownRight
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { calcularIndicadoresDinamicos } from "./finance-actions";
@@ -25,13 +27,15 @@ export default function GestionFinancieraPage() {
   const [sucursalId, setSucursalId] = useState<string>("");
   const [anio, setAnio] = useState<string>("2026");
   const [mes, setMes] = useState<string>("10");
+  const [compararAnioAnterior, setCompararAnioAnterior] = useState<boolean>(false);
 
   const [loading, setLoading] = useState(false);
   const [mensajeError, setMensajeError] = useState("");
   
-  const [indicadores, setIndicadores] = useState<{ [key: string]: number }>({});
-  const [balance, setBalance] = useState<{ [key: string]: number }>({});
-  const [resultadosOp, setResultadosOp] = useState<{ [key: string]: number }>({});
+  const [indicadores, setIndicadores] = useState<{ [key: string]: any }>({});
+  const [balance, setBalance] = useState<{ [key: string]: any }>({});
+  const [resultadosOp, setResultadosOp] = useState<{ [key: string]: any }>({});
+  const [modoComparativoActivo, setModoComparativoActivo] = useState(false);
   
   const [historico, setHistorico] = useState<any[]>([]);
   const [historicoBalance, setHistoricoBalance] = useState<any[]>([]);
@@ -82,11 +86,12 @@ export default function GestionFinancieraPage() {
     setLoading(true);
     setMensajeError("");
 
-    const res = await calcularIndicadoresDinamicos(empresaId, sucursalId, anio, mes);
+    const res = await calcularIndicadoresDinamicos(empresaId, sucursalId, anio, mes, compararAnioAnterior);
     if (res.success) {
       setIndicadores(res.indicadores || {});
       setBalance(res.balance || {});
       setResultadosOp(res.resultadosOp || {});
+      setModoComparativoActivo(res.modoComparativo || false);
       setHistorico(res.historico || []);
       setHistoricoBalance(res.historicoBalance || []);
       setHistoricoResultados(res.historicoResultados || []);
@@ -129,9 +134,10 @@ export default function GestionFinancieraPage() {
           </Link>
         </div>
 
-        {/* FILTROS EN UNA FILA */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-3 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-5 gap-2.5 items-end text-xs">
-          <div>
+        {/* FILTROS OPTIMIZADOS: EMPRESA Y SUCURSAL AMPLIOS, AÑO Y MES MÍNIMOS */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-3 rounded-xl shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 items-end text-xs">
+          
+          <div className="lg:col-span-3">
             <label className="block font-semibold text-zinc-400 mb-0.5">Empresa *</label>
             <select
               value={empresaId}
@@ -145,7 +151,7 @@ export default function GestionFinancieraPage() {
             </select>
           </div>
 
-          <div>
+          <div className="lg:col-span-3">
             <label className="block font-semibold text-zinc-400 mb-0.5">Sucursal *</label>
             <select
               value={sucursalId}
@@ -160,39 +166,52 @@ export default function GestionFinancieraPage() {
             </select>
           </div>
 
-          <div>
+          <div className="lg:col-span-1">
             <label className="block font-semibold text-zinc-400 mb-0.5">Año</label>
             <input
               type="text"
               value={anio}
               onChange={(e) => setAnio(e.target.value)}
-              className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-center text-xs font-medium"
+              className="w-full px-1.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-center text-xs font-medium"
             />
           </div>
 
-          <div>
+          <div className="lg:col-span-1">
             <label className="block font-semibold text-zinc-400 mb-0.5">Mes</label>
             <select
               value={mes}
               onChange={(e) => setMes(e.target.value)}
-              className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
+              className="w-full px-1.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs"
             >
               {Array.from({length: 12}, (_, i) => (
-                <option key={i+1} value={String(i+1)} className="dark:bg-zinc-900">Mes {i+1}</option>
+                <option key={i+1} value={String(i+1)} className="dark:bg-zinc-900">{i+1}</option>
               ))}
             </select>
           </div>
 
-          <div>
+          <div className="lg:col-span-2 flex items-center h-[34px] px-1">
+            <label className="flex items-center gap-1.5 cursor-pointer select-none text-zinc-600 dark:text-zinc-300 font-medium text-[11px] leading-tight">
+              <input
+                type="checkbox"
+                checked={compararAnioAnterior}
+                onChange={(e) => setCompararAnioAnterior(e.target.checked)}
+                className="w-3.5 h-3.5 rounded text-blue-600 focus:ring-blue-500 border-zinc-300 dark:border-zinc-700 dark:bg-zinc-800 flex-shrink-0"
+              />
+              <span>Comparar ant. ({Number(anio) - 1})</span>
+            </label>
+          </div>
+
+          <div className="lg:col-span-2">
             <button
               onClick={ejecutarConsulta}
               disabled={loading || !empresaId || !sucursalId}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-1.5 rounded-lg transition shadow-sm disabled:opacity-50 flex items-center justify-center gap-1 text-xs"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-              {loading ? "Calculando..." : "Actualizar Indicadores"}
+              {loading ? "Calculando..." : "Actualizar"}
             </button>
           </div>
+
         </div>
 
         {mensajeError && (
@@ -217,14 +236,25 @@ export default function GestionFinancieraPage() {
                   <PieChart className="w-4 h-4" /> Indicadores Financieros (Mes Seleccionado)
                 </h2>
                 <div className="grid grid-cols-2 gap-2.5">
-                  {Object.entries(indicadores).map(([codigo, valor], idx) => {
+                  {Object.entries(indicadores).map(([codigo, datos], idx) => {
                     const colorLinea = coloresGrafico[idx % coloresGrafico.length];
+                    const val = typeof datos === 'object' ? datos.valor : datos;
+                    const varPorc = typeof datos === 'object' ? datos.varPorc : 0;
+
                     return (
-                      <div key={codigo} className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                      <div key={codigo} className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                         <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wide">{codigo}</p>
-                        <h3 className="text-base font-black mt-0.5 text-right" style={{ color: colorLinea }}>
-                          {fmt(valor)}
-                        </h3>
+                        <div className="flex justify-between items-baseline">
+                          {modoComparativoActivo && (
+                            <span className={`text-[10px] font-bold flex items-center ${varPorc >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              {varPorc >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                              {varPorc > 0 ? `+${varPorc}%` : `${varPorc}%`}
+                            </span>
+                          )}
+                          <h3 className="text-base font-black text-right ml-auto" style={{ color: colorLinea }}>
+                            {fmt(val)}
+                          </h3>
+                        </div>
                       </div>
                     );
                   })}
@@ -262,17 +292,40 @@ export default function GestionFinancieraPage() {
                   <Scale className="w-4 h-4" /> Balance General (Activo, Pasivo, Patrimonio)
                 </h2>
                 <div className="grid grid-cols-3 gap-2.5">
-                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                  {/* ACTIVO */}
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[10px] text-zinc-400 font-bold uppercase">Activo</p>
-                    <h3 className="text-sm font-black text-[#4f46e5] mt-0.5 text-right">{fmt(balance.ACTIVO)}</h3>
+                    {modoComparativoActivo && (
+                      <div className={`text-[10px] font-bold flex items-center justify-end ${balance.ACTIVO?.varPorc >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {balance.ACTIVO?.varPorc >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                        {balance.ACTIVO?.varPorc > 0 ? `+${balance.ACTIVO?.varPorc}%` : `${balance.ACTIVO?.varPorc}%`}
+                      </div>
+                    )}
+                    <h3 className="text-sm font-black text-[#4f46e5] text-right">{fmt(balance.ACTIVO?.valor ?? balance.ACTIVO)}</h3>
                   </div>
-                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+
+                  {/* PASIVO */}
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[10px] text-zinc-400 font-bold uppercase">Pasivo</p>
-                    <h3 className="text-sm font-black text-[#f43f5e] mt-0.5 text-right">{fmt(balance.PASIVO)}</h3>
+                    {modoComparativoActivo && (
+                      <div className={`text-[10px] font-bold flex items-center justify-end ${balance.PASIVO?.varPorc >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {balance.PASIVO?.varPorc >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                        {balance.PASIVO?.varPorc > 0 ? `+${balance.PASIVO?.varPorc}%` : `${balance.PASIVO?.varPorc}%`}
+                      </div>
+                    )}
+                    <h3 className="text-sm font-black text-[#f43f5e] text-right">{fmt(balance.PASIVO?.valor ?? balance.PASIVO)}</h3>
                   </div>
-                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
-                    <p className="text-[10px] text-zinc-400 font-bold uppercase" title="Incluye Utilidad del Periodo">Patrimonio (+Utilidad)</p>
-                    <h3 className="text-sm font-black text-[#10b981] mt-0.5 text-right">{fmt(balance.PATRIMONIO)}</h3>
+
+                  {/* PATRIMONIO */}
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
+                    <p className="text-[10px] text-zinc-400 font-bold uppercase" title="Incluye Utilidad del Periodo">Patrimonio (+Util)</p>
+                    {modoComparativoActivo && (
+                      <div className={`text-[10px] font-bold flex items-center justify-end ${balance.PATRIMONIO?.varPorc >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {balance.PATRIMONIO?.varPorc >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                        {balance.PATRIMONIO?.varPorc > 0 ? `+${balance.PATRIMONIO?.varPorc}%` : `${balance.PATRIMONIO?.varPorc}%`}
+                      </div>
+                    )}
+                    <h3 className="text-sm font-black text-[#10b981] text-right">{fmt(balance.PATRIMONIO?.valor ?? balance.PATRIMONIO)}</h3>
                   </div>
                 </div>
               </div>
@@ -305,21 +358,52 @@ export default function GestionFinancieraPage() {
                 </h2>
                 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+                  {/* INGRESOS */}
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[9px] text-zinc-400 font-bold uppercase">Ingresos</p>
-                    <h3 className="text-sm font-black text-emerald-600 mt-0.5 text-right">{fmt(resultadosOp.INGRESOS)}</h3>
+                    {modoComparativoActivo && (
+                      <div className={`text-[9px] font-bold flex items-center justify-end ${resultadosOp.INGRESOS?.varPorc >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {resultadosOp.INGRESOS?.varPorc >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                        {resultadosOp.INGRESOS?.varPorc > 0 ? `+${resultadosOp.INGRESOS?.varPorc}%` : `${resultadosOp.INGRESOS?.varPorc}%`}
+                      </div>
+                    )}
+                    <h3 className="text-sm font-black text-emerald-600 text-right">{fmt(resultadosOp.INGRESOS?.valor ?? resultadosOp.INGRESOS)}</h3>
                   </div>
-                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+
+                  {/* COSTOS */}
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[9px] text-zinc-400 font-bold uppercase">Costos</p>
-                    <h3 className="text-sm font-black text-amber-600 mt-0.5 text-right">{fmt(resultadosOp.COSTOS)}</h3>
+                    {modoComparativoActivo && (
+                      <div className={`text-[9px] font-bold flex items-center justify-end ${resultadosOp.COSTOS?.varPorc <= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {resultadosOp.COSTOS?.varPorc <= 0 ? <ArrowDownRight className="w-3 h-3" /> : <ArrowUpRight className="w-3 h-3" />}
+                        {resultadosOp.COSTOS?.varPorc > 0 ? `+${resultadosOp.COSTOS?.varPorc}%` : `${resultadosOp.COSTOS?.varPorc}%`}
+                      </div>
+                    )}
+                    <h3 className="text-sm font-black text-amber-600 text-right">{fmt(resultadosOp.COSTOS?.valor ?? resultadosOp.COSTOS)}</h3>
                   </div>
-                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+
+                  {/* GASTOS */}
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[9px] text-zinc-400 font-bold uppercase">Gastos</p>
-                    <h3 className="text-sm font-black text-rose-600 mt-0.5 text-right">{fmt(resultadosOp.GASTOS)}</h3>
+                    {modoComparativoActivo && (
+                      <div className={`text-[9px] font-bold flex items-center justify-end ${resultadosOp.GASTOS?.varPorc <= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {resultadosOp.GASTOS?.varPorc <= 0 ? <ArrowDownRight className="w-3 h-3" /> : <ArrowUpRight className="w-3 h-3" />}
+                        {resultadosOp.GASTOS?.varPorc > 0 ? `+${resultadosOp.GASTOS?.varPorc}%` : `${resultadosOp.GASTOS?.varPorc}%`}
+                      </div>
+                    )}
+                    <h3 className="text-sm font-black text-rose-600 text-right">{fmt(resultadosOp.GASTOS?.valor ?? resultadosOp.GASTOS)}</h3>
                   </div>
-                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm">
+
+                  {/* UTILIDAD */}
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[9px] text-zinc-400 font-bold uppercase">Utilidad</p>
-                    <h3 className="text-sm font-black text-blue-600 mt-0.5 text-right">{fmt(resultadosOp.UTILIDAD)}</h3>
+                    {modoComparativoActivo && (
+                      <div className={`text-[9px] font-bold flex items-center justify-end ${resultadosOp.UTILIDAD?.varPorc >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {resultadosOp.UTILIDAD?.varPorc >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                        {resultadosOp.UTILIDAD?.varPorc > 0 ? `+${resultadosOp.UTILIDAD?.varPorc}%` : `${resultadosOp.UTILIDAD?.varPorc}%`}
+                      </div>
+                    )}
+                    <h3 className="text-sm font-black text-blue-600 text-right">{fmt(resultadosOp.UTILIDAD?.valor ?? resultadosOp.UTILIDAD)}</h3>
                   </div>
                 </div>
 

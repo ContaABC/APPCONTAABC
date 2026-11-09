@@ -10,13 +10,20 @@ function getSupabaseAdmin() {
   });
 }
 
-export async function calcularIndicadoresDinamicos(empresaId: string, sucursalId: string, anio: string, mes: string) {
+export async function calcularIndicadoresDinamicos(
+  empresaId: string, 
+  sucursalId: string, 
+  anio: string, 
+  mes: string,
+  compararAnioAnterior: boolean = false
+) {
   try {
     const supabase = getSupabaseAdmin();
     const numAnio = Number(anio);
     const numMes = Number(mes);
+    const numAnioAnterior = numAnio - 1;
 
-    // 1. Consultar fórmulas parametrizadas incluyendo la categoría del indicador
+    // 1. Consultar fórmulas parametrizadas
     const { data: formulas, error: formulaError } = await supabase
       .from("indicadores_formulas_detalle")
       .select(`
@@ -72,44 +79,51 @@ export async function calcularIndicadoresDinamicos(empresaId: string, sucursalId
 
     const formattedIds = usaSubconceptos ? idsArray : idsArray.map(Number);
 
-    // 3. CONSULTA MAESTRA masiva en memoria
+    // 3. CONSULTAS A SUPABASE (Año actual y opcionalmente año anterior)
+    const aniosAConsultar = [numAnio];
+    if (compararAnioAnterior) {
+      aniosAConsultar.push(numAnioAnterior);
+    }
+
     const { data: todosLosRegistros, error: saldoErr } = await (supabase
       .from(nombreTabla)
       .select("*") as any)
       .in(campoId, formattedIds)
       .eq("empresa_id", Number(empresaId))
       .eq("sucursal_id", Number(sucursalId))
-      .eq("anio", numAnio);
+      .in("anio", aniosAConsultar);
 
     if (saldoErr || !todosLosRegistros) {
       return { success: true, indicadores: {}, balance: {}, resultadosOp: {}, historico: [], historicoBalance: [], historicoResultados: [] };
     }
 
+    // Mapear saldos por clave compuesta: "anio-mes-id"
     const mapaSaldos = new Map<string, number>();
     for (const reg of (todosLosRegistros as any[])) {
+      const a = Number(reg.anio);
       const m = Number(reg.mes);
       const idVal = String(reg[campoId]);
-      mapaSaldos.set(`${m}-${idVal}`, Number(reg.saldo_final || 0));
+      mapaSaldos.set(`${a}-${m}-${idVal}`, Number(reg.saldo_final || 0));
     }
 
-    // A. Función para EVALUAR INDICADORES (Siempre usa valores absolutos en positivo para evitar desajustes en ratios)
-    const calcularSaldosAbsolutos = (idsString: string | null, m: number): number => {
+    // Funciones de evaluación para Indicadores (Absolutos) y Contables (Con signo real)
+    const calcularSaldosAbsolutos = (idsString: string | null, a: number, m: number): number => {
       if (!idsString || idsString.trim() === "") return 0;
       const ids = idsString.split(",").map((id: string) => id.trim()).filter(Boolean);
       let suma = 0;
       for (const id of ids) {
-        suma += Math.abs(mapaSaldos.get(`${m}-${id}`) || 0);
+        suma += Math.abs(mapaSaldos.get(`${a}-${m}-${id}`) || 0);
       }
       return suma;
     };
 
-    const evaluarFormulaIndicador = (formula: any, m: number) => {
-      const sumaNum = calcularSaldosAbsolutos(formula.numerador_ids, m);
-      const restaNum = calcularSaldosAbsolutos(formula.numerador_restando_ids, m);
+    const evaluarFormulaIndicador = (formula: any, a: number, m: number) => {
+      const sumaNum = calcularSaldosAbsolutos(formula.numerador_ids, a, m);
+      const restaNum = calcularSaldosAbsolutos(formula.numerador_restando_ids, a, m);
       const valorNumerador = Math.max(0, sumaNum - restaNum);
 
-      const sumaDen = calcularSaldosAbsolutos(formula.denominador_ids, m);
-      const restaDen = calcularSaldosAbsolutos(formula.denominador_restando_ids, m);
+      const sumaDen = calcularSaldosAbsolutos(formula.denominador_ids, a, m);
+      const restaDen = calcularSaldosAbsolutos(formula.denominador_restando_ids, a, m);
       const valorDenominador = Math.max(0, sumaDen - restaDen);
 
       let resultadoFinal = 0;
@@ -123,24 +137,23 @@ export async function calcularIndicadoresDinamicos(empresaId: string, sucursalId
       return Number(resultadoFinal.toFixed(2));
     };
 
-    // B. Función para BALANCE Y RESULTADOS (Respeta el signo contable real, ej. costos negativos)
-    const calcularSaldosContables = (idsString: string | null, m: number): number => {
+    const calcularSaldosContables = (idsString: string | null, a: number, m: number): number => {
       if (!idsString || idsString.trim() === "") return 0;
       const ids = idsString.split(",").map((id: string) => id.trim()).filter(Boolean);
       let suma = 0;
       for (const id of ids) {
-        suma += mapaSaldos.get(`${m}-${id}`) || 0;
+        suma += mapaSaldos.get(`${a}-${m}-${id}`) || 0;
       }
       return suma;
     };
 
-    const evaluarFormulaContable = (formula: any, m: number, forzarAbs: boolean = false) => {
-      const sumaNum = calcularSaldosContables(formula.numerador_ids, m);
-      const restaNum = calcularSaldosContables(formula.numerador_restando_ids, m);
+    const evaluarFormulaContable = (formula: any, a: number, m: number, forzarAbs: boolean = false) => {
+      const sumaNum = calcularSaldosContables(formula.numerador_ids, a, m);
+      const restaNum = calcularSaldosContables(formula.numerador_restando_ids, a, m);
       const valorNumerador = sumaNum - restaNum;
 
-      const sumaDen = calcularSaldosContables(formula.denominador_ids, m);
-      const restaDen = calcularSaldosContables(formula.denominador_restando_ids, m);
+      const sumaDen = calcularSaldosContables(formula.denominador_ids, a, m);
+      const restaDen = calcularSaldosContables(formula.denominador_restando_ids, a, m);
       const valorDenominador = Math.max(0, sumaDen - restaDen);
 
       let resultadoFinal = 0;
@@ -154,57 +167,11 @@ export async function calcularIndicadoresDinamicos(empresaId: string, sucursalId
       return Number((forzarAbs ? Math.abs(resultadoFinal) : resultadoFinal).toFixed(2));
     };
 
-    const indicadoresActuales: { [key: string]: number } = {};
-    const balanceActualVal: { [key: string]: number } = { ACTIVO: 0, PASIVO: 0, PATRIMONIO: 0 };
-    const resultadosRawVal: { [key: string]: number } = { INGRESOS: 0, COSTOS: 0, GASTOS: 0 };
-
-    for (const formula of formulas) {
-      const codigo = formula.indicadores_financieros?.codigo?.toUpperCase();
-      const categoria = formula.indicadores_financieros?.categoria;
-      if (!codigo) continue;
-
-      if (["ACTIVO", "PASIVO", "PATRIMONIO"].includes(codigo)) {
-        balanceActualVal[codigo] = evaluarFormulaContable(formula, numMes, true);
-      } else if (["INGRESOS", "GASTOS"].includes(codigo)) {
-        resultadosRawVal[codigo] = Math.abs(evaluarFormulaContable(formula, numMes, false));
-      } else if (codigo === "COSTOS") {
-        resultadosRawVal[codigo] = evaluarFormulaContable(formula, numMes, false); // Mantiene el negativo (-326.757)
-      } else {
-        // Para los indicadores financieros comunes (Prueba Ácida, ROE, etc.), usamos la lógica limpia absoluta
-        indicadoresActuales[codigo] = evaluarFormulaIndicador(formula, numMes);
-      }
-    }
-
-    const ingresosVal = resultadosRawVal.INGRESOS || 0; 
-    const costosVal = resultadosRawVal.COSTOS || 0;     // Negativo (-326.757)
-    const gastosVal = resultadosRawVal.GASTOS || 0;     
-    
-    // Utilidad exacta: Ingresos - Costos (negativos) - Gastos = 1.455.993
-    const utilidadVal = Number((ingresosVal - costosVal - gastosVal).toFixed(2));
-    
-    const resultadosActual = { 
-      INGRESOS: ingresosVal, 
-      COSTOS: costosVal, 
-      GASTOS: gastosVal, 
-      UTILIDAD: utilidadVal 
-    };
-
-    // Patrimonio sumándole la utilidad de 1.455.993 -> 16.455.993
-    const patrimonioCuadrado = Number(((balanceActualVal.PATRIMONIO || 0) + utilidadVal).toFixed(2));
-    const balanceActual = {
-      ...balanceActualVal,
-      PATRIMONIO: patrimonioCuadrado
-    };
-
-    // Histórico de los 12 meses (separado también)
-    const historico = [];
-    const historicoBalance = [];
-    const historicoResultados = [];
-
-    for (let m = 1; m <= 12; m++) {
-      const resMes: { [key: string]: number } = {};
-      const balMesVal: { [key: string]: number } = { ACTIVO: 0, PASIVO: 0, PATRIMONIO: 0 };
-      const resOpRaw: { [key: string]: number } = { INGRESOS: 0, COSTOS: 0, GASTOS: 0 };
+    // Función auxiliar para calcular valores de un año específico
+    const procesarPeriodo = (anioEval: number, mesEval: number) => {
+      const inds: { [key: string]: number } = {};
+      const balVal: { [key: string]: number } = { ACTIVO: 0, PASIVO: 0, PATRIMONIO: 0 };
+      const resVal: { [key: string]: number } = { INGRESOS: 0, COSTOS: 0, GASTOS: 0 };
 
       for (const formula of formulas) {
         const codigo = formula.indicadores_financieros?.codigo?.toUpperCase();
@@ -212,39 +179,91 @@ export async function calcularIndicadoresDinamicos(empresaId: string, sucursalId
         if (!codigo) continue;
 
         if (["ACTIVO", "PASIVO", "PATRIMONIO"].includes(codigo)) {
-          balMesVal[codigo] = evaluarFormulaContable(formula, m, true);
+          balVal[codigo] = evaluarFormulaContable(formula, anioEval, mesEval, true);
         } else if (["INGRESOS", "GASTOS"].includes(codigo)) {
-          resOpRaw[codigo] = Math.abs(evaluarFormulaContable(formula, m, false));
+          resVal[codigo] = Math.abs(evaluarFormulaContable(formula, anioEval, mesEval, false));
         } else if (codigo === "COSTOS") {
-          resOpRaw[codigo] = evaluarFormulaContable(formula, m, false);
+          resVal[codigo] = evaluarFormulaContable(formula, anioEval, mesEval, false);
         } else {
-          resMes[codigo] = evaluarFormulaIndicador(formula, m);
+          inds[codigo] = evaluarFormulaIndicador(formula, anioEval, mesEval);
         }
       }
 
-      const ingM = resOpRaw.INGRESOS || 0;
-      const cosM = resOpRaw.COSTOS || 0;
-      const gasM = resOpRaw.GASTOS || 0;
-      const utilM = Number((ingM - cosM - gasM).toFixed(2));
-      const patM = Number(((balMesVal.PATRIMONIO || 0) + utilM).toFixed(2));
+      const ing = resVal.INGRESOS || 0;
+      const cos = resVal.COSTOS || 0;
+      const gas = resVal.GASTOS || 0;
+      const utilidad = Number((ing - cos - gas).toFixed(2));
+      const patrimonioFinal = Number(((balVal.PATRIMONIO || 0) + utilidad).toFixed(2));
 
-      historico.push({ mes: `M ${m}`, ...resMes });
-      historicoBalance.push({ mes: `M ${m}`, ...balMesVal, PATRIMONIO: patM });
-      
-      historicoResultados.push({
-        mes: `M ${m}`,
-        INGRESOS: ingM,
-        COSTOS: cosM,
-        GASTOS: gasM,
-        UTILIDAD: utilM
-      });
+      return {
+        indicadores: inds,
+        balance: { ...balVal, PATRIMONIO: patrimonioFinal },
+        resultados: { INGRESOS: ing, COSTOS: cos, GASTOS: gas, UTILIDAD: utilidad }
+      };
+    };
+
+    // Procesar mes actual (Año seleccionado)
+    const actual = procesarPeriodo(numAnio, numMes);
+    
+    // Procesar mes anterior (Año anterior opcional)
+    let anterior = null;
+    if (compararAnioAnterior) {
+      anterior = procesarPeriodo(numAnioAnterior, numMes);
+    }
+
+    // Calcular variaciones si aplica
+    const calcularVariacion = (valActual: number, valAnt: number | undefined) => {
+      if (valAnt === undefined || valAnt === 0) return { varAbs: 0, varPorc: 0 };
+      const varAbs = Number((valActual - valAnt).toFixed(2));
+      const varPorc = Number(((varAbs / Math.abs(valAnt)) * 100).toFixed(2));
+      return { varAbs, varPorc };
+    };
+
+    const indicadoresConVariacion: { [key: string]: any } = {};
+    for (const [key, val] of Object.entries(actual.indicadores)) {
+      const antVal = anterior?.indicadores[key];
+      indicadoresConVariacion[key] = {
+        valor: val,
+        ...calcularVariacion(val, antVal)
+      };
+    }
+
+    const balanceConVariacion: { [key: string]: any } = {};
+    for (const [key, val] of Object.entries(actual.balance)) {
+      const antVal = (anterior?.balance as any)?.[key];
+      balanceConVariacion[key] = {
+        valor: val,
+        ...calcularVariacion(val, antVal)
+      };
+    }
+
+    const resultadosConVariacion: { [key: string]: any } = {};
+    for (const [key, val] of Object.entries(actual.resultados)) {
+      const antVal = (anterior?.resultados as any)?.[key];
+      resultadosConVariacion[key] = {
+        valor: val,
+        ...calcularVariacion(val, antVal)
+      };
+    }
+
+    // Histórico de los 12 meses (Año actual)
+    const historico = [];
+    const historicoBalance = [];
+    const historicoResultados = [];
+
+    for (let m = 1; m <= 12; m++) {
+      const p = procesarPeriodo(numAnio, m);
+      historico.push({ mes: `M ${m}`, ...p.indicadores });
+      historicoBalance.push({ mes: `M ${m}`, ...p.balance });
+      historicoResultados.push({ mes: `M ${m}`, ...p.resultados });
     }
 
     return { 
       success: true, 
-      indicadores: indicadoresActuales, 
-      balance: balanceActual, 
-      resultadosOp: resultadosActual, 
+      modoComparativo: compararAnioAnterior,
+      indicadores: indicadoresConVariacion, 
+      balance: balanceConVariacion, 
+      resultadosOp: resultadosConVariacion, 
       historico, 
       historicoBalance, 
       historicoResultados 

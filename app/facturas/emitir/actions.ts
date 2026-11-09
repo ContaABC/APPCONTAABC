@@ -60,7 +60,6 @@ export interface RegistrarFacturaManualPayload {
   descuentos?: number;
   iva: number;
   otros_impuestos?: number;
-  retenciones?: number;
   total_factura: number;
   prefijo?: string;
   tipo_documento?: string;
@@ -100,7 +99,6 @@ function calcularCufe(
   const valIva = Number(iva || 0).toFixed(2);
   const valTotal = Number(total || 0).toFixed(2);
 
-  // Cadena de texto estándar para cálculo del CUFE
   const cadenaCufe = `${numFactura}${fechaEmision}00:00:00-05:00${valSubtotal}01${valIva}040.00030.00${valTotal}${nitEmisor}${nitReceptor}${claveTecnica}1`;
 
   return crypto.createHash("sha384").update(cadenaCufe).digest("hex");
@@ -138,55 +136,39 @@ function numeroALetras(monto: number): string {
 
   function convertGroup(n: number): string {
     let output = "";
-
     if (n === 100) return "CIEN";
-
     if (n >= 100) {
       output += centenas[Math.floor(n / 100)] + " ";
       n %= 100;
     }
-
     if (n >= 20) {
       const d = Math.floor(n / 10);
       const u = n % 10;
       if (d === 2 && u > 0) {
-        output += "VEINTI" + unidades[u].toLowerCase().toUpperCase() + " ";
+        output += "VEINTI" + unidades[u] + " ";
       } else {
         output += decenas[d] + (u > 0 ? " Y " + unidades[u] : "") + " ";
       }
     } else if (n > 0) {
       output += unidades[n] + " ";
     }
-
     return output.trim();
   }
 
   const entero = Math.floor(monto);
-
   if (entero === 0) return "SON: CERO PESOS M/CTE.";
 
   let resultado = "";
-
   const millones = Math.floor(entero / 1000000);
   const miles = Math.floor((entero % 1000000) / 1000);
   const resto = entero % 1000;
 
   if (millones > 0) {
-    if (millones === 1) {
-      resultado += "UN MILLON ";
-    } else {
-      resultado += convertGroup(millones) + " MILLONES ";
-    }
+    resultado += millones === 1 ? "UN MILLON " : convertGroup(millones) + " MILLONES ";
   }
-
   if (miles > 0) {
-    if (miles === 1) {
-      resultado += "UN MIL ";
-    } else {
-      resultado += convertGroup(miles) + " MIL ";
-    }
+    resultado += miles === 1 ? "UN MIL " : convertGroup(miles) + " MIL ";
   }
-
   if (resto > 0) {
     resultado += convertGroup(resto) + " ";
   }
@@ -208,10 +190,7 @@ async function subirArchivoStorage(
 
     const { error: uploadError } = await supabase.storage
       .from(bucketName)
-      .upload(rutaFinal, contenido, {
-        contentType,
-        upsert: true,
-      });
+      .upload(rutaFinal, contenido, { contentType, upsert: true });
 
     if (uploadError) {
       console.error(`Error al subir ${rutaFinal} a Storage:`, uploadError.message);
@@ -226,6 +205,9 @@ async function subirArchivoStorage(
   }
 }
 
+/**
+ * Genera el PDF con la discriminación del Valor del IVA por cada ítem y los rangos de la Resolución DIAN.
+ */
 async function generarPdfBuffer(
   numeroFactura: string,
   empresaInfo: {
@@ -246,12 +228,19 @@ async function generarPdfBuffer(
   subtotal: number,
   iva: number,
   total: number,
+  resolucionInfo?: {
+    numero_resolucion?: string;
+    prefijo?: string;
+    consecutivo_inicial?: string;
+    consecutivo_final?: string;
+    fecha_expedicion?: string;
+    fecha_vigencia_hasta?: string;
+  },
   cufe?: string,
   qrCodeUrl?: string
 ): Promise<Buffer> {
   const doc = new jsPDF();
 
-  // 1. Datos de la Empresa Emisora
   const nitCompleto = empresaInfo.nit_identificacion
     ? `${empresaInfo.nit_identificacion}${empresaInfo.dv ? `-${empresaInfo.dv}` : ""}`
     : "N/A";
@@ -278,14 +267,12 @@ async function generarPdfBuffer(
 
   if (contacto) doc.text(contacto, 14, 28);
 
-  // 2. Título Factura de Venta
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
   doc.text(`FACTURA DE VENTA N°: ${numeroFactura}`, 196, 20, { align: "right" });
 
   doc.line(14, 32, 196, 32);
 
-  // 3. Datos del Cliente y Fechas
   doc.setFontSize(8.5);
   doc.setFont("helvetica", "bold");
   doc.text("DATOS DEL CLIENTE:", 14, 38);
@@ -301,16 +288,17 @@ async function generarPdfBuffer(
   doc.text(`Fecha Emisión: ${fechaEmision}`, 130, 43);
   doc.text(`Fecha Vencimiento: ${fechaVencimiento}`, 130, 48);
 
-  // 4. Tabla de Detalle
   let y = 57;
   doc.setFillColor(242, 242, 242);
   doc.rect(14, y - 5, 182, 7, "F");
 
   doc.setFont("helvetica", "bold");
   doc.text("Código", 16, y);
-  doc.text("Descripción", 42, y);
-  doc.text("Cant.", 110, y, { align: "center" });
-  doc.text("V. Unitario", 155, y, { align: "right" });
+  doc.text("Descripción", 36, y);
+  doc.text("Cant.", 95, y, { align: "center" });
+  doc.text("V. Unitario", 125, y, { align: "right" });
+  doc.text("IVA %", 145, y, { align: "center" });
+  doc.text("V. IVA", 168, y, { align: "right" });
   doc.text("Total", 192, y, { align: "right" });
 
   doc.line(14, y + 2, 196, y + 2);
@@ -320,11 +308,18 @@ async function generarPdfBuffer(
 
   items.forEach((item) => {
     doc.text(String(item.codigo_ref || "-"), 16, y);
-    doc.text(String(item.nombre_item).substring(0, 35), 42, y);
-    doc.text(String(item.cantidad), 110, y, { align: "center" });
+    doc.text(String(item.nombre_item).substring(0, 26), 36, y);
+    doc.text(String(item.cantidad), 95, y, { align: "center" });
     doc.text(
       `$${Number(item.valor_unitario).toLocaleString("es-CO", { minimumFractionDigits: 2 })}`,
-      155,
+      125,
+      y,
+      { align: "right" }
+    );
+    doc.text(`${item.porcentaje_iva ?? 19}%`, 145, y, { align: "center" });
+    doc.text(
+      `$${Number(item.valor_iva || 0).toLocaleString("es-CO", { minimumFractionDigits: 2 })}`,
+      168,
       y,
       { align: "right" }
     );
@@ -339,49 +334,45 @@ async function generarPdfBuffer(
 
   doc.line(14, y, 196, y);
 
-  // 5. Cuadro de Totales Alineados a la Derecha
   y += 7;
   doc.setFont("helvetica", "bold");
   doc.text("Subtotal:", 155, y, { align: "right" });
   doc.setFont("helvetica", "normal");
-  doc.text(
-    `$${subtotal.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`,
-    192,
-    y,
-    { align: "right" }
-  );
+  doc.text(`$${subtotal.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`, 192, y, { align: "right" });
 
   y += 5.5;
   doc.setFont("helvetica", "bold");
-  doc.text("IVA:", 155, y, { align: "right" });
+  doc.text("IVA Total:", 155, y, { align: "right" });
   doc.setFont("helvetica", "normal");
-  doc.text(
-    `$${iva.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`,
-    192,
-    y,
-    { align: "right" }
-  );
+  doc.text(`$${iva.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`, 192, y, { align: "right" });
 
   y += 6.5;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9.5);
   doc.text("Total Factura:", 155, y, { align: "right" });
-  doc.text(
-    `$${total.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`,
-    192,
-    y,
-    { align: "right" }
-  );
+  doc.text(`$${total.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`, 192, y, { align: "right" });
 
-  // 6. Monto en Letras
   y += 10;
   doc.setFontSize(8.5);
   doc.setFont("helvetica", "bold");
   doc.text(numeroALetras(total), 14, y);
 
-  // 7. Pie de Página: CUFE e Imagen Gráfica del Código QR de la DIAN
+  if (resolucionInfo) {
+    y += 8;
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "bold");
+    doc.text("INFORMACIÓN DE AUTORIZACIÓN DIAN:", 14, y);
+    y += 4;
+    doc.setFont("helvetica", "normal");
+    doc.text(`Resolución N°: ${resolucionInfo.numero_resolucion || "N/A"} de Fecha: ${resolucionInfo.fecha_expedicion || "N/A"}`, 14, y);
+    y += 3.5;
+    doc.text(`Prefijo: ${resolucionInfo.prefijo || "N/A"} | Rango Autorizado: Desde ${resolucionInfo.consecutivo_inicial} Hasta ${resolucionInfo.consecutivo_final}`, 14, y);
+    y += 3.5;
+    doc.text(`Vigencia hasta: ${resolucionInfo.fecha_vigencia_hasta || "N/A"}`, 14, y);
+  }
+
   if (cufe || qrCodeUrl) {
-    y += 10;
+    y += 6;
     doc.line(14, y, 196, y);
     y += 5;
 
@@ -389,7 +380,6 @@ async function generarPdfBuffer(
       doc.setFontSize(7);
       doc.setFont("helvetica", "bold");
       doc.text("CUFE:", 14, y);
-
       doc.setFont("helvetica", "normal");
       const cufeSplitted = doc.splitTextToSize(cufe, 140);
       doc.text(cufeSplitted, 14, y + 4);
@@ -579,7 +569,6 @@ export async function procesarFacturaEmitidaXmlAdmin(
     const facturaId = resultRpc[0].factura_id;
     const numFacturaGenerado = resultRpc[0].numero_factura;
 
-    // Calcular CUFE y URL del QR si no vienen precalculados desde el XML
     const cufeFinal =
       datosXml.cufe ||
       calcularCufe(
@@ -624,6 +613,7 @@ export async function procesarFacturaEmitidaXmlAdmin(
       datosXml.subtotal,
       datosXml.iva,
       datosXml.total,
+      undefined,
       cufeFinal,
       qrCodeUrl
     );
@@ -658,9 +648,7 @@ export async function procesarFacturaEmitidaXmlAdmin(
     };
   } catch (err: unknown) {
     const errorMsg =
-      err instanceof Error
-        ? err.message
-        : "Error inesperado al procesar la factura emitida.";
+      err instanceof Error ? err.message : "Error inesperado al procesar la factura emitida.";
     return { success: false, error: errorMsg };
   }
 }
@@ -669,6 +657,35 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
   const supabase = getSupabaseAdmin();
 
   try {
+    const { data: resResolucion, error: errResolucion } = await supabase.rpc(
+      "obtener_siguiente_consecutivo_factura",
+      {
+        p_empresa_id: payload.empresa_id,
+        p_sucursal_id: payload.sucursal_id,
+      }
+    );
+
+    if (errResolucion || !resResolucion || !resResolucion.success) {
+      return {
+        success: false,
+        error: resResolucion?.error || errResolucion?.message || "No se pudo obtener el consecutivo de la resolución DIAN activa.",
+      };
+    }
+
+    const prefijoFactura = resResolucion.prefijo || "";
+    const numeroConsecutivoFactura = resResolucion.numero_factura;
+    const numeroFacturaOficial = prefijoFactura ? `${prefijoFactura}${numeroConsecutivoFactura}` : String(numeroConsecutivoFactura);
+
+    const { data: resolucionDb } = await supabase
+      .from("resoluciones_facturacion")
+      .select("*")
+      .eq("id", resResolucion.resolucion_id)
+      .maybeSingle();
+
+    const longitudCeros = resolucionDb ? String(resolucionDb.consecutivo_final).length : 6;
+    const inicialConCeros = resolucionDb ? String(resolucionDb.consecutivo_inicial).padStart(longitudCeros, '0') : "000001";
+    const finalConCeros = resolucionDb ? String(resolucionDb.consecutivo_final).padStart(longitudCeros, '0') : "100000";
+
     const { data: empresaInfo } = await supabase
       .from("empresas")
       .select("razon_social, nit_identificacion, dv, direccion, ciudad, pais, telefono, email")
@@ -707,7 +724,6 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
       total: item.total,
     }));
 
-    // 1. Invocar RPC para insertar cabecera y detalles en la BD
     const { data: resultRpc, error: errorRpc } = await supabase.rpc(
       "fn_registrar_factura_emitida_completa",
       {
@@ -718,8 +734,8 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
         p_cliente_nit: payload.cliente_nit,
         p_cliente_nombre: payload.cliente_nombre,
         p_cliente_email: payload.cliente_email || null,
-        p_numero_factura: "MANUAL",
-        p_prefijo: payload.prefijo || null,
+        p_numero_factura: numeroFacturaOficial,
+        p_prefijo: prefijoFactura || null,
         p_tipo_documento: payload.tipo_documento || "FACTURA",
         p_fecha_emision: payload.fecha_emision,
         p_fecha_vencimiento: payload.fecha_vencimiento,
@@ -730,7 +746,7 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
         p_descuentos: payload.descuentos || 0,
         p_iva: payload.iva,
         p_otros_impuestos: payload.otros_impuestos || 0,
-        p_retenciones: payload.retenciones || 0,
+        p_retenciones: 0,
         p_total_factura: payload.total_factura,
         p_cufe: null,
         p_xml_firmado_url: null,
@@ -743,13 +759,13 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
     );
 
     if (errorRpc || !resultRpc || resultRpc.length === 0) {
-      return { success: false, error: errorRpc?.message || "Error al invocar la RPC." };
+      return { success: false, error: errorRpc?.message || "Error al invocar la RPC de registro." };
     }
 
     const facturaId = resultRpc[0].factura_id;
-    const numFacturaGenerado = resultRpc[0].numero_factura;
+    const numFacturaGenerado = resultRpc[0].numero_factura || numeroFacturaOficial;
+    const numDocumentoContable = resultRpc[0].numero_documento_contable || resultRpc[0].numero_documento || "N/A";
 
-    // 2. Calcular CUFE y la URL del Código QR DIAN
     const cufeGenerado = calcularCufe(
       numFacturaGenerado,
       payload.fecha_emision,
@@ -770,7 +786,6 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
       cufeGenerado
     );
 
-    // 3. Estructurar el contenido XML
     const lineasXml = itemsFormatted
       .map(
         (item, idx) => `
@@ -806,7 +821,6 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
   ${lineasXml}
 </Invoice>`;
 
-    // 4. Subir archivos XML y PDF a Supabase Storage
     const xmlUrl = await subirArchivoStorage(
       contenidoXmlManual,
       payload.empresa_id,
@@ -826,6 +840,14 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
       payload.subtotal,
       payload.iva,
       payload.total_factura,
+      resolucionDb ? {
+        numero_resolucion: resolucionDb.numero_resolucion,
+        prefijo: resolucionDb.prefijo,
+        consecutivo_inicial: inicialConCeros,
+        consecutivo_final: finalConCeros,
+        fecha_expedicion: resolucionDb.fecha_expedicion,
+        fecha_vigencia_hasta: resolucionDb.fecha_vigencia_hasta
+      } : undefined,
       cufeGenerado,
       qrCodeUrl
     );
@@ -838,7 +860,6 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
       "application/pdf"
     );
 
-    // 5. Guardar CUFE, QR y URLs en la base de datos
     await supabase
       .from("facturas_emitidas")
       .update({
@@ -853,7 +874,7 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
       success: true,
       facturaId,
       numeroFactura: numFacturaGenerado,
-      numeroDocumentoContable: numFacturaGenerado,
+      numeroDocumentoContable: numDocumentoContable,
       cufe: cufeGenerado,
       qrCodeUrl,
       xmlUrl,
@@ -861,9 +882,7 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
     };
   } catch (err: unknown) {
     const errorMsg =
-      err instanceof Error
-        ? err.message
-        : "Error inesperado al registrar la factura emitida.";
+      err instanceof Error ? err.message : "Error inesperado al registrar la factura emitida.";
     return { success: false, error: errorMsg };
   }
 }

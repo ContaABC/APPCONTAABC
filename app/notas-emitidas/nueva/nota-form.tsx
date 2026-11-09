@@ -10,6 +10,7 @@ import {
   registrarNotaEmitida,
   ItemNotaInput,
 } from "./actions";
+import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar validación centralizada
 
 interface ItemFacturaOriginal {
   item_id?: number | string | null;
@@ -56,7 +57,12 @@ export default function NotaEmitidaForm({
 
   const [tipoNota, setTipoNota] = useState<"CREDITO" | "DEBITO">("CREDITO");
   const [fechaEmision, setFechaEmision] = useState("");
+  const [fechaContable, setFechaContable] = useState(""); // <--- 2. Añadido estado para Fecha Contable
   const [conceptoDian, setConceptoDian] = useState("1");
+
+  // Estados para Control de Periodo Contable (NUEVO)
+  const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
+  const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<{ tipo: "error" | "exito"; texto: string } | null>(null);
@@ -65,8 +71,35 @@ export default function NotaEmitidaForm({
 
   useEffect(() => {
     setIsMounted(true);
-    setFechaEmision(new Date().toISOString().split("T")[0]);
+    const hoyStr = new Date().toISOString().split("T")[0];
+    setFechaEmision(hoyStr);
+    setFechaContable(hoyStr); // <--- Inicializar fecha contable con el día de hoy
   }, []);
+
+  // Función de validación de periodo en tiempo real (NUEVO)
+  const verificarPeriodo = async (fecha: string) => {
+    if (!empresaId || !sucursalId || !fecha) {
+      setErrorPeriodo(null);
+      return;
+    }
+
+    setValidandoPeriodo(true);
+    setErrorPeriodo(null);
+
+    const res = await validarPeriodoContable(empresaId, sucursalId, fecha);
+    if (!res.valido) {
+      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
+    }
+
+    setValidandoPeriodo(false);
+  };
+
+  // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha contable cargada
+  useEffect(() => {
+    if (empresaId && sucursalId && fechaContable) {
+      verificarPeriodo(fechaContable);
+    }
+  }, [empresaId, sucursalId]);
 
   const sucursalesFiltradas = useMemo(() => {
     if (!empresaId) return [];
@@ -266,7 +299,6 @@ export default function NotaEmitidaForm({
     setItems(nuevosItems);
   };
 
-  // 🔹 Cálculos totales de la nota y de la factura original
   const totalesCalculados = useMemo(() => {
     let subtotalNota = 0;
     let ivaNota = 0;
@@ -304,6 +336,15 @@ export default function NotaEmitidaForm({
     e.preventDefault();
     if (!facturaSeleccionada) return;
 
+    // Doble control de seguridad ante periodos cerrados o inválidos
+    if (errorPeriodo) {
+      setMsg({
+        tipo: "error",
+        texto: "No se puede registrar la nota porque el periodo contable no es válido o está cerrado.",
+      });
+      return;
+    }
+
     setLoading(true);
     setMsg(null);
     setNotaCreadaExito(null);
@@ -337,6 +378,7 @@ export default function NotaEmitidaForm({
       tipo_nota: tipoNota,
       concepto_dian: conceptoDian,
       fecha_emision: fechaEmision,
+      // fecha_contable: fechaContable, // <--- Incluir en el payload de tu Server Action si lo requiere
       items: itemsPayload,
     });
 
@@ -346,7 +388,7 @@ export default function NotaEmitidaForm({
       setMsg({ tipo: "error", texto: res.error });
     } else {
       setNotaCreadaExito({
-        numeroNota: res.numeroNota?? '',
+        numeroNota: res.numeroNota ?? '',
         facturaOriginal: numeroFacturaOriginal,
         tipo: tipoNota,
       });
@@ -485,8 +527,8 @@ export default function NotaEmitidaForm({
         </div>
       </div>
 
-      {/* Concepto DIAN, Cliente y Factura Afectada */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+      {/* Concepto DIAN, Cliente, Factura y Fecha Contable */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
         <div>
           <label className="block text-xs font-bold text-slate-600 mb-1">Concepto DIAN *</label>
           <select
@@ -560,6 +602,30 @@ export default function NotaEmitidaForm({
               </option>
             ))}
           </select>
+        </div>
+
+        {/* <--- 3. Input de Fecha Contable con validación en tiempo real (onBlur) */}
+        <div>
+          <label className="block text-xs font-bold text-slate-600 mb-1">Fecha Contable *</label>
+          <input
+            type="date"
+            value={fechaContable}
+            onChange={(e) => {
+              setFechaContable(e.target.value);
+              if (errorPeriodo) setErrorPeriodo(null);
+            }}
+            onBlur={() => verificarPeriodo(fechaContable)}
+            required
+            className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+          />
+          {validandoPeriodo && (
+            <p className="text-[10px] text-blue-500 mt-1 animate-pulse">Verificando estado del periodo...</p>
+          )}
+          {errorPeriodo && (
+            <p className="text-[11px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1.5 rounded mt-1">
+              ⚠️ {errorPeriodo}
+            </p>
+          )}
         </div>
       </div>
 
@@ -659,9 +725,7 @@ export default function NotaEmitidaForm({
             </div>
           )}
 
-          {/* 🔹 SECCIÓN DE TOTALES DE LA FACTURA ORIGINAL Y DE LA NOTA */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-            {/* Totales Factura Original */}
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
               <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider">
                 Totales Factura Original (N° {facturaSeleccionada.numero_factura})
@@ -680,7 +744,6 @@ export default function NotaEmitidaForm({
               </div>
             </div>
 
-            {/* Totales de la Nota */}
             <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-200 space-y-2">
               <h4 className="text-xs font-bold text-blue-800 uppercase tracking-wider">
                 Totales de la Nota {tipoNota}
@@ -703,9 +766,10 @@ export default function NotaEmitidaForm({
       )}
 
       <div className="pt-4 flex justify-end">
+        {/* <--- 4. Bloqueo preventivo en el botón si el periodo no es válido */}
         <button
           type="submit"
-          disabled={loading || !facturaSeleccionada || items.length === 0 || (msg?.tipo === "error" && msg.texto.includes("cuenta con"))}
+          disabled={loading || !facturaSeleccionada || items.length === 0 || Boolean(errorPeriodo) || (msg?.tipo === "error" && msg.texto.includes("cuenta con"))}
           className="w-full md:w-auto px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading ? "Procesando Nota..." : `Generar Nota ${tipoNota}`}

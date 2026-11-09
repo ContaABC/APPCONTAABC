@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabaseClient'
+import { validarPeriodoContable } from "@/lib/accounting-validations" // <--- Importación del validador de periodo
 
 export default function NuevaTransaccion() {
   const [empresas, setEmpresas] = useState([])
@@ -16,13 +17,19 @@ export default function NuevaTransaccion() {
   const [claseDocId, setClaseDocId] = useState('')
   const [numeroDocumento, setNumeroDocumento] = useState('')
   const [glosa, setGlosa] = useState('')
+  const [fechaContable, setFechaContable] = useState('') // <--- Estado de fecha contable
   const [cargandoConsecutivo, setCargandoConsecutivo] = useState(false)
+
+  // Estados para Control de Periodo Contable
+  const [errorPeriodo, setErrorPeriodo] = useState(null)
+  const [validandoPeriodo, setValidandoPeriodo] = useState(false)
 
   const [lineas, setLineas] = useState([
     { id: 1, concepto_auxiliar_id: '', tercero_id: '', debito: 0, credito: 0 }
   ])
 
   useEffect(() => {
+    setFechaContable(new Date().toISOString().split('T')[0])
     async function cargarCatalogos() {
       const { data: dataEmpresas } = await supabase.from('empresas').select('*')
       const { data: dataClases } = await supabase.from('clases_documento').select('*')
@@ -32,6 +39,31 @@ export default function NuevaTransaccion() {
     cargarCatalogos()
   }, [])
 
+  // Función de validación de periodo en tiempo real
+  const verificarPeriodo = async (fecha) => {
+    if (!empresaId || !sucursalId || !fecha) {
+      setErrorPeriodo(null)
+      return
+    }
+
+    setValidandoPeriodo(true)
+    setErrorPeriodo(null)
+
+    const res = await validarPeriodoContable(empresaId, sucursalId, fecha)
+    if (!res.valido) {
+      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.")
+    }
+
+    setValidandoPeriodo(false)
+  }
+
+  // Validar automáticamente al cambiar empresa, sucursal o fecha contable
+  useEffect(() => {
+    if (empresaId && sucursalId && fechaContable) {
+      verificarPeriodo(fechaContable)
+    }
+  }, [empresaId, sucursalId])
+
   useEffect(() => {
     if (!empresaId) return
     async function cargarPorEmpresa() {
@@ -39,7 +71,10 @@ export default function NuevaTransaccion() {
       const { data: dataTerc } = await supabase.from('terceros').select('*').eq('empresa_id', empresaId)
       const { data: dataAux } = await supabase.from('conceptos_auxiliares').select('*').eq('empresa_id', empresaId)
 
-      if (dataSuc) setSucursales(dataSuc)
+      if (dataSuc) {
+        setSucursales(dataSuc)
+        if (dataSuc.length > 0 && !sucursalId) setSucursalId(dataSuc[0].id)
+      }
       if (dataTerc) setTerceros(dataTerc)
       if (dataAux) setConceptosAux(dataAux)
     }
@@ -93,6 +128,11 @@ export default function NuevaTransaccion() {
   const guardarTransaccion = async (e) => {
     e.preventDefault()
 
+    if (errorPeriodo) {
+      alert('Error: No se puede guardar la transacción porque el periodo contable no es válido o está cerrado.')
+      return
+    }
+
     if (!estaBalanceado) {
       alert('Error: La partida doble no cuadra. Los débitos deben ser iguales a los créditos.')
       return
@@ -108,6 +148,7 @@ export default function NuevaTransaccion() {
           clase_documento_id: claseDocId,
           tercero_id: terceroId,
           numero_documento: numeroDocumento,
+          fecha_contable: fechaContable, // <--- Incluyendo la fecha contable validada
           glosa_concepto: glosa,
           estado: 'Registrado'
         }])
@@ -187,7 +228,24 @@ export default function NuevaTransaccion() {
               />
             </label>
 
-            <label>Glosa / Concepto:
+            {/* Campo de Fecha Contable con validación integrada */}
+            <label>Fecha Contable *:
+              <input 
+                type="date" 
+                value={fechaContable} 
+                onChange={e => {
+                  setFechaContable(e.target.value)
+                  if (errorPeriodo) setErrorPeriodo(null)
+                }} 
+                onBlur={() => verificarPeriodo(fechaContable)}
+                required 
+                style={{ width: '100%' }} 
+              />
+              {validandoPeriodo && <small style={{ color: 'blue' }}>Verificando periodo...</small>}
+              {errorPeriodo && <div style={{ color: 'red', fontSize: '10px', fontWeight: 'bold', marginTop: '2px' }}>⚠️ {errorPeriodo}</div>}
+            </label>
+
+            <label style={{ gridColumn: 'span 3' }}>Glosa / Concepto:
               <input type="text" value={glosa} onChange={e => setGlosa(e.target.value)} placeholder="Descripción del asiento" required style={{ width: '100%' }} />
             </label>
           </div>
@@ -270,14 +328,14 @@ export default function NuevaTransaccion() {
 
           <button 
             type="submit" 
-            disabled={!estaBalanceado || cargandoConsecutivo} 
+            disabled={!estaBalanceado || cargandoConsecutivo || Boolean(errorPeriodo)} 
             style={{ 
               padding: '0.6rem 1.5rem', 
-              background: estaBalanceado ? '#16a34a' : '#ccc', 
+              background: (!estaBalanceado || Boolean(errorPeriodo)) ? '#ccc' : '#16a34a', 
               color: '#fff', 
               border: 'none', 
               borderRadius: '4px',
-              cursor: estaBalanceado ? 'pointer' : 'not-allowed'
+              cursor: (!estaBalanceado || Boolean(errorPeriodo)) ? 'not-allowed' : 'pointer'
             }}
           >
             Guardar Transacción

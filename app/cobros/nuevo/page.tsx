@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
+import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
 import {
   obtenerEmpresas,
   obtenerSucursales,
@@ -55,6 +56,10 @@ export default function NuevoCobroPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [guardando, setGuardando] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Estados para Control de Periodo Contable (NUEVO)
+  const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
+  const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
   // Formulario del Recibo de Caja
   const [fechaPago, setFechaPago] = useState<string>(
@@ -110,6 +115,31 @@ export default function NuevoCobroPage() {
     setIsMounted(true);
   }, []);
 
+  // Función de validación de periodo en tiempo real (NUEVO)
+  const verificarPeriodo = async (fecha: string) => {
+    if (!empresaId || !sucursalId || !fecha) {
+      setErrorPeriodo(null);
+      return;
+    }
+
+    setValidandoPeriodo(true);
+    setErrorPeriodo(null);
+
+    const res = await validarPeriodoContable(empresaId, sucursalId, fecha);
+    if (!res.valido) {
+      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
+    }
+
+    setValidandoPeriodo(false);
+  };
+
+  // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha contable cargada
+  useEffect(() => {
+    if (empresaId && sucursalId && fechaContable) {
+      verificarPeriodo(fechaContable);
+    }
+  }, [empresaId, sucursalId]);
+
   useEffect(() => {
     if (!isMounted) return;
     async function initEmpresas() {
@@ -128,7 +158,6 @@ export default function NuevoCobroPage() {
     initEmpresas();
   }, [isMounted]);
 
-  // useEffect unificado para cargar sucursales, clases de documento y conceptos de retención
   useEffect(() => {
     if (empresaId === "" || !isMounted) return;
 
@@ -248,7 +277,6 @@ export default function NuevoCobroPage() {
     return facturasPendientes.filter((f) => f.cliente_nit === clienteSeleccionadoNit);
   }, [facturasPendientes, clienteSeleccionadoNit]);
 
-  // Carga inicial de facturas desmarcadas al cambiar de cliente
   useEffect(() => {
     if (!clienteSeleccionadoNit || facturasClienteActual.length === 0) return;
 
@@ -331,7 +359,6 @@ export default function NuevoCobroPage() {
     };
   };
 
-  // Recalcular automáticamente las retenciones si cambian los conceptos globales (Renta, IVA o ICA)
   useEffect(() => {
     if (!clienteSeleccionadoNit || Object.keys(cobrosIndividuales).length === 0) return;
 
@@ -450,7 +477,6 @@ export default function NuevoCobroPage() {
     });
   };
 
-  // Verificamos si todas están seleccionadas
   const todasSeleccionadas = useMemo(() => {
     if (facturasClienteActual.length === 0) return false;
     return facturasClienteActual.every((f) => cobrosIndividuales[f.id]?.seleccionado);
@@ -701,6 +727,12 @@ export default function NuevoCobroPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrorMsg(null);
+
+    // Doble control de seguridad para impedir envíos si el periodo tiene errores
+    if (errorPeriodo) {
+      setErrorMsg("No se puede procesar el documento porque el periodo contable no es válido.");
+      return;
+    }
 
     if (empresaId === "") {
       setErrorMsg("Debe seleccionar una empresa.");
@@ -1001,7 +1033,7 @@ export default function NuevoCobroPage() {
             </button>
             <button
               type="submit"
-              disabled={guardando || valorSeleccionado <= 0}
+              disabled={guardando || valorSeleccionado <= 0 || Boolean(errorPeriodo)}
               className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded shadow text-xs transition flex items-center gap-1"
             >
               {guardando ? "Procesando..." : modo === "MASIVO" ? "💾 Procesar Cobro Masivo" : "💾 Guardar Recibo de Caja"}
@@ -1085,10 +1117,23 @@ export default function NuevoCobroPage() {
               <input
                 type="date"
                 value={fechaContable}
-                onChange={(e) => setFechaContable(e.target.value)}
+                onChange={(e) => {
+                  const nuevaFecha = e.target.value;
+                  setFechaContable(nuevaFecha);
+                  if (errorPeriodo) setErrorPeriodo(null);
+                }}
+                onBlur={() => verificarPeriodo(fechaContable)} // <--- Validación al perder el foco
                 className="w-full border border-slate-300 rounded px-2 py-1 text-slate-800 outline-none focus:ring-1 focus:ring-blue-500"
                 required
               />
+              {validandoPeriodo && (
+                <p className="text-[10px] text-blue-500 mt-1 animate-pulse">Verificando estado del periodo...</p>
+              )}
+              {errorPeriodo && (
+                <p className="text-[11px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1.5 rounded mt-1">
+                  ⚠️ {errorPeriodo}
+                </p>
+              )}
             </div>
 
             <div>
@@ -1570,7 +1615,6 @@ export default function NuevoCobroPage() {
                             />
                           </td>
 
-                          {/* Abono Bruto reubicado antes del Neto Pagado */}
                           <td className="p-1.5 text-right">
                             <input
                               type="text"

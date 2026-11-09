@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import NotaEmitidaForm from "./nota-form";
+import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- Importar validación centralizada
 
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -20,6 +21,19 @@ export default async function NuevaNotaEmitidaPage({
   const resolvedSearchParams = await searchParams;
   const supabase = getSupabaseAdmin();
 
+  const empresaIdInicial = resolvedSearchParams.empresaId || "";
+  const sucursalIdInicial = resolvedSearchParams.sucursalId || "";
+  const fechaHoy = new Date().toISOString().split("T")[0];
+
+  // Validación inicial de servidor por si los parámetros ya vienen definidos en la URL
+  let errorPeriodoInicial: string | null = null;
+  if (empresaIdInicial && sucursalIdInicial) {
+    const resPeriodo = await validarPeriodoContable(empresaIdInicial, sucursalIdInicial, fechaHoy);
+    if (!resPeriodo.valido) {
+      errorPeriodoInicial = resPeriodo.mensaje || "El periodo contable actual no está habilitado.";
+    }
+  }
+
   // Consultas idénticas al módulo de emisión de facturas
   const [
     { data: empresas },
@@ -38,12 +52,18 @@ export default async function NuevaNotaEmitidaPage({
         <p className="text-sm text-slate-500">Generación de notas crédito y débito asociadas a facturas electrónicas emitidas.</p>
       </div>
       
+      {errorPeriodoInicial && (
+        <div className="p-3 bg-rose-50 border border-rose-300 text-rose-800 rounded-lg text-xs font-semibold">
+          ⚠️ <strong>Advertencia de Periodo Contable:</strong> {errorPeriodoInicial}
+        </div>
+      )}
+      
       <NotaEmitidaForm
         empresas={empresas || []}
         sucursales={sucursales || []}
         clasesDocumento={clasesDocumento || []}
-        empresaIdInicial={resolvedSearchParams.empresaId || ""}
-        sucursalIdInicial={resolvedSearchParams.sucursalId || ""}
+        empresaIdInicial={empresaIdInicial}
+        sucursalIdInicial={sucursalIdInicial}
       />
     </div>
   );
