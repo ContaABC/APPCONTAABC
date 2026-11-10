@@ -1,11 +1,51 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { createClient } from '@supabase/supabase-js';
+import { UserCheck, LogOut, ShieldCheck } from 'lucide-react';
 
 export default function ModulosMayoresPage() {
   const router = useRouter();
+  const [usuarioActual, setUsuarioActual] = useState<any>(null);
 
-  // Definición de los Módulos Mayores basados en tu estructura de directorios
+  useEffect(() => {
+    async function cargarDatosUsuario() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) return;
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (user) {
+        const { data: perfil } = await supabase
+          .from("usuarios_perfiles")
+          .select("*")
+          .eq("id", user.id)
+          .single();
+
+        if (perfil) {
+          setUsuarioActual(perfil);
+        } else {
+          setUsuarioActual({ nombres: user.email, tipo_usuario: "Usuario" });
+        }
+      }
+    }
+    cargarDatosUsuario();
+  }, []);
+
+  const handleLogout = async () => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (supabaseUrl && supabaseAnonKey) {
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      await supabase.auth.signOut();
+      router.push("/login");
+      router.refresh();
+    }
+  };
+
   const modulosMayores = [
     {
       id: 'contabilidad',
@@ -21,7 +61,7 @@ export default function ModulosMayoresPage() {
       titulo: 'Gestión Financiera',
       descripcion: 'Módulo especializado e independiente de análisis y control financiero.',
       icono: '💼',
-      activo: true, // Ya lo separaste e independizaste
+      activo: true,
       ruta: '/modulos/gestion-financiera',
       color: 'border-indigo-500 bg-indigo-50/30 text-indigo-900 hover:bg-indigo-50'
     },
@@ -82,17 +122,41 @@ export default function ModulosMayoresPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
-      {/* Encabezado Principal compacto */}
-      <div className="mb-6 border-b border-gray-200 pb-4">
-        <h1 className="text-2xl font-black text-gray-800 tracking-tight">
-          ContaABC: Sistema ERP Financiero y Contable
-        </h1>
-        <p className="text-xs text-gray-500 mt-1">
-          Seleccione un Módulo para ingresar a sus respectivas operaciones y submódulos.
-        </p>
+      
+      {/* Encabezado General con Identidad, Sesión y Botón Salir */}
+      <div className="mb-8 border-b border-gray-200 pb-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-gray-800 tracking-tight">Sistema ERP Financiero y Contable</h1>
+            <span className="text-[10px] font-bold bg-blue-100 text-blue-600 px-2.5 py-0.5 rounded-full border border-blue-200">ContaABC</span>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Seleccione un Módulo Mayor para ingresar a sus respectivas operaciones y submódulos.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {usuarioActual && (
+            <div className="flex items-center gap-2.5 bg-white px-4 py-2 rounded-2xl border border-zinc-200 shadow-sm">
+              <UserCheck className="w-4 h-4 text-blue-600" />
+              <div className="text-xs">
+                <p className="font-bold text-zinc-800">{usuarioActual.nombres} {usuarioActual.apellidos}</p>
+                <span className="text-[10px] text-blue-600 font-semibold uppercase">{usuarioActual.tipo_usuario}</span>
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={handleLogout}
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 rounded-2xl border border-red-200 transition shadow-sm"
+            title="Cerrar sesión"
+          >
+            <LogOut className="w-4 h-4" /> Salir
+          </button>
+        </div>
       </div>
 
-      {/* Cuadrícula de Módulos Mayores con marcos compactos y organizados */}
+      {/* Cuadrícula de Módulos Mayores */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {modulosMayores.map((mod) => (
           <div
