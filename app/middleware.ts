@@ -1,4 +1,3 @@
-// middleware.ts
 import { type NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
@@ -20,41 +19,46 @@ export async function middleware(request: NextRequest) {
           supabaseResponse = NextResponse.next({
             request,
           })
-          // Forzamos a que las cookies de sesión NO sean persistentes (sin maxAge ni expires)
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, {
-              ...options,
-              maxAge: undefined, 
-              expires: undefined,
-            })
+            supabaseResponse.cookies.set(name, value, options)
           )
         },
       },
     }
   )
 
+  // Consultar sesión en el servidor
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
   const url = request.nextUrl.clone()
-  const isLoginPage = url.pathname.startsWith('/login')
+  const path = url.pathname
 
-  if (!user && !isLoginPage) {
-    url.pathname = '/login'
-    return NextResponse.redirect(url)
+  // RUTAS PÚBLICAS (solo login)
+  if (path.startsWith('/login')) {
+    if (user) {
+      // Si ya está logueado y va a login, mandarlo al inicio
+      url.pathname = '/'
+      return NextResponse.redirect(url)
+    }
+    return supabaseResponse
   }
 
-  if (user && isLoginPage) {
-    url.pathname = '/'
+  // SI NO HAY USUARIO Y PRETENDE ENTRAR A LA RAIZ (/) O CUALQUIER MODULO -> BLOQUEAR Y MANDAR A LOGIN
+  if (!user) {
+    url.pathname = '/login'
     return NextResponse.redirect(url)
   }
 
   return supabaseResponse
 }
 
+// Configuración estricta del Matcher
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/',
+    '/modulos/:path*',
+    '/usuarios/:path*',
   ],
 }
