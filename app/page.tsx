@@ -1,5 +1,8 @@
 'use client';
 
+// FUERZA A VERCEL A NO CACHEAR ESTA PÁGINA Y VALIDAR SIEMPRE
+export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';

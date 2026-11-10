@@ -3,7 +3,7 @@ import { BarChart3, ArrowLeft, ArrowRight, PlusCircle } from "lucide-react";
 
 export default function ContabilidadPage() {
   const opciones = [
-    { name: "Reportes Contables", href: "/documentos" },
+    { name: "Documentos Contables", href: "/documentos" },
     { name: "Balance General", href: "/balance_general" },
     { name: "Estado de Resultados", href: "/estado-resultados" },
     { name: "Declaración de Retenciones", href: "/retenciones/declaracion" },
