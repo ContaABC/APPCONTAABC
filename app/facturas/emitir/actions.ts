@@ -563,7 +563,7 @@ export async function procesarFacturaEmitidaXmlAdmin(
     );
 
     if (errorRpc || !resultRpc || resultRpc.length === 0) {
-      return { success: false, error: errorRpc?.message || "Error al invocar la RPC." };
+      return { success: false, error: errorRpc?.message || JSON.stringify(errorRpc) || "Error al invocar la RPC." };
     }
 
     const facturaId = resultRpc[0].factura_id;
@@ -712,17 +712,24 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
 
     const clienteIdNum = payload.cliente_id !== "" ? Number(payload.cliente_id) : null;
 
-    const itemsFormatted: ItemXml[] = (payload.items || []).map((item) => ({
-      item_id: item.item_id !== "" && item.item_id !== null && item.item_id !== undefined ? String(item.item_id) : null,
-      codigo_ref: item.codigo,
-      nombre_item: item.nombre,
-      cantidad: item.cantidad,
-      valor_unitario: item.valorUnitario,
-      subtotal: item.subtotal,
-      porcentaje_iva: item.porcentajeIva,
-      valor_iva: item.iva,
-      total: item.total,
-    }));
+    // Validación y filtrado estricto de ítems válidos para evitar enviar líneas vacías o en ceros
+    const itemsFormatted: ItemXml[] = (payload.items || [])
+      .filter((item) => Number(item.cantidad) > 0 && Number(item.total) >= 0)
+      .map((item) => ({
+        item_id: item.item_id !== "" && item.item_id !== null && item.item_id !== undefined ? String(item.item_id) : null,
+        codigo_ref: item.codigo,
+        nombre_item: item.nombre,
+        cantidad: Number(item.cantidad),
+        valor_unitario: Number(item.valorUnitario),
+        subtotal: Number(item.subtotal),
+        porcentaje_iva: Number(item.porcentajeIva),
+        valor_iva: Number(item.iva),
+        total: Number(item.total),
+      }));
+
+    if (itemsFormatted.length === 0) {
+      return { success: false, error: "La factura debe contener al menos un ítem válido con cantidad mayor a cero." };
+    }
 
     const { data: resultRpc, error: errorRpc } = await supabase.rpc(
       "fn_registrar_factura_emitida_completa",
@@ -759,7 +766,7 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
     );
 
     if (errorRpc || !resultRpc || resultRpc.length === 0) {
-      return { success: false, error: errorRpc?.message || "Error al invocar la RPC de registro." };
+      return { success: false, error: errorRpc?.message || JSON.stringify(errorRpc) || "Error al invocar la RPC de registro." };
     }
 
     const facturaId = resultRpc[0].factura_id;
