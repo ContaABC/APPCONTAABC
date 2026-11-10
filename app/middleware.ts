@@ -1,3 +1,4 @@
+// middleware.ts
 import { type NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
@@ -19,15 +20,19 @@ export async function middleware(request: NextRequest) {
           supabaseResponse = NextResponse.next({
             request,
           })
+          // Forzamos a que las cookies de sesión NO sean persistentes (sin maxAge ni expires)
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            supabaseResponse.cookies.set(name, value, {
+              ...options,
+              maxAge: undefined, 
+              expires: undefined,
+            })
           )
         },
       },
     }
   )
 
-  // Obtener el usuario actual de forma segura
   const {
     data: { user },
   } = await supabase.auth.getUser()
@@ -35,13 +40,11 @@ export async function middleware(request: NextRequest) {
   const url = request.nextUrl.clone()
   const isLoginPage = url.pathname.startsWith('/login')
 
-  // Si el usuario NO ha iniciado sesión y NO está en la página de login, redirigir a /login
   if (!user && !isLoginPage) {
     url.pathname = '/login'
     return NextResponse.redirect(url)
   }
 
-  // Si el usuario SÍ ha iniciado sesión y está intentando entrar a /login, mandarlo al menú principal (/)
   if (user && isLoginPage) {
     url.pathname = '/'
     return NextResponse.redirect(url)
@@ -52,9 +55,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Excluir archivos estáticos, imágenes y favicon para optimizar rendimiento
-     */
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
