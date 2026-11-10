@@ -26,8 +26,8 @@ const PERMISOS_MODULOS: Record<string, string[]> = {
   "/usuarios": ["Administrador"],
   "/usuarios/asignaciones": ["Administrador"],
   "/modulos/contabilidad/proveedores": ["Administrador", "Contador", "Operador"],
-  "/modulos/clientes": ["Administrador", "Contador", "Operador"],
-  "/modulos/tesoreria": ["Administrador", "Contador"],
+  "/modulos/contabilidad/clientes": ["Administrador", "Contador", "Operador"],
+  "/modulos/contabilidad/tesoreria": ["Administrador", "Contador"],
   "/modulos/contabilidad/consultas": ["Administrador", "Contador", "Auditor"],
   "/modulos/contabilidad/contables": ["Administrador", "Contador"],
 };
@@ -90,7 +90,7 @@ export default function ContabilidadHome() {
     {
       nombre: "Clientes",
       descripcion: "Facturación comercial, recibos de caja, ítems y notas crédito.",
-      ruta: "/modulos/clientes",
+      ruta: "/modulos/contabilidad/clientes",
       icono: Users,
       badge: "CXC",
       color: "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border-emerald-100 dark:border-emerald-900/50",
@@ -98,7 +98,7 @@ export default function ContabilidadHome() {
     {
       nombre: "Tesorería",
       descripcion: "Control de flujo de caja, egresos, bancos y consignaciones.",
-      ruta: "/modulos/tesoreria",
+      ruta: "/modulos/contabilidad/tesoreria",
       icono: DollarSign,
       badge: "Fondos",
       color: "text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/50 border-purple-100 dark:border-purple-900/50",
