@@ -27,7 +27,7 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // Consultar sesión en el servidor
+  // Validar el usuario en Supabase
   const {
     data: { user },
   } = await supabase.auth.getUser()
@@ -35,30 +35,31 @@ export async function middleware(request: NextRequest) {
   const url = request.nextUrl.clone()
   const path = url.pathname
 
-  // RUTAS PÚBLICAS (solo login)
-  if (path.startsWith('/login')) {
-    if (user) {
-      // Si ya está logueado y va a login, mandarlo al inicio
-      url.pathname = '/'
-      return NextResponse.redirect(url)
-    }
-    return supabaseResponse
+  // Si intenta ir a login pero ya está autenticado -> mandar a la raíz
+  if (path.startsWith('/login') && user) {
+    url.pathname = '/'
+    const res = NextResponse.redirect(url)
+    // Cabeceras anti-caché absolutas
+    res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    return res
   }
 
-  // SI NO HAY USUARIO Y PRETENDE ENTRAR A LA RAIZ (/) O CUALQUIER MODULO -> BLOQUEAR Y MANDAR A LOGIN
-  if (!user) {
+  // Si NO está logueado y pretende entrar a cualquier parte que no sea /login -> EXPULSAR
+  if (!path.startsWith('/login') && !user) {
     url.pathname = '/login'
-    return NextResponse.redirect(url)
+    const res = NextResponse.redirect(url)
+    // Cabeceras anti-caché absolutas
+    res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    return res
   }
 
+  // Si está autenticado, agregamos cabeceras para que Vercel NUNCA guarde caché de esta página
+  supabaseResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   return supabaseResponse
 }
 
-// Configuración estricta del Matcher
 export const config = {
   matcher: [
-    '/',
-    '/modulos/:path*',
-    '/usuarios/:path*',
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
