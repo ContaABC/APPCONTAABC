@@ -1,8 +1,8 @@
 'use client';
 
-// FUERZA A VERCEL A NO CACHEAR ESTA PÁGINA Y VALIDAR SIEMPRE
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
+
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
@@ -11,41 +11,65 @@ import { UserCheck, LogOut, ShieldCheck } from 'lucide-react';
 export default function ModulosMayoresPage() {
   const router = useRouter();
   const [usuarioActual, setUsuarioActual] = useState<any>(null);
+  const [verificando, setVerificando] = useState(true);
 
   useEffect(() => {
-    async function cargarDatosUsuario() {
+    async function verificarSesionEstricta() {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      if (!supabaseUrl || !supabaseAnonKey) return;
+      
+      if (!supabaseUrl || !supabaseAnonKey) {
+        router.push('/login');
+        return;
+      }
 
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
-      const { data: { user } } = await supabase.auth.getUser();
       
-      if (user) {
-        const { data: perfil } = await supabase
-          .from("usuarios_perfiles")
-          .select("*")
-          .eq("id", user.id)
-          .single();
+      // Consultar sesión activa de forma real
+      const { data: { session }, error } = await supabase.auth.getSession();
 
-        if (perfil) {
-          setUsuarioActual(perfil);
-        } else {
-          setUsuarioActual({ nombres: user.email, tipo_usuario: "Usuario" });
-        }
+      if (error || !session || !session.user) {
+        // SI NO HAY SESIÓN, EXPULSAR AL LOGIN INMEDIATAMENTE
+        router.replace('/login');
+        return;
       }
+
+      // Si hay sesión, cargamos el perfil
+      const { data: perfil } = await supabase
+        .from("usuarios_perfiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .single();
+
+      if (perfil) {
+        setUsuarioActual(perfil);
+      } else {
+        setUsuarioActual({ nombres: session.user.email, tipo_usuario: "Usuario" });
+      }
+      
+      setVerificando(false);
     }
-    cargarDatosUsuario();
-  }, []);
+
+    verificarSesionEstricta();
+  }, [router]);
 
   const handleLogout = async () => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    
     if (supabaseUrl && supabaseAnonKey) {
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
-      await supabase.auth.signOut();
-      router.push("/login");
-      router.refresh();
+      await supabase.auth.signOut({ scope: 'global' });
+
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.clear();
+        window.localStorage.clear();
+        document.cookie.split(";").forEach((c) => {
+          document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+        });
+      }
+
+      window.location.href = "/login";
     }
   };
 
@@ -123,10 +147,17 @@ export default function ModulosMayoresPage() {
     }
   };
 
+  // Mientras verifica la sesión, muestra una pantalla neutra para evitar fugas visuales
+  if (verificando) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-500 text-sm">
+        Verificando credenciales de acceso...
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
-      
-      {/* Encabezado General con Identidad, Sesión y Botón Salir */}
       <div className="mb-8 border-b border-gray-200 pb-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -159,7 +190,6 @@ export default function ModulosMayoresPage() {
         </div>
       </div>
 
-      {/* Cuadrícula de Módulos Mayores */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {modulosMayores.map((mod) => (
           <div
