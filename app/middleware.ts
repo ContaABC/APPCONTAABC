@@ -27,7 +27,7 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // Validar el usuario en Supabase
+  // Consultar usuario en Supabase de forma estricta
   const {
     data: { user },
   } = await supabase.auth.getUser()
@@ -35,29 +35,22 @@ export async function middleware(request: NextRequest) {
   const url = request.nextUrl.clone()
   const path = url.pathname
 
-  // Si intenta ir a login pero ya está autenticado -> mandar a la raíz
+  // 1. Si estás intentando ir al login y YA tienes sesión, te mandamos al inicio (/)
   if (path.startsWith('/login') && user) {
     url.pathname = '/'
-    const res = NextResponse.redirect(url)
-    // Cabeceras anti-caché absolutas
-    res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-    return res
+    return NextResponse.redirect(url)
   }
 
-  // Si NO está logueado y pretende entrar a cualquier parte que no sea /login -> EXPULSAR
+  // 2. Si NO estás logueado y la ruta NO es /login, ¡BLOQUEO TOTAL! Redirigir a /login
   if (!path.startsWith('/login') && !user) {
     url.pathname = '/login'
-    const res = NextResponse.redirect(url)
-    // Cabeceras anti-caché absolutas
-    res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-    return res
+    return NextResponse.redirect(url)
   }
 
-  // Si está autenticado, agregamos cabeceras para que Vercel NUNCA guarde caché de esta página
-  supabaseResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
   return supabaseResponse
 }
 
+// Matcher absoluto que intercepta toda la aplicación sin excepciones de rutas
 export const config = {
   matcher: [
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
