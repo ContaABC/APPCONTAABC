@@ -14,9 +14,12 @@ export interface FacturaItem {
   id?: number | string;
   factura_id?: string;
   descripcion?: string;
+  nombre_item?: string; // Añadido para compatibilidad con el template PDF
   cantidad?: number;
   precio_unitario?: number;
+  valor_unitario?: number; // Añadido por si el template lo usa
   subtotal?: number;
+  total?: number; // Añadido por si el template lo usa
   [key: string]: any;
 }
 
@@ -29,6 +32,7 @@ export interface FacturaCabecera {
   cliente_nombre: string;
   subtotal: number;
   total_factura: number;
+  iva?: number; // Añadido como opcional para que no falle si el template lo exige
   cufe?: string;
   qr_code?: string;
   xml_firmado_url?: string;
@@ -109,10 +113,24 @@ export async function generarDocumentosFacturaAction(
     const xmlBuffer = Buffer.from(xmlContenido, "utf-8");
 
     // 5. Renderizar el PDF a Buffer
+    // Mapear y normalizar los ítems para que cumplan exactamente con el tipo que exige el template PDF
+    const itemsParaPDF = itemsData.map((item) => ({
+      ...item,
+      nombre_item: item.nombre_item || item.descripcion || "Ítem o servicio",
+      cantidad: Number(item.cantidad || 1),
+      valor_unitario: Number(item.valor_unitario || item.precio_unitario || 0),
+      total: Number(item.total || item.subtotal || (Number(item.cantidad || 1) * Number(item.valor_unitario || item.precio_unitario || 0))),
+    }));
+
+    // 5. Renderizar el PDF a Buffer
     const pdfBuffer = await renderToBuffer(
       React.createElement(FacturaPDFTemplate, {
-        factura: { ...facturaData, cufe: cufePruebas },
-        items: itemsData,
+        factura: { 
+          ...facturaData, 
+          iva: facturaData.iva || 0, 
+          cufe: cufePruebas 
+        },
+        items: itemsParaPDF,
         qrBase64,
       })
     );
