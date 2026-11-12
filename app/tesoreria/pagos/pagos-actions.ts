@@ -2,6 +2,99 @@
 
 import { createClient } from "@supabase/supabase-js";
 
+// ==========================================
+// INTERFACES Y TIPOS
+// ==========================================
+export interface ClaseDocumento {
+  id: number;
+  nombre_clase: string;
+}
+
+export interface CuentaFinanciera {
+  id: number;
+  nombre_cuenta: string;
+  numero_cuenta: string;
+  concepto_auxiliar_id?: number | null;
+}
+
+export interface ConceptoRetencion {
+  id: number;
+  tipo_retencion: string;
+  nombre: string;
+  porcentaje: number | string;
+  base_minima: number;
+}
+
+export interface ConceptoAuxiliar {
+  id: number;
+  codigo_auxiliar: string;
+  nombre: string;
+  tipo_entidad?: string;
+}
+
+export interface ProveedorSaldo {
+  id: number;
+  razon_social: string;
+  numero_identificacion: string;
+}
+
+export interface NotaFactura {
+  id: number;
+  tipo_nota: string;
+  numero_nota: string;
+  monto_total: number;
+  motivo?: string;
+}
+
+export interface FacturaPendiente {
+  id: number;
+  numero_factura: string;
+  tercero_id: number;
+  tercero_nit: string;
+  tercero_nombre: string;
+  sucursal_id: number;
+  subtotal: number;
+  impuestos: number;
+  total_factura: number;
+  saldo_pendiente: number;
+  fecha_vencimiento: string;
+  tercero: {
+    id: number;
+    razon_social: string;
+    numero_identificacion: string;
+  };
+  notas: NotaFactura[];
+}
+
+export interface PagoItemPayload {
+  factura_id: number;
+  tercero_id: number;
+  monto_pago: number;
+  descuento_pronto_pago?: number;
+  retenciones?: {
+    retencion_id: number;
+    base: number;
+    porcentaje: number;
+    valor: number;
+  }[];
+  notas_aplicadas?: {
+    nota_id: number;
+    monto_aplicado: number;
+  }[];
+}
+
+export interface EjecutarPagoPayload {
+  empresa_id: number;
+  sucursal_id: number;
+  clase_documento_id: number;
+  fecha_contable: string;
+  glosa_concepto: string;
+  cuenta_financiera_id: number | null;
+  forma_pago: string;
+  concepto_auxiliar_id: number | null;
+  pagos_json: PagoItemPayload[];
+}
+
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -32,7 +125,7 @@ export async function obtenerDatosAuxiliaresPago(empresaId: number | string) {
       supabase.from("conceptos_auxiliares").select("id, codigo_auxiliar, nombre, tipo_entidad").eq("empresa_id", parsedEmpresaId).order("codigo_auxiliar")
     ]);
 
-    const retencionesMapeadas = (retencionesRes.data || []).map((r: any) => ({
+    const retencionesMapeadas: ConceptoRetencion[] = (retencionesRes.data || []).map((r: any) => ({
       id: r.id,
       tipo_retencion: r.tipo_retencion,
       nombre: r.concepto,
@@ -40,20 +133,27 @@ export async function obtenerDatosAuxiliaresPago(empresaId: number | string) {
       base_minima: Number(r.base_minima || 0),
     }));
 
-    const conceptosUnicos = Array.from(
+    const conceptosUnicos: ConceptoAuxiliar[] = Array.from(
       new Map((conceptosAuxRes.data || []).map((item: any) => [item.id, item])).values()
     );
 
     return {
       success: true,
-      clasesDocumento: clasesRes.data || [],
-      cuentasFinancieras: cuentasRes.data || [],
+      clasesDocumento: (clasesRes.data || []) as ClaseDocumento[],
+      cuentasFinancieras: (cuentasRes.data || []) as CuentaFinanciera[],
       conceptosRetencion: retencionesMapeadas,
       conceptosAuxiliares: conceptosUnicos,
       error: null,
     };
   } catch (err: any) {
-    return { success: false, error: err.message };
+    return { 
+      success: false, 
+      clasesDocumento: [], 
+      cuentasFinancieras: [], 
+      conceptosRetencion: [], 
+      conceptosAuxiliares: [], 
+      error: err.message 
+    };
   }
 }
 
@@ -87,7 +187,7 @@ export async function obtenerConceptosAuxiliaresPorFormaPago(
 
     if (error) throw error;
 
-    const conceptosUnicos = Array.from(
+    const conceptosUnicos: ConceptoAuxiliar[] = Array.from(
       new Map((data || []).map((item: any) => [item.id, item])).values()
     );
 
@@ -117,7 +217,7 @@ export async function obtenerProveedoresConSaldo(empresaId: number | string, suc
 
     if (error) throw error;
 
-    const map = new Map();
+    const map = new Map<number, ProveedorSaldo>();
     (data || []).forEach((item: any) => {
       if (item.tercero_id) {
         map.set(item.tercero_id, {
@@ -128,7 +228,7 @@ export async function obtenerProveedoresConSaldo(empresaId: number | string, suc
       }
     });
 
-    const proveedoresUnicos = Array.from(map.values()).sort((a: any, b: any) =>
+    const proveedoresUnicos = Array.from(map.values()).sort((a, b) =>
       String(a.razon_social || "").localeCompare(String(b.razon_social || ""))
     );
 
@@ -144,7 +244,7 @@ export async function obtenerFacturasPendientes(empresaId: number | string, sucu
     const supabase = getSupabaseAdmin();
     
     if (!terceroId) {
-      return { success: true, data: [], error: null };
+      return { success: true, data: [] as FacturaPendiente[], error: null };
     }
 
     const parsedEmpresaId = Number(empresaId);
@@ -183,10 +283,10 @@ export async function obtenerFacturasPendientes(empresaId: number | string, sucu
     const { data, error } = await query.order("fecha_vencimiento", { ascending: true });
 
     if (error) {
-      return { success: false, data: [], error: error.message };
+      return { success: false, data: [] as FacturaPendiente[], error: error.message };
     }
 
-    const facturasMapeadas = (data || []).map((f: any) => ({
+    const facturasMapeadas: FacturaPendiente[] = (data || []).map((f: any) => ({
       ...f,
       tercero: {
         id: f.tercero_id,
@@ -198,22 +298,12 @@ export async function obtenerFacturasPendientes(empresaId: number | string, sucu
 
     return { success: true, data: facturasMapeadas, error: null };
   } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+    return { success: false, data: [] as FacturaPendiente[], error: err.message };
   }
 }
 
 // 4. Ejecutar el RPC de pago unificado en Supabase
-export async function ejecutarPagoFacturas(payload: {
-  empresa_id: number;
-  sucursal_id: number;
-  clase_documento_id: number;
-  fecha_contable: string;
-  glosa_concepto: string;
-  cuenta_financiera_id: number | null;
-  forma_pago: string;
-  concepto_auxiliar_id: number | null;
-  pagos_json: any[];
-}) {
+export async function ejecutarPagoFacturas(payload: EjecutarPagoPayload) {
   try {
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase.rpc("procesar_pago_facturas_proveedor", {

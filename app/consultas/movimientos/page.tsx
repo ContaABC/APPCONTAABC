@@ -35,6 +35,7 @@ export default function ConsultaMovimientosPage() {
   }, []);
 
   useEffect(() => {
+    if (!isMounted) return;
     async function init() {
       const res = await obtenerEmpresas();
       if (res.success && res.data.length > 0) {
@@ -43,22 +44,22 @@ export default function ConsultaMovimientosPage() {
       }
     }
     init();
-  }, []);
+  }, [isMounted]);
 
   useEffect(() => {
-    if (!empresaId) return;
+    if (!empresaId || !isMounted) return;
     async function cargarSuc() {
       setSucursalId("");
       const res = await obtenerSucursales(Number(empresaId));
       if (res.success) {
-        setSucursales(res.data);
+        setSucursales(res.data || []);
       }
     }
     cargarSuc();
-  }, [empresaId]);
+  }, [empresaId, isMounted]);
 
   useEffect(() => {
-    if (!empresaId) return;
+    if (!empresaId || !isMounted) return;
     async function cargarMovimientos() {
       setLoading(true);
       const res = await consultarMovimientosTransacciones(
@@ -69,14 +70,15 @@ export default function ConsultaMovimientosPage() {
       );
 
       if (res.success) {
-        setMovimientos(res.data);
+        setMovimientos(res.data || []);
       } else {
         alert("Error al cargar los movimientos: " + res.error);
+        setMovimientos([]);
       }
       setLoading(false);
     }
     cargarMovimientos();
-  }, [empresaId, sucursalId, anio, mes]);
+  }, [empresaId, sucursalId, anio, mes, isMounted]);
 
   // Abrir Modal y Cargar Comprobante
   const handleVerComprobante = async (transaccionId: number) => {
@@ -84,7 +86,7 @@ export default function ConsultaMovimientosPage() {
     setModalOpen(true);
     const res = await obtenerComprobanteTransaccion(transaccionId);
     if (res.success) {
-      setComprobanteLineas(res.data);
+      setComprobanteLineas(res.data || []);
     } else {
       alert("Error al consultar el comprobante: " + res.error);
       setModalOpen(false);
@@ -128,7 +130,7 @@ export default function ConsultaMovimientosPage() {
         m.concepto_auxiliar_codigo,
         m.concepto_auxiliar_nombre,
         m.glosa_concepto,
-        m.numero_titulo_valor, // Incluye el cheque en el filtro general si aplica
+        m.numero_titulo_valor,
       ]
         .map((v) => String(v || "").toLowerCase())
         .join(" ");
@@ -234,6 +236,10 @@ export default function ConsultaMovimientosPage() {
 
   const primerRegistro = comprobanteLineas[0] || {};
 
+  if (!isMounted) {
+    return <div className="p-4 text-center text-xs text-slate-400">Cargando módulo de movimientos...</div>;
+  }
+
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-4 text-xs font-sans">
       <div className="border-b pb-2 flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
@@ -249,8 +255,7 @@ export default function ConsultaMovimientosPage() {
         <button
           type="button"
           onClick={handleExportarExcel}
-          disabled={!isMounted || loading || movimientosFiltrados.length === 0}
-          suppressHydrationWarning
+          disabled={loading || movimientosFiltrados.length === 0}
           className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded shadow-sm transition flex items-center gap-1 text-xs"
         >
           📊 Exportar a Excel (.xlsx)

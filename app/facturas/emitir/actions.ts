@@ -1,5 +1,6 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 import { jsPDF } from "jspdf";
 import crypto from "crypto";
@@ -46,9 +47,9 @@ export interface FacturaXmlData {
 }
 
 export interface RegistrarFacturaManualPayload {
-  empresa_id: number;
-  sucursal_id: number;
-  clase_documento_id: number;
+  empresa_id?: number | string | null;
+  sucursal_id: number | string;
+  clase_documento_id: number | string;
   cliente_id: number | string;
   cliente_nit: string;
   cliente_nombre: string;
@@ -80,6 +81,13 @@ function getSupabaseAdmin() {
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
+
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
 }
 
 /**
@@ -450,20 +458,20 @@ function parsearItemsXmlNativo(xmlString: string): ItemXml[] {
 
 export async function procesarFacturaEmitidaXmlAdmin(
   datosXml: FacturaXmlData,
-  companyId: string,
-  branchId: string,
-  documentClassId: string,
+  companyId: string | number,
+  branchId: string | number,
+  documentClassId: string | number,
   contenidoXml: string,
   pdfUrlInput?: string
 ) {
   const supabase = getSupabaseAdmin();
 
   try {
-    const empIdNum = parseInt(companyId, 10);
-    const sucIdNum = parseInt(branchId, 10);
-    const docClassIdNum = parseInt(documentClassId, 10);
+    const empIdNum = await resolverEmpresaId(companyId);
+    const sucIdNum = Number(branchId);
+    const docClassIdNum = Number(documentClassId);
 
-    if (isNaN(empIdNum) || isNaN(sucIdNum) || isNaN(docClassIdNum)) {
+    if (!empIdNum || isNaN(sucIdNum) || isNaN(docClassIdNum)) {
       return {
         success: false,
         error: "IDs de empresa, sucursal o clase de documento no válidos.",
@@ -657,10 +665,15 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
   const supabase = getSupabaseAdmin();
 
   try {
+    const parsedEmpresaId = await resolverEmpresaId(payload.empresa_id);
+    if (!parsedEmpresaId) {
+      return { success: false, error: "Debe especificar una empresa válida." };
+    }
+
     const { data: resResolucion, error: errResolucion } = await supabase.rpc(
       "obtener_siguiente_consecutivo_factura",
       {
-        p_empresa_id: payload.empresa_id,
+        p_empresa_id: parsedEmpresaId,
         p_sucursal_id: payload.sucursal_id,
       }
     );
@@ -689,7 +702,7 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
     const { data: empresaInfo } = await supabase
       .from("empresas")
       .select("razon_social, nit_identificacion, dv, direccion, ciudad, pais, telefono, email")
-      .eq("id", payload.empresa_id)
+      .eq("id", parsedEmpresaId)
       .maybeSingle();
 
     const empObj = {
@@ -706,13 +719,12 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
     const { data: mapaDoc } = await supabase
       .from("clase_documento_conceptos")
       .select("concepto_auxiliar_debito")
-      .eq("empresa_id", payload.empresa_id)
+      .eq("empresa_id", parsedEmpresaId)
       .eq("clase_documento_id", payload.clase_documento_id)
       .maybeSingle();
 
     const clienteIdNum = payload.cliente_id !== "" ? Number(payload.cliente_id) : null;
 
-    // Validación y filtrado estricto de ítems válidos para evitar enviar líneas vacías o en ceros
     const itemsFormatted: ItemXml[] = (payload.items || [])
       .filter((item) => Number(item.cantidad) > 0 && Number(item.total) >= 0)
       .map((item) => ({
@@ -734,7 +746,7 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
     const { data: resultRpc, error: errorRpc } = await supabase.rpc(
       "fn_registrar_factura_emitida_completa",
       {
-        p_empresa_id: payload.empresa_id,
+        p_empresa_id: parsedEmpresaId,
         p_sucursal_id: payload.sucursal_id,
         p_clase_documento_id: payload.clase_documento_id,
         p_cliente_id: clienteIdNum,
@@ -830,7 +842,7 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
 
     const xmlUrl = await subirArchivoStorage(
       contenidoXmlManual,
-      payload.empresa_id,
+      parsedEmpresaId,
       "xml",
       `${numFacturaGenerado}.xml`,
       "application/xml"
@@ -861,7 +873,7 @@ export async function registrarFacturaEmitida(payload: RegistrarFacturaManualPay
 
     const pdfUrl = await subirArchivoStorage(
       pdfBuffer,
-      payload.empresa_id,
+      parsedEmpresaId,
       "pdf",
       `${numFacturaGenerado}.pdf`,
       "application/pdf"

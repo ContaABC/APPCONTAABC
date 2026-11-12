@@ -9,10 +9,33 @@ import {
 import { obtenerEstadoResultados } from "./estado-resultados-actions";
 import BotonAnalisisIA from "../balance_general/BotonAnalisisIA";
 
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+}
+
+interface Sucursal {
+  id: number | string;
+  nombre: string;
+}
+
+interface ResultadoRow {
+  elemento: string;
+  concepto_id: number | string;
+  concepto_codigo: string;
+  concepto_nombre: string;
+  clasificacion_balance?: string;
+  subconcepto_id?: number | string | null;
+  subconcepto_codigo?: string;
+  subconcepto_nombre?: string;
+  saldo?: number;
+}
+
 export default function EstadoResultadosPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
 
   // Filtros
   const [empresaId, setEmpresaId] = useState<string>("");
@@ -22,10 +45,10 @@ export default function EstadoResultadosPage() {
   const [tipoReporte, setTipoReporte] = useState<"ACUMULADO" | "MES">("ACUMULADO");
   const [modoPresentacion, setModoPresentacion] = useState<"NORMAL" | "COMPARATIVO_MES" | "COMPARATIVO_ANIO">("NORMAL");
 
-  // Estados de datos (Actual y Comparativo)
+  // Estados de datos
   const [loading, setLoading] = useState<boolean>(false);
-  const [resultadosData, setResultadosData] = useState<any[]>([]);
-  const [resultadosComparativoData, setResultadosComparativoData] = useState<any[]>([]);
+  const [resultadosData, setResultadosData] = useState<ResultadoRow[]>([]);
+  const [resultadosComparativoData, setResultadosComparativoData] = useState<ResultadoRow[]>([]);
 
   useEffect(() => {
     setIsMounted(true);
@@ -288,7 +311,7 @@ export default function EstadoResultadosPage() {
         </div>
       </div>
 
-      {/* CONTROLES / FILTROS CON TAMAÑOS AJUSTADOS */}
+      {/* CONTROLES / FILTROS */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-12 gap-2.5 bg-slate-50 p-3 rounded-lg border border-slate-200 items-end">
         <div className="lg:col-span-3">
           <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Empresa</label>
@@ -450,7 +473,7 @@ export default function EstadoResultadosPage() {
                   <React.Fragment key={elemento}>
                     {/* ENCABEZADO DE ELEMENTO */}
                     <tr className="bg-slate-800 text-white font-bold text-[11px]">
-                      <td colSpan={esComparativo ? 2 : 2} className="p-2.5 uppercase tracking-wider">
+                      <td colSpan={2} className="p-2.5 uppercase tracking-wider">
                         {elemento}
                       </td>
                       <td className="p-2.5 text-right font-mono">{fmt(totEl.actual)}</td>

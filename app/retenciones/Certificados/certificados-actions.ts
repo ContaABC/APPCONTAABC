@@ -1,5 +1,6 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
@@ -13,16 +14,97 @@ function getSupabaseAdmin() {
   });
 }
 
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId && String(empresaId) !== "0" && String(empresaId) !== "") {
+    return Number(empresaId);
+  }
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
+}
+
+export interface EmpresaInfo {
+  razon_social?: string;
+  nit_identificacion?: string;
+  dv?: string;
+  direccion?: string;
+  telefono?: string;
+  ciudad?: string;
+  departamento?: string;
+  email?: string;
+}
+
+export interface SucursalInfo {
+  nombre?: string;
+  direccion?: string;
+  ciudad?: string;
+  departamento?: string;
+  telefono?: string;
+}
+
+export interface TerceroCertificado {
+  id: number | string;
+  nombre: string;
+  nit?: string;
+  dv?: string;
+  direccion?: string;
+  telefono?: string;
+  ciudad?: string;
+}
+
+export interface DetalleCertificado {
+  concepto: string;
+  tarifa: number;
+  base: number;
+  retenido: number;
+}
+
+export interface CertificadoItem {
+  tercero: TerceroCertificado;
+  total_base: number;
+  total_retenido: number;
+  detalles: DetalleCertificado[];
+}
+
+export interface DiferenciaItem {
+  tercero_id: string | number;
+  nit: string;
+  nombre: string;
+  auxiliar: number;
+  contabilidad: number;
+  diferencia: number;
+}
+
+export interface CertificadosRetencionResult {
+  success: boolean;
+  empresa: EmpresaInfo | null;
+  sucursal: SucursalInfo | null;
+  certificados: CertificadoItem[];
+  diferencias: DiferenciaItem[];
+  error: string | null;
+}
+
 export async function obtenerCertificadosRetencion(
-  empresaId: number | string,
+  empresaId: number | string | null | undefined,
   sucursalId: number | string | undefined,
   tipoRetencion: "RENTA" | "IVA" | "ICA",
   fechaInicio: string,
   fechaFin: string
-) {
+): Promise<CertificadosRetencionResult> {
   try {
     const supabase = getSupabaseAdmin();
-    const parsedEmpresaId = Number(empresaId);
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
+
+    if (!parsedEmpresaId) {
+      return {
+        success: false,
+        empresa: null,
+        sucursal: null,
+        certificados: [],
+        diferencias: [],
+        error: "No se ha especificado una empresa activa o válida.",
+      };
+    }
 
     // 1. Obtener datos de la empresa y su dirección
     const { data: empresaData } = await supabase
@@ -45,12 +127,12 @@ export async function obtenerCertificadosRetencion(
       }
     }
 
-    const empresaFinal = {
-      ...empresaData,
+    const empresaFinal: EmpresaInfo = {
+      ...(empresaData || {}),
       direccion: direccionEmpresa || "No registrada"
     };
 
-    let sucursalData = null;
+    let sucursalData: SucursalInfo | null = null;
     if (sucursalId && String(sucursalId) !== "0") {
       const { data: suc } = await supabase
         .from("sucursales")
@@ -110,6 +192,13 @@ export async function obtenerCertificadosRetencion(
       return { success: true, empresa: empresaFinal, sucursal: sucursalData, certificados: [], diferencias: [], error: null };
     }
 
+    interface TransaccionDetalleRow {
+      tercero_id: number | string | null;
+      concepto_auxiliar_id: number | string | null;
+      debito?: number | string;
+      credito?: number | string;
+    }
+
     // 3. Consultar la contabilidad haciendo JOIN con transacciones para filtrar por empresa_id y fechas
     let queryTrans = supabase
       .from("detalle_transacciones")
@@ -135,8 +224,8 @@ export async function obtenerCertificadosRetencion(
     if (errTrans) throw errTrans;
 
     // 4. Mapear saldos contables por clave única: `${tercero_id}_${concepto_auxiliar_id}`
-    const mapaContable = new Map();
-    (transaccionesContables || []).forEach((t: any) => {
+    const mapaContable = new Map<string, number>();
+    (transaccionesContables as TransaccionDetalleRow[] || []).forEach((t) => {
       if (!t.tercero_id || !t.concepto_auxiliar_id) return;
       const clave = `${t.tercero_id}_${t.concepto_auxiliar_id}`;
       const actual = mapaContable.get(clave) || 0;
@@ -144,9 +233,42 @@ export async function obtenerCertificadosRetencion(
       mapaContable.set(clave, actual + netoMovimiento);
     });
 
+    interface TerceroDB {
+      id?: number | string;
+      razon_social?: string;
+      primer_nombre?: string;
+      segundo_nombre?: string;
+      primer_apellido?: string;
+      segundo_apellido?: string;
+      numero_identificacion?: string;
+      dv?: string;
+      direccion?: string;
+      telefono?: string;
+      ciudad?: string;
+    }
+
+    interface MovimientoDB {
+      id?: number | string;
+      base_gravable?: number | string;
+      valor_retencion?: number | string;
+      fecha_contable?: string;
+      tercero_id?: number | string;
+      sucursal_id?: number | string;
+      tipo_retencion?: string;
+      tipo_operacion?: string;
+      terceros?: TerceroDB;
+      conceptos_retencion?: {
+        id?: number | string;
+        tipo_retencion?: string;
+        concepto?: string;
+        tarifa?: number | string;
+        concepto_auxiliar_id?: number | string;
+      };
+    }
+
     // 5. Agrupar auxiliar por Tercero y Concepto Auxiliar para validar contra contabilidad
-    const auxiliarAgrupado = new Map();
-    (movimientos || []).forEach((mov: any) => {
+    const auxiliarAgrupado = new Map<string, { total: number; tercero: TerceroDB; concepto: string }>();
+    (movimientos as MovimientoDB[] || []).forEach((mov) => {
       const tid = mov.tercero_id;
       const conceptoAuxId = mov.conceptos_retencion?.concepto_auxiliar_id;
       if (!tid || !conceptoAuxId) return;
@@ -154,16 +276,16 @@ export async function obtenerCertificadosRetencion(
       const clave = `${tid}_${conceptoAuxId}`;
       const actual = auxiliarAgrupado.get(clave) || { 
         total: 0, 
-        tercero: mov.terceros, 
-        concepto: mov.conceptos_retencion?.concepto 
+        tercero: mov.terceros || {}, 
+        concepto: mov.conceptos_retencion?.concepto || "" 
       };
       actual.total += Number(mov.valor_retencion || 0);
       auxiliarAgrupado.set(clave, actual);
     });
 
     // 6. Validar diferencias reales cruzando ambas tablas con tolerancia menor a 1 peso
-    const diferenciasEncontradas: any[] = [];
-    const tercerosConDiferenciaMap = new Map();
+    const diferenciasEncontradas: DiferenciaItem[] = [];
+    const tercerosConDiferenciaMap = new Map<string | number, DiferenciaItem>();
 
     auxiliarAgrupado.forEach((val, clave) => {
       const totalAuxiliar = Number(val.total.toFixed(2));
@@ -188,7 +310,7 @@ export async function obtenerCertificadosRetencion(
           });
         }
 
-        const itemDif = tercerosConDiferenciaMap.get(tid);
+        const itemDif = tercerosConDiferenciaMap.get(tid)!;
         itemDif.auxiliar += totalAuxiliar;
         itemDif.contabilidad += totalContable;
         itemDif.diferencia += (totalAuxiliar - totalContable);
@@ -210,11 +332,11 @@ export async function obtenerCertificadosRetencion(
     }
 
     // 8. Si todo está correcto, construir los certificados agrupados por concepto
-    const mapaTerceros = new Map();
+    const mapaTerceros = new Map<string | number, { tercero: TerceroCertificado; total_base: number; total_retenido: number; conceptosMap: Map<string, DetalleCertificado> }>();
 
-    (movimientos || []).forEach((mov: any) => {
+    (movimientos as MovimientoDB[] || []).forEach((mov) => {
       const tercero = mov.terceros;
-      if (!tercero) return;
+      if (!tercero || !tercero.id) return;
 
       const nombreTercero = tercero.razon_social || 
         [tercero.primer_nombre, tercero.segundo_nombre, tercero.primer_apellido, tercero.segundo_apellido].filter(Boolean).join(" ");
@@ -232,11 +354,11 @@ export async function obtenerCertificadosRetencion(
           },
           total_base: 0,
           total_retenido: 0,
-          conceptosMap: new Map()
+          conceptosMap: new Map<string, DetalleCertificado>()
         });
       }
 
-      const itemTercero = mapaTerceros.get(tercero.id);
+      const itemTercero = mapaTerceros.get(tercero.id)!;
       itemTercero.total_base += Number(mov.base_gravable || 0);
       itemTercero.total_retenido += Number(mov.valor_retencion || 0);
 
@@ -253,12 +375,12 @@ export async function obtenerCertificadosRetencion(
         });
       }
 
-      const itemConcepto = itemTercero.conceptosMap.get(claveConcepto);
+      const itemConcepto = itemTercero.conceptosMap.get(claveConcepto)!;
       itemConcepto.base += Number(mov.base_gravable || 0);
       itemConcepto.retenido += Number(mov.valor_retencion || 0);
     });
 
-    const certificadosFinales = Array.from(mapaTerceros.values()).map((cert: any) => ({
+    const certificadosFinales: CertificadoItem[] = Array.from(mapaTerceros.values()).map((cert) => ({
       tercero: cert.tercero,
       total_base: cert.total_base,
       total_retenido: cert.total_retenido,
@@ -273,7 +395,8 @@ export async function obtenerCertificadosRetencion(
       diferencias: [],
       error: null
     };
-  } catch (err: any) {
-    return { success: false, empresa: null, sucursal: null, certificados: [], diferencias: [], error: err.message };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, empresa: null, sucursal: null, certificados: [], diferencias: [], error: errorMsg };
   }
 }

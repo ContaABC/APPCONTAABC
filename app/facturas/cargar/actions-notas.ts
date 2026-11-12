@@ -1,13 +1,30 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-const supabase = createClient(supabaseUrl, supabaseKey);
+function getSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error("Faltan las variables de entorno de Supabase.");
+  }
 
-interface ProcesarNotaParams {
-  empresaId: number;
+  return createClient(supabaseUrl, supabaseKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
+}
+
+export interface ProcesarNotaParams {
+  empresaId?: number | string | null;
   facturaRecibidaId: string; // UUID de la factura afectada
   tipoNota: "CREDITO" | "DEBITO";
   numeroNota: string;
@@ -23,7 +40,14 @@ interface ProcesarNotaParams {
 
 export async function registrarNotaRecibida(datos: ProcesarNotaParams) {
   try {
-    // 1. Obtener la factura original y sus asientos/movimientos contables
+    const supabase = getSupabaseAdmin();
+    const parsedEmpresaId = await resolverEmpresaId(datos.empresaId);
+
+    if (!parsedEmpresaId) {
+      throw new Error("Debe especificar una empresa válida para registrar la nota.");
+    }
+
+    // 1. Obtener la factura original y sus saldos
     const { data: factura, error: errorFactura } = await supabase
       .from("facturas_recibidas")
       .select("id, subtotal, impuestos, total_factura")
@@ -38,7 +62,7 @@ export async function registrarNotaRecibida(datos: ProcesarNotaParams) {
     const { data: notaInsertada, error: errorNota } = await supabase
       .from("notas_recibidas")
       .insert({
-        empresa_id: datos.empresaId,
+        empresa_id: parsedEmpresaId,
         factura_recibida_id: datos.facturaRecibidaId,
         tipo_nota: datos.tipoNota,
         numero_nota: datos.numeroNota,
@@ -61,7 +85,6 @@ export async function registrarNotaRecibida(datos: ProcesarNotaParams) {
     // 3. Actualizar los montos en la factura original
     const esCredito = datos.tipoNota === "CREDITO";
     
-    // Si es Crédito resta, si es Débito suma
     const nuevoSubtotal = esCredito
       ? Number(factura.subtotal) - datos.subtotal
       : Number(factura.subtotal) + datos.subtotal;
@@ -87,18 +110,21 @@ export async function registrarNotaRecibida(datos: ProcesarNotaParams) {
       throw new Error(`Error al actualizar saldos de la factura: ${errorUpdateFactura.message}`);
     }
 
-    // 4. Replicar la Contabilidad (Partida Doble) usando los mismos conceptos/cuentas de la factura
-    // Consultamos los detalles contables de la factura inicial
+    // 4. Replicar la Contabilidad (Partida Doble)
     const { data: detallesOriginales, error: errorDetalles } = await supabase
-      .from("detalles_transaccion") // O tu tabla de movimientos contables
+      .from("detalles_transaccion")
       .select("*")
       .eq("factura_id", datos.facturaRecibidaId);
 
-    if (detallesOriginales && detallesOriginales.length > 0) {
-      // Proporcionamos el factor de proporción en caso de que la NC/ND sea parcial
-      const proporcion = factura.subtotal > 0 ? datos.subtotal / Number(factura.subtotal) : 1;
+    if (errorDetalles) {
+      console.warn("Aviso al consultar detalles contables originales:", errorDetalles.message);
+    }
 
-      const nuevosDetallesContables = detallesOriginales.map((item) => {
+    if (detallesOriginales && detallesOriginales.length > 0) {
+      const facturaSubtotalNum = Number(factura.subtotal) || 0;
+      const proporcion = facturaSubtotalNum > 0 ? datos.subtotal / facturaSubtotalNum : 1;
+
+      const nuevosDetallesContables = detallesOriginales.map((item: any) => {
         const debitoOriginal = Number(item.debito) || 0;
         const creditoOriginal = Number(item.credito) || 0;
 
@@ -106,7 +132,7 @@ export async function registrarNotaRecibida(datos: ProcesarNotaParams) {
         let nuevoCredito = 0;
 
         if (esCredito) {
-          // NC: Se invierten las naturalezas (Débito pasa a Crédito y viceversa)
+          // NC: Se invierten las naturalezas
           nuevoDebito = creditoOriginal * proporcion;
           nuevoCredito = debitoOriginal * proporcion;
         } else {
@@ -116,13 +142,13 @@ export async function registrarNotaRecibida(datos: ProcesarNotaParams) {
         }
 
         return {
-          empresa_id: datos.empresaId,
-          nota_id: notaInsertada.id, // Vinculado a la nota
+          empresa_id: parsedEmpresaId,
+          nota_id: notaInsertada.id,
           cuenta_auxiliar_id: item.cuenta_auxiliar_id,
           tercero_id: item.tercero_id,
           debito: Math.round(nuevoDebito * 100) / 100,
           credito: Math.round(nuevoCredito * 100) / 100,
-          concepto: `${datos.tipoNota === "CREDITO" ? "NC" : "ND"} ${datos.numeroNota} a Factura`,
+          concepto: `${esCredito ? "NC" : "ND"} ${datos.numeroNota} a Factura`,
         };
       });
 
@@ -135,8 +161,10 @@ export async function registrarNotaRecibida(datos: ProcesarNotaParams) {
       }
     }
 
-    return { success: true, nota: notaInsertada };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return { success: true, nota: notaInsertada, error: null };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al registrar la nota.";
+    console.error("Error en registrarNotaRecibida:", mensaje);
+    return { success: false, nota: null, error: mensaje };
   }
 }

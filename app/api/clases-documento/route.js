@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -8,11 +9,14 @@ const supabase = createClient(supabaseUrl, supabaseKey)
 // 1. OBTENER REGISTROS (GET)
 export async function GET(request) {
   try {
+    const cookieStore = cookies()
     const { searchParams } = new URL(request.url)
-    const empresa_id = searchParams.get('empresa_id')
+    
+    // Captura automática: si la URL no trae empresa_id, se lee de la cookie de la sesión activa
+    const empresa_id = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
 
     if (!empresa_id) {
-      return NextResponse.json({ exito: false, mensaje: 'Falta el id de la empresa.' }, { status: 400 })
+      return NextResponse.json({ exito: false, mensaje: 'Falta el id de la empresa o no hay sesión activa.' }, { status: 400 })
     }
 
     const { data, error } = await supabase
@@ -32,25 +36,24 @@ export async function GET(request) {
 // 2. INSERTAR NUEVA CLASE Y SU CONSECUTIVO INICIAL (POST)
 export async function POST(request) {
   try {
+    const cookieStore = cookies()
     const body = await request.json()
 
-    const empresa_id = body.empresa_id || body.empresaId
+    // Captura automática: si el body no trae empresa_id, se inyecta de la cookie
+    const empresa_id = body.empresa_id || body.empresaId || cookieStore.get('empresa_activa')?.value
     const codigo_clase = String(body.codigo_clase || body.codigoClase || '').trim().toUpperCase()
     const nombre_clase = String(body.nombre_clase || body.nombreClase || '').trim().toUpperCase()
     const descripcion = body.descripcion || ''
     const afecta_caja_bancos = body.afecta_caja_bancos ?? body.afectaCajaBancos ?? false
 
-    // Si el formulario no manda un prefijo personalizado, usa el codigo_clase
     const prefijo = String(body.prefijo || codigo_clase).trim().toUpperCase()
     const consecutivo_inicial = Number(body.consecutivo_inicial || body.consecutivoInicial) || 1
-
-    // Todas las nuevas clases nacen como 'Activa'
     const estadoTexto = 'Activa'
 
     if (!empresa_id || !codigo_clase || !nombre_clase) {
       return NextResponse.json({ 
         exito: false, 
-        mensaje: 'Campos requeridos faltantes: empresa_id, codigo_clase o nombre_clase' 
+        mensaje: 'Campos requeridos faltantes: empresa_id (o cookie activa), codigo_clase o nombre_clase' 
       }, { status: 400 })
     }
 
@@ -91,7 +94,7 @@ export async function POST(request) {
       return NextResponse.json({ exito: false, mensaje: errorClase.message }, { status: 500 })
     }
 
-    // PASO 3: Insertar en la tabla consecutivos asignando 'prefijo = codigo_clase' y 'ultimo_numero'
+    // PASO 3: Insertar en la tabla consecutivos
     const { error: errorConsecutivo } = await supabase
       .from('consecutivos')
       .upsert([
@@ -150,7 +153,6 @@ export async function PUT(request) {
       afecta_caja_bancos: Boolean(afecta_caja_bancos)
     }
 
-    // Si viene la propiedad 'estado' (por clic en la tabla), se actualiza el estado
     if (body.estado !== undefined) {
       const esActivo = body.estado
       datosActualizar.estado = (esActivo === true || esActivo === 'Activa' || esActivo === '1' || esActivo === 1) 
@@ -175,9 +177,12 @@ export async function PUT(request) {
 // 4. ELIMINAR REGISTRO (DELETE)
 export async function DELETE(request) {
   try {
+    const cookieStore = cookies()
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
-    const empresa_id = searchParams.get('empresa_id')
+    
+    // Captura automática de empresa_id si no viene en los parámetros
+    const empresa_id = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
 
     if (!id || !empresa_id) {
       return NextResponse.json({ exito: false, mensaje: 'Faltan parámetros requeridos (id, empresa_id).' }, { status: 400 })

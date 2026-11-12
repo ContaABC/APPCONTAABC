@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import XmlUploader from "@/components/xml-uploader";
 import XmlUploaderMasivo from "@/components/xml-uploader-masivo";
-import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
+import { validarPeriodoContable } from "@/lib/accounting-validations";
 
 interface UserType {
   id: string;
@@ -48,15 +48,15 @@ export default function CargarFacturasPage() {
     new Date().toISOString().split("T")[0]
   );
 
-  // Estados para Control de Periodo Contable (NUEVO)
+  // Estados para Control de Periodo Contable
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
   const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Función de validación de periodo en tiempo real (NUEVO)
-  const verificarPeriodo = async (fecha: string) => {
+  // Función de validación de periodo en tiempo real
+  const verificarPeriodo = useCallback(async (fecha: string) => {
     if (!selectedCompanyId || !selectedBranchId || !fecha) {
       setErrorPeriodo(null);
       return;
@@ -71,14 +71,14 @@ export default function CargarFacturasPage() {
     }
 
     setValidandoPeriodo(false);
-  };
+  }, [selectedCompanyId, selectedBranchId]);
 
   // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha cargada
   useEffect(() => {
-    if (selectedCompanyId && selectedBranchId && fechaContabilizacion) {
+    if (selectedCompanyId && selectedBranchId && fechaContabilizacion && mounted) {
       verificarPeriodo(fechaContabilizacion);
     }
-  }, [selectedCompanyId, selectedBranchId]);
+  }, [selectedCompanyId, selectedBranchId, fechaContabilizacion, mounted, verificarPeriodo]);
 
   const fetchBranches = useCallback(async (companyId: string) => {
     try {
@@ -210,6 +210,7 @@ export default function CargarFacturasPage() {
       {/* Selector de Modo (Tabs Carga Individual / Carga Masiva) */}
       <div className="flex border-b border-gray-200">
         <button
+          type="button"
           onClick={() => setActiveTab("individual")}
           className={`py-1.5 px-4 text-xs font-semibold rounded-t border-t border-l border-r transition-colors ${
             activeTab === "individual"
@@ -220,6 +221,7 @@ export default function CargarFacturasPage() {
           📄 Carga Individual
         </button>
         <button
+          type="button"
           onClick={() => setActiveTab("masiva")}
           className={`py-1.5 px-4 text-xs font-semibold rounded-t border-t border-l border-r transition-colors ${
             activeTab === "masiva"
@@ -231,7 +233,7 @@ export default function CargarFacturasPage() {
         </button>
       </div>
 
-      {/* Selectores Parámetros (Compartidos por ambas vistas) */}
+      {/* Selectores Parámetros */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-2 rounded border border-gray-200">
         <div>
           <label className="block text-[9px] font-bold text-gray-600 uppercase mb-0.5">
@@ -240,7 +242,7 @@ export default function CargarFacturasPage() {
           <select
             value={selectedCompanyId}
             onChange={(e) => setSelectedCompanyId(e.target.value)}
-            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500"
+            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 truncate"
           >
             <option value="">-- Seleccione --</option>
             {companies.map((comp) => (
@@ -259,7 +261,7 @@ export default function CargarFacturasPage() {
             value={selectedBranchId}
             onChange={(e) => setSelectedBranchId(e.target.value)}
             disabled={!selectedCompanyId || branches.length === 0}
-            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100"
+            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 truncate"
           >
             <option value="">
               {branches.length === 0 ? "Sin sucursales" : "-- Seleccione --"}
@@ -280,7 +282,7 @@ export default function CargarFacturasPage() {
             value={selectedDocumentClassId}
             onChange={(e) => setSelectedDocumentClassId(e.target.value)}
             disabled={!selectedCompanyId || documentClasses.length === 0}
-            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100"
+            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 truncate"
           >
             <option value="">
               {documentClasses.length === 0 ? "Sin clases" : "-- Seleccione --"}
@@ -306,8 +308,8 @@ export default function CargarFacturasPage() {
               setFechaContabilizacion(nuevaFecha);
               if (errorPeriodo) setErrorPeriodo(null);
             }}
-            onBlur={() => verificarPeriodo(fechaContabilizacion)} // <--- Validación al perder el foco
-            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500"
+            onBlur={() => verificarPeriodo(fechaContabilizacion)}
+            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 text-center"
           />
           {validandoPeriodo && (
             <p className="text-[9px] text-blue-500 mt-0.5 animate-pulse">Verificando periodo...</p>
@@ -326,7 +328,6 @@ export default function CargarFacturasPage() {
           <span>🛑 No es posible realizar la carga de facturas XML porque el periodo contable seleccionado no se encuentra habilitado o está cerrado.</span>
         </div>
       ) : (
-        /* Renderizado Condicional del Componente según la Pestaña Activa */
         activeTab === "individual" ? (
           <XmlUploader
             selectedCompanyId={selectedCompanyId}

@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, ChangeEvent, FormEvent } from 'react'
 import {
   Search,
   Plus,
@@ -12,33 +12,89 @@ import {
   X,
 } from 'lucide-react'
 
-export default function TercerosPage() {
-  const [mounted, setMounted] = useState(false)
-  const [empresas, setEmpresas] = useState([])
-  const [empresaId, setEmpresaId] = useState('')
-  const [todosLosTerceros, setTodosLosTerceros] = useState([])
-  const [cargando, setCargando] = useState(false)
-  const [hasBuscado, setHasBuscado] = useState(false)
+// ==========================================
+// INTERFACES DE TIPADO
+// ==========================================
+interface Empresa {
+  id: string | number;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nombre?: string;
+}
 
-  const [conceptosRetencion, setConceptosRetencion] = useState([])
+interface ConceptoRetencion {
+  id: string | number;
+  tipo_retencion?: string;
+  concepto?: string;
+  descripcion?: string;
+  tarifa?: number | string;
+  codigo?: string;
+}
+
+interface Tercero {
+  id?: string | number;
+  empresa_id?: string | number;
+  tipo_persona?: 'JURIDICA' | 'NATURAL';
+  tipo_documento?: string;
+  numero_identificacion?: string;
+  dv?: string | number | null;
+  primer_nombre?: string;
+  segundo_nombre?: string;
+  primer_apellido?: string;
+  segundo_apellido?: string;
+  razon_social?: string;
+  nombre_comercial?: string;
+  codigo_dane?: string;
+  ciudad?: string;
+  departamento_estado?: string;
+  direccion?: string;
+  email?: string;
+  telefono?: string;
+  telefono_principal?: string;
+  departamento?: string;
+  codigo_ciiu?: string;
+  codigo_ciiu_2?: string;
+  codigo_ciiu_3?: string;
+  codigo_ciiu_4?: string;
+  regimen_fiscal?: string;
+  responsabilidad_tributaria?: string;
+  retencion_renta_id?: string | number;
+  retencion_iva_id?: string | number;
+  retencion_ica_id?: string | number;
+  es_cliente?: boolean;
+  es_proveedor?: boolean;
+  es_empleado?: boolean;
+  es_arrendador?: boolean;
+  estado?: 'ACTIVO' | 'INACTIVO';
+}
+
+export default function TercerosPage() {
+  const [mounted, setMounted] = useState<boolean>(false)
+  const [empresas, setEmpresas] = useState<Empresa[]>([])
+  const [empresaId, setEmpresaId] = useState<string | number>('')
+  const [todosLosTerceros, setTodosLosTerceros] = useState<Tercero[]>([])
+  const [cargando, setCargando] = useState<boolean>(false)
+  const [hasBuscado, setHasBuscado] = useState<boolean>(false)
+
+  const [conceptosRetencion, setConceptosRetencion] = useState<ConceptoRetencion[]>([])
 
   // Filtros
-  const [busqueda, setBusqueda] = useState('')
-  const [filtroTipo, setFiltroTipo] = useState('TODOS')
-  const [filtroEstado, setFiltroEstado] = useState('TODOS')
+  const [busqueda, setBusqueda] = useState<string>('')
+  const [filtroTipo, setFiltroTipo] = useState<string>('TODOS')
+  const [filtroEstado, setFiltroEstado] = useState<string>('TODOS')
 
   // Paginación
-  const [paginaActual, setPaginaActual] = useState(1)
+  const [paginaActual, setPaginaActual] = useState<number>(1)
   const registrosPorPagina = 10
 
   // Modales
-  const [modalAbierto, setModalAbierto] = useState(false)
-  const [guardando, setGuardando] = useState(false)
-  const [mensajeForm, setMensajeForm] = useState({ tipo: '', texto: '' })
+  const [modalAbierto, setModalAbierto] = useState<boolean>(false)
+  const [guardando, setGuardando] = useState<boolean>(false)
+  const [mensajeForm, setMensajeForm] = useState<{ tipo: string; texto: string }>({ tipo: '', texto: '' })
 
   // Formulario
-  const [formulario, setFormulario] = useState({
-    id: null,
+  const [formulario, setFormulario] = useState<Tercero>({
+    id: undefined,
     tipo_persona: 'JURIDICA',
     tipo_documento: '31',
     numero_identificacion: '',
@@ -88,25 +144,33 @@ export default function TercerosPage() {
   const cargarEmpresas = async () => {
     try {
       const res = await fetch('/api/empresas/listar')
-      if (res.ok) {
-        const data = await res.json()
-        const listaEmpresas = data.empresas || data.data || (Array.isArray(data) ? data : [])
-        setEmpresas(listaEmpresas)
+      const data = await res.json()
+      
+      console.log("Respuesta de /api/empresas/listar:", data)
 
-        const idGuardado = localStorage.getItem('empresa_id')
-        if (idGuardado && listaEmpresas.some((e) => e.id.toString() === idGuardado.toString())) {
-          setEmpresaId(idGuardado)
-        } else if (listaEmpresas.length > 0) {
-          setEmpresaId(listaEmpresas[0].id)
-          localStorage.setItem('empresa_id', listaEmpresas[0].id)
-        }
+      // Extraer la lista de empresas de forma segura
+      const listaEmpresas = data.empresas || data.data || (Array.isArray(data) ? data : [])
+      setEmpresas(listaEmpresas)
+
+      // Intentar recuperar la empresa activa de la cookie o localStorage
+      const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'))
+      const idGuardado = match ? match[2] : localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id')
+
+      if (idGuardado && listaEmpresas.some((e: Empresa) => String(e.id) === String(idGuardado))) {
+        setEmpresaId(idGuardado)
+      } else if (listaEmpresas.length > 0) {
+        const primerId = listaEmpresas[0].id
+        setEmpresaId(primerId)
+        localStorage.setItem('empresa_activa', String(primerId))
+        localStorage.setItem('empresa_id', String(primerId))
+        document.cookie = `empresa_activa=${primerId}; path=/; max-age=86400; SameSite=Lax`
       }
     } catch (err) {
       console.error('Error al cargar empresas:', err)
     }
   }
 
-  const cargarConceptosRetencion = async (idEmpresa) => {
+  const cargarConceptosRetencion = async (idEmpresa: string | number) => {
     try {
       const res = await fetch(`/api/conceptos-retencion?empresa_id=${idEmpresa}`)
       if (res.ok) {
@@ -186,8 +250,8 @@ export default function TercerosPage() {
     setPaginaActual(1)
   }, [busqueda, filtroTipo, filtroEstado])
 
-  const calcularDV = (nit) => {
-    if (!nit || isNaN(nit)) return ''
+  const calcularDV = (nit: string | undefined): string => {
+    if (!nit || isNaN(Number(nit))) return ''
     const vpri = [3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71]
     const z = nit.toString().length
     let x = 0
@@ -202,7 +266,7 @@ export default function TercerosPage() {
     return y > 1 ? (11 - y).toString() : y.toString()
   }
 
-  const handleTipoPersonaChange = (nuevoTipo) => {
+  const handleTipoPersonaChange = (nuevoTipo: 'JURIDICA' | 'NATURAL') => {
     setFormulario((prev) => {
       const esJuridica = nuevoTipo === 'JURIDICA'
 
@@ -229,9 +293,12 @@ export default function TercerosPage() {
     })
   }
 
-  const handleInputChange = (e) => {
-    const { name, value, type, checked } = e.target
-    let valorFinal = type === 'checkbox' ? checked : value
+  const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const target = e.target as HTMLInputElement
+    const { name, value, type } = target
+    const checked = target.checked
+
+    let valorFinal: any = type === 'checkbox' ? checked : value
 
     if (name === 'numero_identificacion') {
       valorFinal = value.replace(/\D/g, '').slice(0, 12)
@@ -259,7 +326,7 @@ export default function TercerosPage() {
       valorFinal = valorFinal.toUpperCase()
     }
 
-    let nuevoEstado = { ...formulario, [name]: valorFinal }
+    let nuevoEstado: Tercero = { ...formulario, [name]: valorFinal }
 
     if (name === 'numero_identificacion') {
       if (formulario.tipo_persona === 'JURIDICA' || nuevoEstado.tipo_documento === '31') {
@@ -273,10 +340,10 @@ export default function TercerosPage() {
       formulario.tipo_persona === 'NATURAL' &&
       ['primer_nombre', 'segundo_nombre', 'primer_apellido', 'segundo_apellido'].includes(name)
     ) {
-      const pNombre = name === 'primer_nombre' ? valorFinal : formulario.primer_nombre
-      const sNombre = name === 'segundo_nombre' ? valorFinal : formulario.segundo_nombre
-      const pApellido = name === 'primer_apellido' ? valorFinal : formulario.primer_apellido
-      const sApellido = name === 'segundo_apellido' ? valorFinal : formulario.segundo_apellido
+      const pNombre = name === 'primer_nombre' ? valorFinal : formulario.primer_nombre || ''
+      const sNombre = name === 'segundo_nombre' ? valorFinal : formulario.segundo_nombre || ''
+      const pApellido = name === 'primer_apellido' ? valorFinal : formulario.primer_apellido || ''
+      const sApellido = name === 'segundo_apellido' ? valorFinal : formulario.segundo_apellido || ''
 
       nuevoEstado.razon_social = `${pNombre} ${sNombre} ${pApellido} ${sApellido}`
         .replace(/\s+/g, ' ')
@@ -287,7 +354,7 @@ export default function TercerosPage() {
     setFormulario(nuevoEstado)
   }
 
-  const handleCodigoDaneChange = async (e) => {
+  const handleCodigoDaneChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const codigo = e.target.value.replace(/\D/g, '').slice(0, 5)
     setFormulario((prev) => ({ ...prev, codigo_dane: codigo }))
 
@@ -318,7 +385,7 @@ export default function TercerosPage() {
   const abrirModalNuevo = () => {
     setMensajeForm({ tipo: '', texto: '' })
     setFormulario({
-      id: null,
+      id: undefined,
       tipo_persona: 'JURIDICA',
       tipo_documento: '31',
       numero_identificacion: '',
@@ -353,7 +420,7 @@ export default function TercerosPage() {
     setModalAbierto(true)
   }
 
-  const abrirModalEditar = (item) => {
+  const abrirModalEditar = (item: Tercero) => {
     setMensajeForm({ tipo: '', texto: '' })
 
     const esJuridica =
@@ -387,7 +454,7 @@ export default function TercerosPage() {
     setModalAbierto(true)
   }
 
-  const handleSubmitFormulario = async (e) => {
+  const handleSubmitFormulario = async (e: FormEvent) => {
     e.preventDefault()
     setGuardando(true)
     setMensajeForm({ tipo: '', texto: '' })
@@ -430,7 +497,7 @@ export default function TercerosPage() {
     }
   }
 
-  const toggleEstadoTercero = async (item) => {
+  const toggleEstadoTercero = async (item: Tercero) => {
     const nuevoEstado = item.estado === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO'
     try {
       const res = await fetch('/api/terceros', {
@@ -445,8 +512,9 @@ export default function TercerosPage() {
     }
   }
 
-  const eliminarTercero = async (id, razonSocial) => {
-    if (!confirm(`¿Está seguro de eliminar a "${razonSocial}"?`)) return
+  const eliminarTercero = async (id: string | number | undefined, razonSocial: string | undefined) => {
+    if (!id) return
+    if (!confirm(`¿Está seguro de eliminar a "${razonSocial || 'este tercero'}"?`)) return
     try {
       const res = await fetch(`/api/terceros?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
@@ -478,10 +546,14 @@ export default function TercerosPage() {
             <select
               value={empresaId}
               onChange={(e) => {
-                setEmpresaId(e.target.value)
-                if (e.target.value) localStorage.setItem('empresa_id', e.target.value)
+                const nuevoId = e.target.value
+                setEmpresaId(nuevoId)
+                if (nuevoId) {
+                  localStorage.setItem('empresa_id', nuevoId)
+                  document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`
+                }
               }}
-              className="w-full border-2 border-blue-500 rounded-md p-1.5 text-sm bg-blue-50 font-semibold text-blue-900 focus:outline-none"
+              className="w-full border-2 border-blue-500 rounded-md p-1.5 text-sm bg-blue-50 font-semibold text-blue-900 focus:outline-none cursor-pointer"
             >
               <option value="">-- Seleccione una Empresa --</option>
               {empresas.map((emp) => (
@@ -508,7 +580,7 @@ export default function TercerosPage() {
               disabled={!empresaId}
               value={filtroTipo}
               onChange={(e) => setFiltroTipo(e.target.value)}
-              className="border rounded-md p-1.5 text-sm bg-white focus:outline-none disabled:bg-gray-100"
+              className="border rounded-md p-1.5 text-sm bg-white focus:outline-none disabled:bg-gray-100 cursor-pointer"
             >
               <option value="TODOS">Todos los Tipos</option>
               <option value="CLIENTE">Clientes</option>
@@ -521,7 +593,7 @@ export default function TercerosPage() {
               disabled={!empresaId}
               value={filtroEstado}
               onChange={(e) => setFiltroEstado(e.target.value)}
-              className="border rounded-md p-1.5 text-sm bg-white focus:outline-none disabled:bg-gray-100"
+              className="border rounded-md p-1.5 text-sm bg-white focus:outline-none disabled:bg-gray-100 cursor-pointer"
             >
               <option value="TODOS">Todos los Estados</option>
               <option value="ACTIVO">Activos</option>
@@ -632,7 +704,8 @@ export default function TercerosPage() {
                     <td className="p-3 text-center">
                       <button
                         onClick={() => toggleEstadoTercero(item)}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
+                        type="button"
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors cursor-pointer ${
                           item.estado === 'ACTIVO'
                             ? 'bg-green-100 text-green-700 hover:bg-green-200'
                             : 'bg-red-100 text-red-700 hover:bg-red-200'
@@ -650,14 +723,16 @@ export default function TercerosPage() {
                       <div className="flex items-center justify-end gap-1">
                         <button
                           onClick={() => abrirModalEditar(item)}
-                          className="p-1 hover:bg-gray-100 rounded text-blue-600"
+                          type="button"
+                          className="p-1 hover:bg-gray-100 rounded text-blue-600 cursor-pointer"
                           title="Editar"
                         >
                           <Edit className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => eliminarTercero(item.id, item.razon_social)}
-                          className="p-1 hover:bg-gray-100 rounded text-red-600"
+                          type="button"
+                          className="p-1 hover:bg-gray-100 rounded text-red-600 cursor-pointer"
                           title="Eliminar"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -682,7 +757,7 @@ export default function TercerosPage() {
               <button
                 disabled={paginaActual === 1}
                 onClick={() => setPaginaActual((prev) => prev - 1)}
-                className="px-2 py-1 border rounded disabled:opacity-50"
+                className="px-2 py-1 border rounded disabled:opacity-50 cursor-pointer"
               >
                 Anterior
               </button>
@@ -692,7 +767,7 @@ export default function TercerosPage() {
               <button
                 disabled={paginaActual === totalPaginas}
                 onClick={() => setPaginaActual((prev) => prev + 1)}
-                className="px-2 py-1 border rounded disabled:opacity-50"
+                className="px-2 py-1 border rounded disabled:opacity-50 cursor-pointer"
               >
                 Siguiente
               </button>
@@ -709,7 +784,7 @@ export default function TercerosPage() {
               <h3 className="text-xs font-bold text-gray-800">
                 {formulario.id ? 'Editar Tercero' : 'Nuevo Tercero'}
               </h3>
-              <button onClick={() => setModalAbierto(false)} className="text-gray-400 hover:text-gray-600">
+              <button onClick={() => setModalAbierto(false)} type="button" className="text-gray-400 hover:text-gray-600 cursor-pointer">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -765,7 +840,7 @@ export default function TercerosPage() {
                         type="checkbox"
                         name="es_cliente"
                         disabled={isNatural}
-                        checked={formulario.es_cliente}
+                        checked={!!formulario.es_cliente}
                         onChange={handleInputChange}
                         className="rounded text-blue-600"
                       />
@@ -776,7 +851,7 @@ export default function TercerosPage() {
                         type="checkbox"
                         name="es_proveedor"
                         disabled={isNatural}
-                        checked={formulario.es_proveedor}
+                        checked={!!formulario.es_proveedor}
                         onChange={handleInputChange}
                         className="rounded text-blue-600"
                       />
@@ -787,7 +862,7 @@ export default function TercerosPage() {
                         type="checkbox"
                         name="es_empleado"
                         disabled={!isNatural}
-                        checked={formulario.es_empleado}
+                        checked={!!formulario.es_empleado}
                         onChange={handleInputChange}
                         className="rounded text-blue-600"
                       />
@@ -798,7 +873,7 @@ export default function TercerosPage() {
                         type="checkbox"
                         name="es_arrendador"
                         disabled={isNatural}
-                        checked={formulario.es_arrendador}
+                        checked={!!formulario.es_arrendador}
                         onChange={handleInputChange}
                         className="rounded text-blue-600"
                       />
@@ -819,7 +894,7 @@ export default function TercerosPage() {
                     value={formulario.tipo_documento}
                     onChange={handleInputChange}
                     disabled={!!formulario.id}
-                    className="w-full border rounded h-7 px-1 bg-white text-[10px] disabled:bg-gray-100"
+                    className="w-full border rounded h-7 px-1 bg-white text-[10px] disabled:bg-gray-100 cursor-pointer"
                   >
                     {formulario.tipo_persona === 'JURIDICA' ? (
                       <option value="31">31 - NIT</option>
@@ -843,7 +918,7 @@ export default function TercerosPage() {
                     type="text"
                     name="numero_identificacion"
                     maxLength={12}
-                    value={formulario.numero_identificacion}
+                    value={formulario.numero_identificacion || ''}
                     onChange={handleInputChange}
                     disabled={!!formulario.id}
                     required
@@ -858,7 +933,7 @@ export default function TercerosPage() {
                     type="text"
                     name="dv"
                     maxLength={1}
-                    value={formulario.dv || ''}
+                    value={formulario.dv !== null && formulario.dv !== undefined ? String(formulario.dv) : ''}
                     onChange={handleInputChange}
                     disabled={!isNatural}
                     className="w-full border rounded h-7 px-1 bg-gray-50 font-mono text-center font-bold text-gray-700 text-[11px]"
@@ -874,7 +949,7 @@ export default function TercerosPage() {
                     value={formulario.responsabilidad_tributaria || (isNatural ? 'R-99-PN' : 'O-13')}
                     onChange={handleInputChange}
                     disabled={isNatural}
-                    className="w-full border rounded h-7 px-1.5 bg-white text-[10px] disabled:bg-gray-100 disabled:text-gray-400 truncate"
+                    className="w-full border rounded h-7 px-1.5 bg-white text-[10px] disabled:bg-gray-100 disabled:text-gray-400 truncate cursor-pointer"
                   >
                     <option value="O-13">O-13 Gran Contribuyente</option>
                     <option value="O-15">O-15 Autorretenedor</option>
@@ -950,7 +1025,7 @@ export default function TercerosPage() {
                     type="text"
                     name="razon_social"
                     disabled={isNatural}
-                    value={formulario.razon_social}
+                    value={formulario.razon_social || ''}
                     onChange={handleInputChange}
                     required
                     className="w-full border rounded h-7 px-1.5 font-medium uppercase text-[11px] disabled:bg-gray-100"
@@ -971,7 +1046,7 @@ export default function TercerosPage() {
                 </div>
               </div>
 
-              {/* FILA DE CÓDIGOS CIIU (4 CAMPOS COMPACTOS DE 4 DÍGITOS) */}
+              {/* FILA DE CÓDIGOS CIIU */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-amber-50/40 p-2 rounded border border-amber-200 items-end">
                 <div>
                   <label className="block text-[10px] font-bold text-amber-900 uppercase mb-0.5">
@@ -1038,7 +1113,7 @@ export default function TercerosPage() {
                 </div>
               </div>
 
-              {/* FILA DE RETENCIONES FILTRADAS, COMPACTAS Y TRUNCADAS (45 CARACTERES) */}
+              {/* FILA DE RETENCIONES FILTRADAS */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-blue-50/40 p-2 rounded border border-blue-200 items-end">
                 <div>
                   <label className="block text-[10px] font-bold text-blue-900 uppercase mb-0.5">
@@ -1048,7 +1123,7 @@ export default function TercerosPage() {
                     name="retencion_renta_id"
                     value={formulario.retencion_renta_id || ''}
                     onChange={handleInputChange}
-                    className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate"
+                    className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer"
                   >
                     <option value="">-- Seleccione --</option>
                     {conceptosRenta.map((c) => {
@@ -1057,7 +1132,7 @@ export default function TercerosPage() {
                       const conceptoCorto = conceptoLargo.length > 45 
                         ? `${conceptoLargo.substring(0, 45)}...` 
                         : conceptoLargo
-                      const codigoStr = c.codigo ? `${c.codigo} - ` : ''
+                      const codigoStr = c.codigo ? `${c.codigo} ` : ''
                       
                       return (
                         <option key={c.id} value={c.id} title={`${conceptoLargo} (${tarifaPorcentaje}%)`}>
@@ -1076,7 +1151,7 @@ export default function TercerosPage() {
                     name="retencion_iva_id"
                     value={formulario.retencion_iva_id || ''}
                     onChange={handleInputChange}
-                    className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate"
+                    className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer"
                   >
                     <option value="">-- Seleccione --</option>
                     {conceptosIva.map((c) => {
@@ -1085,7 +1160,7 @@ export default function TercerosPage() {
                       const conceptoCorto = conceptoLargo.length > 45 
                         ? `${conceptoLargo.substring(0, 45)}...` 
                         : conceptoLargo
-                      const codigoStr = c.codigo ? `${c.codigo} - ` : ''
+                      const codigoStr = c.codigo ? `${c.codigo} ` : ''
 
                       return (
                         <option key={c.id} value={c.id} title={`${conceptoLargo} (${tarifaPorcentaje}%)`}>
@@ -1104,7 +1179,7 @@ export default function TercerosPage() {
                     name="retencion_ica_id"
                     value={formulario.retencion_ica_id || ''}
                     onChange={handleInputChange}
-                    className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate"
+                    className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer"
                   >
                     <option value="">-- Seleccione --</option>
                     {conceptosIca.map((c) => {
@@ -1113,7 +1188,7 @@ export default function TercerosPage() {
                       const conceptoCorto = conceptoLargo.length > 45 
                         ? `${conceptoLargo.substring(0, 45)}...` 
                         : conceptoLargo
-                      const codigoStr = c.codigo ? `${c.codigo} - ` : ''
+                      const codigoStr = c.codigo ? `${c.codigo} ` : ''
 
                       return (
                         <option key={c.id} value={c.id} title={`${conceptoLargo} (${tarifaPorMil}‰)`}>
@@ -1206,14 +1281,14 @@ export default function TercerosPage() {
                 <button
                   type="button"
                   onClick={() => setModalAbierto(false)}
-                  className="px-3.5 py-1.5 border rounded text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+                  className="px-3.5 py-1.5 border rounded text-[11px] font-medium text-gray-700 hover:bg-gray-50 cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={guardando}
-                  className="px-4 py-1.5 bg-blue-600 text-white rounded text-[11px] font-medium hover:bg-blue-700 disabled:opacity-50"
+                  className="px-4 py-1.5 bg-blue-600 text-white rounded text-[11px] font-medium hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
                 >
                   {guardando ? 'Guardando...' : formulario.id ? 'Actualizar' : 'Guardar Tercero'}
                 </button>

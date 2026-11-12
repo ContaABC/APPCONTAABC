@@ -1,27 +1,55 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, ChangeEvent, FormEvent } from "react";
+
+// ==========================================
+// INTERFACES Y TIPOS
+// ==========================================
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+}
+
+interface ClaseDocumento {
+  id: number | string;
+  codigo_clase?: string;
+  nombre_clase?: string;
+  nombre?: string;
+}
+
+interface ConceptoAuxiliar {
+  id: number | string;
+  codigo_auxiliar?: string;
+  nombre?: string;
+  elemento?: string; // 'Activo', 'Ingresos', 'Pasivo', etc.
+}
+
+interface NotificacionEstado {
+  tipo: "exito" | "error";
+  mensaje: string;
+}
 
 export default function ClaseDocumentoConceptosPage() {
-  const [mounted, setMounted] = useState(false);
+  const [mounted, setMounted] = useState<boolean>(false);
 
   // Listas de datos
-  const [empresas, setEmpresas] = useState([]);
-  const [clasesDocumento, setClasesDocumento] = useState([]);
-  const [conceptosAuxiliares, setConceptosAuxiliares] = useState([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [clasesDocumento, setClasesDocumento] = useState<ClaseDocumento[]>([]);
+  const [conceptosAuxiliares, setConceptosAuxiliares] = useState<ConceptoAuxiliar[]>([]);
 
   // Estados del formulario
-  const [selectedEmpresaId, setSelectedEmpresaId] = useState("");
-  const [selectedClaseId, setSelectedClaseId] = useState("");
-  const [selectedConceptoDebitoId, setSelectedConceptoDebitoId] = useState("");
-  const [selectedConceptoCreditoId, setSelectedConceptoCreditoId] = useState("");
-  const [selectedConceptoIvaId, setSelectedConceptoIvaId] = useState(""); // NUEVO: Estado para el IVA
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<string>("");
+  const [selectedClaseId, setSelectedClaseId] = useState<string>("");
+  const [selectedConceptoDebitoId, setSelectedConceptoDebitoId] = useState<string>("");
+  const [selectedConceptoCreditoId, setSelectedConceptoCreditoId] = useState<string>("");
+  const [selectedConceptoIvaId, setSelectedConceptoIvaId] = useState<string>("");
 
   // Estados de UI
-  const [loading, setLoading] = useState(false);
-  const [loadingEmpresas, setLoadingEmpresas] = useState(true);
-  const [loadingFiltrados, setLoadingFiltrados] = useState(false);
-  const [notificacion, setNotificacion] = useState(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(true);
+  const [loadingFiltrados, setLoadingFiltrados] = useState<boolean>(false);
+  const [notificacion, setNotificacion] = useState<NotificacionEstado | null>(null);
 
   // 1. Manejo de montaje para evitar discrepancias en SSR
   useEffect(() => {
@@ -106,7 +134,7 @@ export default function ClaseDocumentoConceptosPage() {
         if (res.ok && data) {
           setSelectedConceptoDebitoId(data.concepto_auxiliar_debito ? String(data.concepto_auxiliar_debito) : "");
           setSelectedConceptoCreditoId(data.concepto_auxiliar_credito ? String(data.concepto_auxiliar_credito) : "");
-          setSelectedConceptoIvaId(data.concepto_auxiliar_iva_id ? String(data.concepto_auxiliar_iva_id) : ""); // NUEVO: Cargar IVA
+          setSelectedConceptoIvaId(data.concepto_auxiliar_iva_id ? String(data.concepto_auxiliar_iva_id) : "");
         }
       } catch (err) {
         console.error("Error al cargar parametrización existente:", err);
@@ -116,7 +144,7 @@ export default function ClaseDocumentoConceptosPage() {
     cargarParametrizacion();
   }, [selectedClaseId]);
 
-  const mostrarNotificacion = (tipo, mensaje) => {
+  const mostrarNotificacion = (tipo: "exito" | "error", mensaje: string) => {
     setNotificacion({ tipo, mensaje });
     setTimeout(() => {
       setNotificacion(null);
@@ -124,7 +152,7 @@ export default function ClaseDocumentoConceptosPage() {
   };
 
   // 5. Guardar la configuración llamando al endpoint POST
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
     if (!selectedEmpresaId || !selectedClaseId || !selectedConceptoDebitoId || !selectedConceptoCreditoId) {
@@ -151,7 +179,7 @@ export default function ClaseDocumentoConceptosPage() {
           claseDocumentoId: Number(selectedClaseId),
           conceptoDebitoId: Number(selectedConceptoDebitoId),
           conceptoCreditoId: Number(selectedConceptoCreditoId),
-          conceptoIvaId: selectedConceptoIvaId ? Number(selectedConceptoIvaId) : null, // NUEVO: Enviar IVA
+          conceptoIvaId: selectedConceptoIvaId ? Number(selectedConceptoIvaId) : null,
         }),
       });
 
@@ -162,7 +190,7 @@ export default function ClaseDocumentoConceptosPage() {
       }
 
       mostrarNotificacion("exito", resultado.mensaje || "Parametrización guardada correctamente.");
-    } catch (err) {
+    } catch (err: any) {
       mostrarNotificacion("error", err.message || "Error al conectar con el servidor.");
     } finally {
       setLoading(false);
@@ -206,7 +234,7 @@ export default function ClaseDocumentoConceptosPage() {
           </label>
           <select
             value={selectedEmpresaId}
-            onChange={(e) => {
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
               setSelectedEmpresaId(e.target.value);
               setSelectedClaseId("");
               setSelectedConceptoDebitoId("");
@@ -214,14 +242,14 @@ export default function ClaseDocumentoConceptosPage() {
               setSelectedConceptoIvaId("");
             }}
             disabled={loadingEmpresas}
-            className="w-full border border-gray-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+            className="w-full border border-gray-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 cursor-pointer"
           >
             <option value="">
               {loadingEmpresas ? "Cargando empresas..." : "-- Selecciona una Empresa --"}
             </option>
             {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>
-                {emp.razon_social}
+                {emp.razon_social || emp.nombre_comercial}
               </option>
             ))}
           </select>
@@ -234,9 +262,9 @@ export default function ClaseDocumentoConceptosPage() {
           </label>
           <select
             value={selectedClaseId}
-            onChange={(e) => setSelectedClaseId(e.target.value)}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setSelectedClaseId(e.target.value)}
             disabled={!selectedEmpresaId || loadingFiltrados}
-            className="w-full border border-gray-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+            className="w-full border border-gray-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 cursor-pointer"
           >
             <option value="">
               {!selectedEmpresaId
@@ -267,9 +295,9 @@ export default function ClaseDocumentoConceptosPage() {
             </label>
             <select
               value={selectedConceptoDebitoId}
-              onChange={(e) => setSelectedConceptoDebitoId(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => setSelectedConceptoDebitoId(e.target.value)}
               disabled={!selectedEmpresaId || loadingFiltrados}
-              className="w-full border border-blue-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+              className="w-full border border-blue-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 cursor-pointer"
             >
               <option value="">
                 {!selectedEmpresaId
@@ -296,9 +324,9 @@ export default function ClaseDocumentoConceptosPage() {
             </label>
             <select
               value={selectedConceptoCreditoId}
-              onChange={(e) => setSelectedConceptoCreditoId(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => setSelectedConceptoCreditoId(e.target.value)}
               disabled={!selectedEmpresaId || loadingFiltrados}
-              className="w-full border border-green-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100"
+              className="w-full border border-green-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100 cursor-pointer"
             >
               <option value="">
                 {!selectedEmpresaId
@@ -326,9 +354,9 @@ export default function ClaseDocumentoConceptosPage() {
           </label>
           <select
             value={selectedConceptoIvaId}
-            onChange={(e) => setSelectedConceptoIvaId(e.target.value)}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setSelectedConceptoIvaId(e.target.value)}
             disabled={!selectedEmpresaId || loadingFiltrados}
-            className="w-full border border-purple-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:bg-gray-100"
+            className="w-full border border-purple-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:bg-gray-100 cursor-pointer"
           >
             <option value="">
               {!selectedEmpresaId
@@ -353,7 +381,7 @@ export default function ClaseDocumentoConceptosPage() {
           <button
             type="submit"
             disabled={loading || !selectedEmpresaId}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm px-6 py-2.5 rounded-md transition-colors disabled:bg-gray-400"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm px-6 py-2.5 rounded-md transition-colors disabled:bg-gray-400 cursor-pointer"
           >
             {loading ? "Guardando..." : "Guardar Configuración Contable"}
           </button>

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -7,12 +8,15 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PU
 const supabase = createClient(supabaseUrl, supabaseKey)
 
 // -----------------------------------------------------------------------------
-// GET: Listar conceptos de retención filtrados por empresa_id
+// GET: Listar conceptos de retención filtrados por empresa_id (o cookie activa)
 // -----------------------------------------------------------------------------
 export async function GET(request) {
   try {
+    const cookieStore = cookies()
     const { searchParams } = new URL(request.url)
-    const empresaId = searchParams.get('empresa_id')
+    
+    // Captura automática: si la URL no trae empresa_id, se lee de la cookie activa
+    const empresaId = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
 
     let query = supabase.from('conceptos_retencion').select('*')
 

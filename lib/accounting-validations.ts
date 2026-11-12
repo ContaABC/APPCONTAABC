@@ -2,10 +2,25 @@
 
 import { createClient } from "@supabase/supabase-js";
 
+interface ValidacionResultado {
+  valido: boolean;
+  mensaje?: string;
+}
+
+interface CierrePeriodo {
+  periodo_desde: string;
+  periodo_hasta: string;
+}
+
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  return createClient(supabaseUrl!, serviceRoleKey!, {
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("Faltan las variables de entorno de Supabase (URL o Service Role Key).");
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
@@ -14,7 +29,7 @@ export async function validarPeriodoContable(
   empresaId: string | number, 
   sucursalId: string | number, 
   fechaContable: string
-) {
+): Promise<ValidacionResultado> {
   try {
     if (!empresaId || !sucursalId || !fechaContable) {
       return { valido: true };
@@ -37,8 +52,10 @@ export async function validarPeriodoContable(
       return { valido: true }; // Evitamos bloquear por fallo técnico de red
     }
 
-    if (cierresCerrados && cierresCerrados.length > 0) {
-      const c = cierresCerrados[0];
+    const cierresCerradosTyped = cierresCerrados as CierrePeriodo[] | null;
+
+    if (cierresCerradosTyped && cierresCerradosTyped.length > 0) {
+      const c = cierresCerradosTyped[0];
       return { 
         valido: false, 
         mensaje: `⚠️ Periodo Cerrado, No se Pueden Efectuar Registros (${c.periodo_desde} al ${c.periodo_hasta}).` 
@@ -60,8 +77,10 @@ export async function validarPeriodoContable(
       return { valido: true };
     }
 
+    const cierresAbiertosTyped = cierresAbiertos as CierrePeriodo[] | null;
+
     // Si no se encuentra ningún registro de periodo abierto que cubra esta fecha
-    if (!cierresAbiertos || cierresAbiertos.length === 0) {
+    if (!cierresAbiertosTyped || cierresAbiertosTyped.length === 0) {
       return { 
         valido: false, 
         mensaje: `⚠️ Periodo No Abierto para Transacciones. La fecha ${fechaContable} no cuenta con un periodo habilitado.` 
@@ -70,7 +89,8 @@ export async function validarPeriodoContable(
 
     // Si pasa ambas validaciones, el periodo está abierto y disponible
     return { valido: true };
-  } catch (err: any) {
-    return { valido: false, mensaje: `Error al validar periodo: ${err.message}` };
+  } catch (err: unknown) {
+    const mensajeError = err instanceof Error ? err.message : String(err);
+    return { valido: false, mensaje: `Error al validar periodo: ${mensajeError}` };
   }
 }

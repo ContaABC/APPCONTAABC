@@ -1,30 +1,74 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, ChangeEvent, FormEvent } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { validarPeriodoContable } from "@/lib/accounting-validations" // <--- Importación del validador de periodo
+import { validarPeriodoContable } from "@/lib/accounting-validations"
+
+// ==========================================
+// INTERFACES DE TIPADO
+// ==========================================
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+}
+
+interface Sucursal {
+  id: number | string;
+  nombre?: string;
+  empresa_id?: number | string;
+}
+
+interface Tercero {
+  id: number | string;
+  razon_social?: string;
+  primer_nombre?: string;
+  primer_apellido?: string;
+  numero_identificacion?: string;
+}
+
+interface ClaseDocumento {
+  id: number | string;
+  codigo_clase?: string;
+  nombre_clase?: string;
+}
+
+interface ConceptoAuxiliar {
+  id: number | string;
+  codigo_auxiliar?: string;
+  nombre?: string;
+  concepto_padre_id?: number | string;
+}
+
+interface LineaTransaccion {
+  id: number;
+  concepto_auxiliar_id: number | string;
+  tercero_id: number | string;
+  debito: number | string;
+  credito: number | string;
+}
 
 export default function NuevaTransaccion() {
-  const [empresas, setEmpresas] = useState([])
-  const [sucursales, setSucursales] = useState([])
-  const [terceros, setTerceros] = useState([])
-  const [clasesDoc, setClasesDoc] = useState([])
-  const [conceptosAux, setConceptosAux] = useState([])
+  const [empresas, setEmpresas] = useState<Empresa[]>([])
+  const [sucursales, setSucursales] = useState<Sucursal[]>([])
+  const [terceros, setTerceros] = useState<Tercero[]>([])
+  const [clasesDoc, setClasesDoc] = useState<ClaseDocumento[]>([])
+  const [conceptosAux, setConceptosAux] = useState<ConceptoAuxiliar[]>([])
 
-  const [empresaId, setEmpresaId] = useState('')
-  const [sucursalId, setSucursalId] = useState('')
-  const [terceroId, setTerceroId] = useState('')
-  const [claseDocId, setClaseDocId] = useState('')
-  const [numeroDocumento, setNumeroDocumento] = useState('')
-  const [glosa, setGlosa] = useState('')
-  const [fechaContable, setFechaContable] = useState('') // <--- Estado de fecha contable
-  const [cargandoConsecutivo, setCargandoConsecutivo] = useState(false)
+  const [empresaId, setEmpresaId] = useState<string>('')
+  const [sucursalId, setSucursalId] = useState<string>('')
+  const [terceroId, setTerceroId] = useState<string>('')
+  const [claseDocId, setClaseDocId] = useState<string>('')
+  const [numeroDocumento, setNumeroDocumento] = useState<string>('')
+  const [glosa, setGlosa] = useState<string>('')
+  const [fechaContable, setFechaContable] = useState<string>('')
+  const [cargandoConsecutivo, setCargandoConsecutivo] = useState<boolean>(false)
 
   // Estados para Control de Periodo Contable
-  const [errorPeriodo, setErrorPeriodo] = useState(null)
-  const [validandoPeriodo, setValidandoPeriodo] = useState(false)
+  const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null)
+  const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false)
 
-  const [lineas, setLineas] = useState([
+  const [lineas, setLineas] = useState<LineaTransaccion[]>([
     { id: 1, concepto_auxiliar_id: '', tercero_id: '', debito: 0, credito: 0 }
   ])
 
@@ -33,14 +77,35 @@ export default function NuevaTransaccion() {
     async function cargarCatalogos() {
       const { data: dataEmpresas } = await supabase.from('empresas').select('*')
       const { data: dataClases } = await supabase.from('clases_documento').select('*')
-      if (dataEmpresas) setEmpresas(dataEmpresas)
+      
+      if (dataEmpresas && dataEmpresas.length > 0) {
+        setEmpresas(dataEmpresas)
+
+        // Sincronizar con la cookie corporativa 'empresa_activa' o localStorage
+        const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'))
+        let empresaIdAUsar = String(dataEmpresas[0].id)
+
+        if (match && dataEmpresas.some((e: any) => String(e.id) === match[2])) {
+          empresaIdAUsar = match[2]
+        } else {
+          const idGuardado = localStorage.getItem('empresa_id')
+          if (idGuardado && dataEmpresas.some((e: any) => String(e.id) === idGuardado)) {
+            empresaIdAUsar = idGuardado
+          }
+        }
+
+        setEmpresaId(empresaIdAUsar)
+        localStorage.setItem('empresa_id', empresaIdAUsar)
+        document.cookie = `empresa_activa=${empresaIdAUsar}; path=/; max-age=86400; SameSite=Lax`
+      }
+
       if (dataClases) setClasesDoc(dataClases)
     }
     cargarCatalogos()
   }, [])
 
   // Función de validación de periodo en tiempo real
-  const verificarPeriodo = async (fecha) => {
+  const verificarPeriodo = async (fecha: string) => {
     if (!empresaId || !sucursalId || !fecha) {
       setErrorPeriodo(null)
       return
@@ -62,7 +127,7 @@ export default function NuevaTransaccion() {
     if (empresaId && sucursalId && fechaContable) {
       verificarPeriodo(fechaContable)
     }
-  }, [empresaId, sucursalId])
+  }, [empresaId, sucursalId, fechaContable])
 
   useEffect(() => {
     if (!empresaId) return
@@ -73,7 +138,7 @@ export default function NuevaTransaccion() {
 
       if (dataSuc) {
         setSucursales(dataSuc)
-        if (dataSuc.length > 0 && !sucursalId) setSucursalId(dataSuc[0].id)
+        if (dataSuc.length > 0 && !sucursalId) setSucursalId(String(dataSuc[0].id))
       }
       if (dataTerc) setTerceros(dataTerc)
       if (dataAux) setConceptosAux(dataAux)
@@ -91,14 +156,14 @@ export default function NuevaTransaccion() {
     async function obtenerConsecutivo() {
       setCargandoConsecutivo(true)
       const { data, error } = await supabase.rpc('obtener_siguiente_consecutivo', {
-        p_empresa_id: empresaId,
-        p_clase_doc_id: claseDocId
+        p_empresa_id: Number(empresaId),
+        p_clase_doc_id: Number(claseDocId)
       })
 
       if (error) {
         console.error('Error al generar consecutivo:', error)
       } else {
-        setNumeroDocumento(data)
+        setNumeroDocumento(data || '')
       }
       setCargandoConsecutivo(false)
     }
@@ -110,22 +175,22 @@ export default function NuevaTransaccion() {
     setLineas([...lineas, { id: Date.now(), concepto_auxiliar_id: '', tercero_id: terceroId, debito: 0, credito: 0 }])
   }
 
-  const removerLinea = (index) => {
+  const removerLinea = (index: number) => {
     if (lineas.length === 1) return
     setLineas(lineas.filter((_, i) => i !== index))
   }
 
-  const actualizarLinea = (index, campo, valor) => {
+  const actualizarLinea = (index: number, campo: keyof LineaTransaccion, valor: any) => {
     const nuevasLineas = [...lineas]
-    nuevasLineas[index][campo] = valor
+    nuevasLineas[index] = { ...nuevasLineas[index], [campo]: valor }
     setLineas(nuevasLineas)
   }
 
-  const totalDebito = lineas.reduce((acc, l) => acc + (parseFloat(l.debito) || 0), 0)
-  const totalCredito = lineas.reduce((acc, l) => acc + (parseFloat(l.credito) || 0), 0)
+  const totalDebito = lineas.reduce((acc, l) => acc + (parseFloat(String(l.debito)) || 0), 0)
+  const totalCredito = lineas.reduce((acc, l) => acc + (parseFloat(String(l.credito)) || 0), 0)
   const estaBalanceado = Math.abs(totalDebito - totalCredito) < 0.01 && totalDebito > 0
 
-  const guardarTransaccion = async (e) => {
+  const guardarTransaccion = async (e: FormEvent) => {
     e.preventDefault()
 
     if (errorPeriodo) {
@@ -143,12 +208,12 @@ export default function NuevaTransaccion() {
       const { data: tx, error: errTx } = await supabase
         .from('transacciones')
         .insert([{
-          empresa_id: empresaId,
-          sucursal_id: sucursalId,
-          clase_documento_id: claseDocId,
-          tercero_id: terceroId,
+          empresa_id: Number(empresaId),
+          sucursal_id: Number(sucursalId),
+          clase_documento_id: Number(claseDocId),
+          tercero_id: terceroId ? Number(terceroId) : null,
           numero_documento: numeroDocumento,
-          fecha_contable: fechaContable, // <--- Incluyendo la fecha contable validada
+          fecha_contable: fechaContable,
           glosa_concepto: glosa,
           estado: 'Registrado'
         }])
@@ -158,14 +223,17 @@ export default function NuevaTransaccion() {
       if (errTx) throw errTx
 
       // 2. Insertar los detalles contables
-      const detalles = lineas.map(l => ({
-        transaccion_id: tx.id,
-        concepto_niif_id: conceptosAux.find(a => a.id == l.concepto_auxiliar_id)?.concepto_padre_id,
-        concepto_auxiliar_id: l.concepto_auxiliar_id,
-        tercero_id: l.tercero_id || terceroId,
-        debito: parseFloat(l.debito) || 0,
-        credito: parseFloat(l.credito) || 0
-      }))
+      const detalles = lineas.map(l => {
+        const auxEncontrado = conceptosAux.find(a => String(a.id) === String(l.concepto_auxiliar_id))
+        return {
+          transaccion_id: tx.id,
+          concepto_niif_id: auxEncontrado?.concepto_padre_id || null,
+          concepto_auxiliar_id: Number(l.concepto_auxiliar_id),
+          tercero_id: l.tercero_id ? Number(l.tercero_id) : (terceroId ? Number(terceroId) : null),
+          debito: parseFloat(String(l.debito)) || 0,
+          credito: parseFloat(String(l.credito)) || 0
+        }
+      })
 
       const { error: errDetalle } = await supabase.from('detalle_transacciones').insert(detalles)
       if (errDetalle) throw errDetalle
@@ -176,7 +244,7 @@ export default function NuevaTransaccion() {
       setNumeroDocumento('')
       setLineas([{ id: 1, concepto_auxiliar_id: '', tercero_id: '', debito: 0, credito: 0 }])
 
-    } catch (err) {
+    } catch (err: any) {
       alert('Error al guardar la transacción: ' + err.message)
     }
   }
@@ -190,31 +258,43 @@ export default function NuevaTransaccion() {
           <legend><strong>Encabezado del Documento</strong></legend>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
             
-            <label>Empresa:
-              <select value={empresaId} onChange={e => setEmpresaId(e.target.value)} required style={{ width: '100%' }}>
+            <label>Empresa *:
+              <select 
+                value={empresaId} 
+                onChange={(e) => {
+                  const nuevoId = e.target.value
+                  setEmpresaId(nuevoId)
+                  if (nuevoId) {
+                    localStorage.setItem('empresa_id', nuevoId)
+                    document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`
+                  }
+                }} 
+                required 
+                style={{ width: '100%', cursor: 'pointer' }}
+              >
                 <option value="">Seleccione Empresa...</option>
-                {empresas.map(e => <option key={e.id} value={e.id}>{e.razon_social}</option>)}
+                {empresas.map(e => <option key={e.id} value={e.id}>{e.razon_social || e.nombre_comercial}</option>)}
               </select>
             </label>
 
-            <label>Sucursal:
-              <select value={sucursalId} onChange={e => setSucursalId(e.target.value)} required style={{ width: '100%' }}>
+            <label>Sucursal *:
+              <select value={sucursalId} onChange={e => setSucursalId(e.target.value)} required style={{ width: '100%', cursor: 'pointer' }}>
                 <option value="">Seleccione Sucursal...</option>
                 {sucursales.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
               </select>
             </label>
 
-            <label>Clase de Documento:
-              <select value={claseDocId} onChange={e => setClaseDocId(e.target.value)} required style={{ width: '100%' }}>
+            <label>Clase de Documento *:
+              <select value={claseDocId} onChange={e => setClaseDocId(e.target.value)} required style={{ width: '100%', cursor: 'pointer' }}>
                 <option value="">Seleccione Clase...</option>
                 {clasesDoc.map(c => <option key={c.id} value={c.id}>[{c.codigo_clase}] {c.nombre_clase}</option>)}
               </select>
             </label>
 
-            <label>Tercero Principal:
-              <select value={terceroId} onChange={e => setTerceroId(e.target.value)} required style={{ width: '100%' }}>
+            <label>Tercero Principal *:
+              <select value={terceroId} onChange={e => setTerceroId(e.target.value)} required style={{ width: '100%', cursor: 'pointer' }}>
                 <option value="">Seleccione Tercero...</option>
-                {terceros.map(t => <option key={t.id} value={t.id}>{t.razon_social || `${t.primer_nombre} ${t.primer_apellido}`}</option>)}
+                {terceros.map(t => <option key={t.id} value={t.id}>{t.razon_social || `${t.primer_nombre || ''} ${t.primer_apellido || ''}`}</option>)}
               </select>
             </label>
 
@@ -233,7 +313,7 @@ export default function NuevaTransaccion() {
               <input 
                 type="date" 
                 value={fechaContable} 
-                onChange={e => {
+                onChange={(e) => {
                   setFechaContable(e.target.value)
                   if (errorPeriodo) setErrorPeriodo(null)
                 }} 
@@ -245,7 +325,7 @@ export default function NuevaTransaccion() {
               {errorPeriodo && <div style={{ color: 'red', fontSize: '10px', fontWeight: 'bold', marginTop: '2px' }}>⚠️ {errorPeriodo}</div>}
             </label>
 
-            <label style={{ gridColumn: 'span 3' }}>Glosa / Concepto:
+            <label style={{ gridColumn: 'span 3' }}>Glosa / Concepto *:
               <input type="text" value={glosa} onChange={e => setGlosa(e.target.value)} placeholder="Descripción del asiento" required style={{ width: '100%' }} />
             </label>
           </div>
@@ -272,20 +352,20 @@ export default function NuevaTransaccion() {
                     <select 
                       value={linea.concepto_auxiliar_id} 
                       onChange={e => actualizarLinea(idx, 'concepto_auxiliar_id', e.target.value)} 
-                      required style={{ width: '100%' }}
+                      required style={{ width: '100%', cursor: 'pointer' }}
                     >
                       <option value="">Seleccione Auxiliar / ABC...</option>
-                      {conceptosAux.map(a => <option key={a.id} value={a.id}>{a.codigo_auxiliar} - {a.nombre}</option>)}
+                      {conceptosAux.map(a => <option key={a.id} value={a.id}>[{a.codigo_auxiliar}] {a.nombre}</option>)}
                     </select>
                   </td>
                   <td>
                     <select 
                       value={linea.tercero_id || terceroId} 
                       onChange={e => actualizarLinea(idx, 'tercero_id', e.target.value)} 
-                      style={{ width: '100%' }}
+                      style={{ width: '100%', cursor: 'pointer' }}
                     >
                       <option value="">Usar Tercero Principal</option>
-                      {terceros.map(t => <option key={t.id} value={t.id}>{t.razon_social || `${t.primer_nombre} ${t.primer_apellido}`}</option>)}
+                      {terceros.map(t => <option key={t.id} value={t.id}>{t.razon_social || `${t.primer_nombre || ''} ${t.primer_apellido || ''}`}</option>)}
                     </select>
                   </td>
                   <td>
@@ -307,14 +387,14 @@ export default function NuevaTransaccion() {
                     />
                   </td>
                   <td>
-                    <button type="button" onClick={() => removerLinea(idx)} style={{ color: 'red' }}>✕</button>
+                    <button type="button" onClick={() => removerLinea(idx)} style={{ color: 'red', cursor: 'pointer' }}>✕</button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
 
-          <button type="button" onClick={agregarLinea} style={{ marginTop: '1rem', padding: '0.4rem 0.8rem' }}>
+          <button type="button" onClick={agregarLinea} style={{ marginTop: '1rem', padding: '0.4rem 0.8rem', cursor: 'pointer' }}>
             + Agregar Línea
           </button>
         </fieldset>

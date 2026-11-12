@@ -1,5 +1,6 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
@@ -15,6 +16,13 @@ function getSupabaseAdmin() {
   });
 }
 
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
+}
+
 /**
  * Obtener Empresas
  */
@@ -28,18 +36,19 @@ export async function obtenerEmpresas() {
 
     if (error) throw new Error(error.message);
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, data: [], error: errorMsg };
   }
 }
 
 /**
  * Obtener Sucursales por empresa_id
  */
-export async function obtenerSucursales(empresaId: number | string) {
+export async function obtenerSucursales(empresaId?: number | string | null) {
   try {
     const supabaseAdmin = getSupabaseAdmin();
-    const parsedEmpresaId = Number(empresaId);
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
     if (!parsedEmpresaId) return { success: true, data: [], error: null };
 
     const { data, error } = await supabaseAdmin
@@ -50,8 +59,9 @@ export async function obtenerSucursales(empresaId: number | string) {
 
     if (error) throw new Error(error.message);
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, data: [], error: errorMsg };
   }
 }
 
@@ -59,12 +69,12 @@ export async function obtenerSucursales(empresaId: number | string) {
  * Obtiene las facturas EMITIDAS calculando el estado_pago a partir de total_factura, total_abonos y saldo_pendiente
  */
 export async function obtenerFacturasEmitidas(
-  empresaId: number | string,
-  sucursalId?: number | string
+  empresaId?: number | string | null,
+  sucursalId?: number | string | null
 ) {
   try {
     const supabaseAdmin = getSupabaseAdmin();
-    const parsedEmpresaId = Number(empresaId);
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
 
     if (!parsedEmpresaId) {
       return {
@@ -131,16 +141,17 @@ export async function obtenerFacturasEmitidas(
         total_abonos: totalAbonos,
         saldo_pendiente: saldoPendiente,
         estado_pago: estadoPago,
-        cufe: f.cufe || f.cufe || null,
+        cufe: f.cufe || null,
       };
     });
 
     return { success: true, data: dataNormalizada, error: null };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : "Error al obtener las facturas emitidas.";
     return {
       success: false,
       data: [],
-      error: err.message || "Error al obtener las facturas emitidas.",
+      error: errorMsg,
     };
   }
 }
@@ -174,11 +185,12 @@ export async function obtenerDetalleFacturaEmitida(facturaId: string | number) {
     if (error) throw new Error(error.message);
 
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : "Error al consultar el detalle de la factura.";
     return {
       success: false,
       data: [],
-      error: err.message || "Error al consultar el detalle de la factura.",
+      error: errorMsg,
     };
   }
 }
@@ -249,11 +261,12 @@ export async function obtenerAsientoPorFactura(facturaId: string | number) {
       },
       error: null,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : "Error al consultar el asiento contable.";
     return {
       success: false,
       data: null,
-      error: err.message || "Error al consultar el asiento contable.",
+      error: errorMsg,
     };
   }
 }

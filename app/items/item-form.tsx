@@ -38,6 +38,9 @@ export interface ItemFacturacion {
 
 interface ItemFormProps {
   empresasIniciales: Empresa[];
+  empresaActivaCookie?: string;
+  sucursalesIniciales?: Sucursal[];
+  itemsIniciales?: ItemFacturacion[];
 }
 
 const INITIAL_FORM = {
@@ -51,15 +54,22 @@ const INITIAL_FORM = {
   porcentaje_descuento_max: "0",
 };
 
-export default function ItemForm({ empresasIniciales }: ItemFormProps) {
+export default function ItemForm({
+  empresasIniciales,
+  empresaActivaCookie,
+  sucursalesIniciales = [],
+  itemsIniciales = [],
+}: ItemFormProps) {
   // Evitar error de Hidratación en Next.js
   const [isMounted, setIsMounted] = useState(false);
 
-  // Filtros contextuales
-  const [empresaId, setEmpresaId] = useState<string>("");
-  const [sucursalId, setSucursalId] = useState<string>("");
-  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
-  const [items, setItems] = useState<ItemFacturacion[]>([]);
+  // Filtros contextuales (inicializados con la cookie corporativa si existe)
+  const [empresaId, setEmpresaId] = useState<string>(empresaActivaCookie || "");
+  const [sucursalId, setSucursalId] = useState<string>(
+    sucursalesIniciales.length > 0 ? String(sucursalesIniciales[0].id) : ""
+  );
+  const [sucursales, setSucursales] = useState<Sucursal[]>(sucursalesIniciales);
+  const [items, setItems] = useState<ItemFacturacion[]>(itemsIniciales);
 
   // Estados UI y Subformulario
   const [loading, setLoading] = useState(false);
@@ -75,11 +85,12 @@ export default function ItemForm({ empresasIniciales }: ItemFormProps) {
     setIsMounted(true);
   }, []);
 
-  // 1. Cargar sucursales cuando cambia Empresa
+  // 1. Cargar sucursales cuando cambia Empresa (siempre que no sea el valor inicial precargado)
   useEffect(() => {
     if (!isMounted) return;
 
     async function cargarSucursales() {
+      // Si cambiamos manualmente de empresa, reseteamos la sucursal y los ítems
       setSucursalId("");
       setItems([]);
       if (!empresaId) {
@@ -94,19 +105,26 @@ export default function ItemForm({ empresasIniciales }: ItemFormProps) {
       }
     }
 
-    cargarSucursales();
-  }, [empresaId, isMounted]);
+    // Evitamos recargar en el primer render si ya vienen precargadas de la cookie
+    if (empresaId !== empresaActivaCookie) {
+      cargarSucursales();
+    }
+  }, [empresaId, isMounted, empresaActivaCookie]);
 
   // 2. Cargar ítems cuando cambia Empresa y Sucursal
   useEffect(() => {
     if (!isMounted) return;
 
     if (empresaId && sucursalId) {
+      // Si coincide con los valores iniciales de la cookie, no duplicamos la carga en el mount
+      if (empresaId === empresaActivaCookie && sucursalId === String(sucursalesIniciales[0]?.id || "")) {
+        return;
+      }
       cargarItems();
     } else {
       setItems([]);
     }
-  }, [empresaId, sucursalId, isMounted]);
+  }, [empresaId, sucursalId, isMounted, empresaActivaCookie, sucursalesIniciales]);
 
   async function cargarItems() {
     if (!empresaId || !sucursalId) return;

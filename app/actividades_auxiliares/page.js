@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useEmpresaContext } from '@/app/context/EmpresaContext'
 import {
   Plus,
   Edit2,
@@ -21,14 +22,21 @@ import {
 export default function ActividadesAuxiliaresPage() {
   const [isMounted, setIsMounted] = useState(false)
 
+  // Consumimos el contexto global de empresas, sucursales y bloqueos automáticos
+  const {
+    empresasPermitidas,
+    empresaActiva,
+    setEmpresaActiva,
+    bloquearSelectores,
+    cargandoContexto
+  } = useEmpresaContext()
+
   // Estados principales
-  const [empresas, setEmpresas] = useState([])
   const [empresaSeleccionada, setEmpresaSeleccionada] = useState('')
   const [actividades, setActividades] = useState([])
   const [actividadesAbc, setActividadesAbc] = useState([])
 
   // Estados de carga e interfaz
-  const [loadingEmpresas, setLoadingEmpresas] = useState(true)
   const [loadingTabla, setLoadingTabla] = useState(false)
   const [guardando, setGuardando] = useState(false)
   const [eliminandoId, setEliminandoId] = useState(null)
@@ -77,30 +85,20 @@ export default function ActividadesAuxiliaresPage() {
     }
   }, [notificacion.visible])
 
-  // Cargar Empresas
-  const cargarEmpresas = useCallback(async () => {
-    setLoadingEmpresas(true)
-    try {
-      const res = await fetch('/api/actividades_auxiliares?accion=listar_empresas')
-      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`)
-
-      const json = await res.json()
-      if (json.exito) {
-        const listaEmpresas = json.datos || []
-        setEmpresas(listaEmpresas)
-        if (listaEmpresas.length > 0) {
-          setEmpresaSeleccionada(String(listaEmpresas[0].id))
-        }
-      } else {
-        mostrarNotificacion('error', json.mensaje || 'Error al obtener empresas')
-      }
-    } catch (error) {
-      console.error('Error al cargar empresas:', error)
-      mostrarNotificacion('error', 'Error de conexión al cargar empresas')
-    } finally {
-      setLoadingEmpresas(false)
+  // Sincronizar la empresa activa del contexto con la local de la página
+  useEffect(() => {
+    if (empresaActiva) {
+      setEmpresaSeleccionada(empresaActiva)
+    } else if (empresasPermitidas.length > 0 && !empresaSeleccionada) {
+      const primerId = String(empresasPermitidas[0].id || empresasPermitidas[0].empresa_id)
+      setEmpresaSeleccionada(primerId)
     }
-  }, [mostrarNotificacion])
+  }, [empresaActiva, empresasPermitidas])
+
+  const handleCambioEmpresa = (nuevaEmpresaId) => {
+    setEmpresaSeleccionada(nuevaEmpresaId)
+    setEmpresaActiva(nuevaEmpresaId) // Actualiza el contexto global y la cookie de sesión
+  }
 
   // Cargar Actividades Auxiliares y Actividades ABC de la empresa
   const cargarDatosEmpresa = useCallback(async (empId) => {
@@ -125,10 +123,6 @@ export default function ActividadesAuxiliaresPage() {
       setLoadingTabla(false)
     }
   }, [mostrarNotificacion])
-
-  useEffect(() => {
-    cargarEmpresas()
-  }, [cargarEmpresas])
 
   useEffect(() => {
     if (empresaSeleccionada) {
@@ -222,7 +216,7 @@ export default function ActividadesAuxiliaresPage() {
 
     setEliminandoId(item.id)
     try {
-      const res = await fetch(`/api/actividades_auxiliares?id=${item.id}`, {
+      const res = await fetch(`/api/actividades_auxiliares?id=${item.id}&empresa_id=${empresaSeleccionada}`, {
         method: 'DELETE'
       })
       const json = await res.json()
@@ -337,7 +331,7 @@ export default function ActividadesAuxiliaresPage() {
     })
   }, [actividades, filtroBusqueda])
 
-  if (!isMounted) return null
+  if (!isMounted || cargandoContexto) return <div className="p-12 text-center text-sm text-slate-500">Cargando módulo seguro...</div>
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6 min-h-screen bg-slate-50/50">
@@ -384,18 +378,22 @@ export default function ActividadesAuxiliaresPage() {
             <Building2 className="w-4 h-4 text-slate-400" />
             <select
               value={empresaSeleccionada}
-              onChange={(e) => setEmpresaSeleccionada(e.target.value)}
-              disabled={loadingEmpresas}
-              className="bg-transparent text-sm font-semibold text-slate-700 outline-none cursor-pointer pr-2"
+              onChange={(e) => handleCambioEmpresa(e.target.value)}
+              disabled={bloquearSelectores || empresasPermitidas.length === 0}
+              className="bg-transparent text-sm font-semibold text-slate-700 outline-none cursor-pointer pr-2 disabled:opacity-60"
             >
-              {loadingEmpresas ? (
-                <option value="">Cargando empresas...</option>
+              {empresasPermitidas.length === 0 ? (
+                <option value="">Sin empresas asignadas</option>
               ) : (
-                empresas.map((emp) => (
-                  <option key={emp.id} value={String(emp.id)}>
-                    {emp.razon_social || emp.nombre_comercial}
-                  </option>
-                ))
+                empresasPermitidas.map((emp) => {
+                  const id = String(emp.id || emp.empresa_id)
+                  const nombre = emp.razon_social || emp.nombre_comercial || emp.nombre
+                  return (
+                    <option key={id} value={id}>
+                      {nombre}
+                    </option>
+                  )
+                })
               )}
             </select>
           </div>
@@ -412,7 +410,7 @@ export default function ActividadesAuxiliaresPage() {
 
           <button
             onClick={abrirModalCrear}
-            disabled={!empresaSeleccionada}
+            disabled={!empresaSeleccionada || empresasPermitidas.length === 0}
             className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition"
           >
             <Plus className="w-4 h-4" />
@@ -420,6 +418,12 @@ export default function ActividadesAuxiliaresPage() {
           </button>
         </div>
       </div>
+
+      {bloquearSelectores && (
+        <div className="text-xs text-amber-600 font-medium bg-amber-50 border border-amber-200 p-3 rounded-xl">
+          🔒 El selector de empresa se encuentra bloqueado automáticamente por contar con una única asignación autorizada.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="relative">

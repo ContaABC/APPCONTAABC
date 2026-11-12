@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
-import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
+import { validarPeriodoContable } from "@/lib/accounting-validations";
 import {
   obtenerEmpresas,
   obtenerSucursales,
@@ -57,7 +57,7 @@ export default function NuevoCobroPage() {
   const [guardando, setGuardando] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Estados para Control de Periodo Contable (NUEVO)
+  // Estados para Control de Periodo Contable
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
@@ -115,7 +115,7 @@ export default function NuevoCobroPage() {
     setIsMounted(true);
   }, []);
 
-  // Función de validación de periodo en tiempo real (NUEVO)
+  // Validación de periodo en tiempo real
   const verificarPeriodo = async (fecha: string) => {
     if (!empresaId || !sucursalId || !fecha) {
       setErrorPeriodo(null);
@@ -133,13 +133,13 @@ export default function NuevoCobroPage() {
     setValidandoPeriodo(false);
   };
 
-  // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha contable cargada
   useEffect(() => {
     if (empresaId && sucursalId && fechaContable) {
       verificarPeriodo(fechaContable);
     }
   }, [empresaId, sucursalId]);
 
+  // Cargar Empresas y sincronizar con Cookie / LocalStorage corporativo
   useEffect(() => {
     if (!isMounted) return;
     async function initEmpresas() {
@@ -147,7 +147,21 @@ export default function NuevoCobroPage() {
         const res = await obtenerEmpresas();
         if (res && res.success && res.data && res.data.length > 0) {
           setEmpresas(res.data);
-          setEmpresaId(res.data[0].id);
+
+          const cookieEmpresa = document.cookie
+            .split("; ")
+            .find((row) => row.startsWith("empresa_activa="));
+          const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split("=")[1] : null;
+          const empresaGuardadaLocal = localStorage.getItem("empresa_activa");
+          
+          const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal;
+          const existeEmpresa = res.data.some((emp: any) => String(emp.id) === String(empresaIdParaSeleccionar));
+
+          if (existeEmpresa && empresaIdParaSeleccionar) {
+            setEmpresaId(empresaIdParaSeleccionar);
+          } else {
+            setEmpresaId(res.data[0].id);
+          }
         } else {
           setErrorMsg(res?.error || "No se encontraron empresas registradas.");
         }
@@ -157,6 +171,14 @@ export default function NuevoCobroPage() {
     }
     initEmpresas();
   }, [isMounted]);
+
+  // Persistir cambios de empresaId
+  useEffect(() => {
+    if (empresaId) {
+      localStorage.setItem("empresa_activa", String(empresaId));
+      document.cookie = `empresa_activa=${empresaId}; path=/; max-age=86400; SameSite=Lax`;
+    }
+  }, [empresaId]);
 
   useEffect(() => {
     if (empresaId === "" || !isMounted) return;
@@ -728,7 +750,6 @@ export default function NuevoCobroPage() {
     e.preventDefault();
     setErrorMsg(null);
 
-    // Doble control de seguridad para impedir envíos si el periodo tiene errores
     if (errorPeriodo) {
       setErrorMsg("No se puede procesar el documento porque el periodo contable no es válido.");
       return;
@@ -857,7 +878,6 @@ export default function NuevoCobroPage() {
         router.refresh();
 
       } else {
-        // MODO INDIVIDUAL
         if (!clienteSeleccionadoNit) {
           setErrorMsg("Debe seleccionar un cliente.");
           setGuardando(false);
@@ -1122,7 +1142,7 @@ export default function NuevoCobroPage() {
                   setFechaContable(nuevaFecha);
                   if (errorPeriodo) setErrorPeriodo(null);
                 }}
-                onBlur={() => verificarPeriodo(fechaContable)} // <--- Validación al perder el foco
+                onBlur={() => verificarPeriodo(fechaContable)}
                 className="w-full border border-slate-300 rounded px-2 py-1 text-slate-800 outline-none focus:ring-1 focus:ring-blue-500"
                 required
               />
@@ -1474,7 +1494,6 @@ export default function NuevoCobroPage() {
           </div>
         )}
 
-        {/* MODO INDIVIDUAL */}
         {modo === "INDIVIDUAL" && (
           <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm space-y-2">
             <div className="flex items-center justify-between border-b pb-1">

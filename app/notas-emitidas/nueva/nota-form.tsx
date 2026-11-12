@@ -10,7 +10,7 @@ import {
   registrarNotaEmitida,
   ItemNotaInput,
 } from "./actions";
-import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar validación centralizada
+import { validarPeriodoContable } from "@/lib/accounting-validations";
 
 interface ItemFacturaOriginal {
   item_id?: number | string | null;
@@ -26,10 +26,53 @@ interface ItemFacturaOriginal {
   valorUnitarioNota: number;
 }
 
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nombre?: string;
+}
+
+interface Sucursal {
+  id: number | string;
+  empresa_id: number | string;
+  nombre_sucursal?: string;
+  nombre?: string;
+}
+
+interface ClaseDocumento {
+  id: number | string;
+  empresa_id: number | string;
+  codigo_clase?: string;
+  nombre_clase?: string;
+  nombre?: string;
+}
+
+interface Tercero {
+  id: number | string;
+  numero_identificacion?: string;
+  nit?: string;
+  razon_social?: string;
+  nombre_comercial?: string;
+}
+
+interface FacturaEmitida {
+  id: number | string;
+  numero_factura: string;
+  cliente_id: number | string;
+  cliente_nit: string;
+  cliente_nombre: string;
+  subtotal?: number;
+  iva?: number;
+  total_factura?: number;
+  saldo_pendiente?: number;
+  estado_factura?: string;
+}
+
 interface NotaEmitidaFormProps {
-  empresas: any[];
-  sucursales: any[];
-  clasesDocumento: any[];
+  empresas: Empresa[];
+  sucursales: Sucursal[];
+  clasesDocumento: ClaseDocumento[];
   empresaIdInicial?: string;
   sucursalIdInicial?: string;
 }
@@ -47,20 +90,19 @@ export default function NotaEmitidaForm({
   const [sucursalId, setSucursalId] = useState<string>(String(sucursalIdInicial || ""));
   const [claseDocId, setClaseDocId] = useState<string>("");
 
-  const [clientes, setClientes] = useState<any[]>([]);
+  const [clientes, setClientes] = useState<Tercero[]>([]);
   const [clienteIdSeleccionado, setClienteIdSeleccionado] = useState<string>("");
-  const [facturas, setFacturas] = useState<any[]>([]);
-  const [facturaSeleccionada, setFacturaSeleccionada] = useState<any | null>(null);
+  const [facturas, setFacturas] = useState<FacturaEmitida[]>([]);
+  const [facturaSeleccionada, setFacturaSeleccionada] = useState<FacturaEmitida | null>(null);
 
   const [items, setItems] = useState<ItemFacturaOriginal[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
 
   const [tipoNota, setTipoNota] = useState<"CREDITO" | "DEBITO">("CREDITO");
   const [fechaEmision, setFechaEmision] = useState("");
-  const [fechaContable, setFechaContable] = useState(""); // <--- 2. Añadido estado para Fecha Contable
+  const [fechaContable, setFechaContable] = useState("");
   const [conceptoDian, setConceptoDian] = useState("1");
 
-  // Estados para Control de Periodo Contable (NUEVO)
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
@@ -73,10 +115,19 @@ export default function NotaEmitidaForm({
     setIsMounted(true);
     const hoyStr = new Date().toISOString().split("T")[0];
     setFechaEmision(hoyStr);
-    setFechaContable(hoyStr); // <--- Inicializar fecha contable con el día de hoy
-  }, []);
+    setFechaContable(hoyStr);
 
-  // Función de validación de periodo en tiempo real (NUEVO)
+    // Leer cookie corporativa empresa_activa si no venía prop inicial
+    if (!empresaId) {
+      const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'));
+      if (match) {
+        setEmpresaId(match[2]);
+      } else if (empresas.length > 0) {
+        setEmpresaId(String(empresas[0].id));
+      }
+    }
+  }, [empresas, empresaId]);
+
   const verificarPeriodo = async (fecha: string) => {
     if (!empresaId || !sucursalId || !fecha) {
       setErrorPeriodo(null);
@@ -94,12 +145,11 @@ export default function NotaEmitidaForm({
     setValidandoPeriodo(false);
   };
 
-  // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha contable cargada
   useEffect(() => {
     if (empresaId && sucursalId && fechaContable) {
       verificarPeriodo(fechaContable);
     }
-  }, [empresaId, sucursalId]);
+  }, [empresaId, sucursalId, fechaContable]);
 
   const sucursalesFiltradas = useMemo(() => {
     if (!empresaId) return [];
@@ -121,6 +171,11 @@ export default function NotaEmitidaForm({
     setFacturaSeleccionada(null);
     setItems([]);
     setNotaCreadaExito(null);
+
+    if (nuevaEmpresaId) {
+      localStorage.setItem("empresa_activa", nuevaEmpresaId);
+      document.cookie = `empresa_activa=${nuevaEmpresaId}; path=/; max-age=86400; SameSite=Lax`;
+    }
   };
 
   useEffect(() => {
@@ -152,9 +207,9 @@ export default function NotaEmitidaForm({
       const res = await obtenerFacturasParaNota(empresaId, sucursalId);
       if (res.success) {
         const facturasValidas = (res.data || []).filter(
-          (f: any) =>
+          (f: FacturaEmitida) =>
             String(f.estado_factura || "").toLowerCase() === "activa" &&
-            Number(f.saldo_pendiente || f.total_factura || 0) > 0
+            Number(f.saldo_pendiente ?? f.total_factura ?? 0) > 0
         );
         setFacturas(facturasValidas);
       }
@@ -210,10 +265,21 @@ export default function NotaEmitidaForm({
     }
 
     setLoadingItems(true);
-    const res = await obtenerItemsFacturaEmitida(fact.id);
+    const res = await obtenerItemsFacturaEmitida(String(fact.id));
 
     if (res.success && res.data && res.data.length > 0) {
-      const itemsMapeados: ItemFacturaOriginal[] = res.data.map((i: any) => {
+      interface DetalleFacturaEmitida {
+        item_id?: number | string | null;
+        codigo_ref?: string;
+        nombre_item?: string;
+        cantidad?: number;
+        valor_unitario?: number;
+        subtotal?: number;
+        porcentaje_iva?: number;
+        valor_iva?: number;
+      }
+
+      const itemsMapeados: ItemFacturaOriginal[] = (res.data as DetalleFacturaEmitida[]).map((i) => {
         const cant = Number(i.cantidad) || 1;
         const vUnit = Number(i.valor_unitario) || 0;
         const sub = Number(i.subtotal) || cant * vUnit;
@@ -336,7 +402,6 @@ export default function NotaEmitidaForm({
     e.preventDefault();
     if (!facturaSeleccionada) return;
 
-    // Doble control de seguridad ante periodos cerrados o inválidos
     if (errorPeriodo) {
       setMsg({
         tipo: "error",
@@ -371,14 +436,13 @@ export default function NotaEmitidaForm({
       empresa_id: Number(empresaId),
       sucursal_id: Number(sucursalId),
       clase_documento_id: Number(claseDocId),
-      factura_emitida_id: facturaSeleccionada.id,
+      factura_emitida_id: String(facturaSeleccionada.id),
       cliente_id: Number(facturaSeleccionada.cliente_id),
       cliente_nit: facturaSeleccionada.cliente_nit,
       cliente_nombre: facturaSeleccionada.cliente_nombre,
       tipo_nota: tipoNota,
       concepto_dian: conceptoDian,
       fecha_emision: fechaEmision,
-      // fecha_contable: fechaContable, // <--- Incluir en el payload de tu Server Action si lo requiere
       items: itemsPayload,
     });
 
@@ -415,7 +479,7 @@ export default function NotaEmitidaForm({
             <select
               value={tipoNota}
               onChange={(e) => {
-                setTipoNota(e.target.value as any);
+                setTipoNota(e.target.value as "CREDITO" | "DEBITO");
                 setConceptoDian("1");
                 setNotaCreadaExito(null);
               }}
@@ -467,7 +531,6 @@ export default function NotaEmitidaForm({
         </div>
       )}
 
-      {/* Selectores principales */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <label className="block text-xs font-bold text-slate-600 mb-1">Empresa *</label>
@@ -527,7 +590,6 @@ export default function NotaEmitidaForm({
         </div>
       </div>
 
-      {/* Concepto DIAN, Cliente, Factura y Fecha Contable */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
         <div>
           <label className="block text-xs font-bold text-slate-600 mb-1">Concepto DIAN *</label>
@@ -580,7 +642,7 @@ export default function NotaEmitidaForm({
         <div>
           <label className="block text-xs font-bold text-slate-600 mb-1">Factura Emitida Afectada *</label>
           <select
-            value={facturaSeleccionada?.id || ""}
+            value={facturaSeleccionada?.id ? String(facturaSeleccionada.id) : ""}
             onChange={(e) => {
               handleFacturaChange(e.target.value);
               setNotaCreadaExito(null);
@@ -604,7 +666,6 @@ export default function NotaEmitidaForm({
           </select>
         </div>
 
-        {/* <--- 3. Input de Fecha Contable con validación en tiempo real (onBlur) */}
         <div>
           <label className="block text-xs font-bold text-slate-600 mb-1">Fecha Contable *</label>
           <input
@@ -629,7 +690,6 @@ export default function NotaEmitidaForm({
         </div>
       </div>
 
-      {/* Ítems Facturados y Totales */}
       {facturaSeleccionada && (
         <div className="space-y-4 pt-4 border-t">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
@@ -766,7 +826,6 @@ export default function NotaEmitidaForm({
       )}
 
       <div className="pt-4 flex justify-end">
-        {/* <--- 4. Bloqueo preventivo en el botón si el periodo no es válido */}
         <button
           type="submit"
           disabled={loading || !facturaSeleccionada || items.length === 0 || Boolean(errorPeriodo) || (msg?.tipo === "error" && msg.texto.includes("cuenta con"))}

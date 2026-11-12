@@ -1,10 +1,11 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error(
@@ -15,6 +16,13 @@ function getSupabaseAdmin() {
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
+
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
 }
 
 function normalizarNit(nit?: string): string {
@@ -36,7 +44,7 @@ function parseNumericId(id: string | number | undefined | null): number {
 /**
  * Parsea un valor numérico/moneda de forma segura.
  */
-function parseSafeNumber(val: any): number {
+function parseSafeNumber(val: unknown): number {
   if (val === null || val === undefined) return 0;
   if (typeof val === "number") return isNaN(val) ? 0 : val;
 
@@ -80,7 +88,7 @@ export interface DatosXmlItem {
   contenidoXml?: string; // Raw text del XML
   pdfUrl?: string; // Opcional
   
-  // Nuevos campos opcionales para ajuste manual o masivo de retenciones
+  // Ajuste manual o masivo de retenciones
   retencion_renta_id?: string | number | null;
   retencion_iva_id?: string | number | null;
   retencion_ica_id?: string | number | null;
@@ -99,12 +107,12 @@ export interface ResultadoFacturaItem {
 
 export async function procesarFacturaXmlAdmin(
   datosXml: DatosXmlItem,
-  empresaId: string | number,
-  sucursalId: string | number,
-  claseDocumentoId: string | number,
-  contenidoXml?: string, // Contenido raw en texto del archivo XML
-  pdfUrl?: string, // URL del archivo PDF si se provee
-  fechaContabilidad?: string, // Fecha de contabilidad seleccionada por el usuario en pantalla
+  empresaId?: string | number | null,
+  sucursalId?: string | number | null,
+  claseDocumentoId?: string | number | null,
+  contenidoXml?: string,
+  pdfUrl?: string,
+  fechaContabilidad?: string,
   retencionesManuales?: {
     retencion_renta_id?: string | number | null;
     retencion_iva_id?: string | number | null;
@@ -114,7 +122,7 @@ export async function procesarFacturaXmlAdmin(
   try {
     const supabaseAdmin = getSupabaseAdmin();
 
-    const parsedEmpresaId = parseNumericId(empresaId);
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
     const parsedSucursalId = parseNumericId(sucursalId);
     const parsedClaseDocId = parseNumericId(claseDocumentoId);
 
@@ -191,16 +199,16 @@ export async function procesarFacturaXmlAdmin(
       );
     }
 
-    // Resolver Retenciones: Prioridad -> 1. Ajuste Manual/Pantalla, 2. Propiedad del Objeto XML, 3. Configuración por defecto del Tercero
-  const rentaIdFinal = parseNumericId(
-    retencionesManuales?.retencion_renta_id ?? datosXml.retencion_renta_id ?? terceroEncontrado.retencion_renta_id
-  );
-  const ivaIdFinal = parseNumericId(
-    retencionesManuales?.retencion_iva_id ?? datosXml.retencion_iva_id ?? terceroEncontrado.retencion_iva_id
-  );
-  const icaIdFinal = parseNumericId(
-    retencionesManuales?.retencion_ica_id ?? datosXml.retencion_ica_id ?? terceroEncontrado.retencion_ica_id
-  );
+    // Resolver Retenciones: Prioridad -> 1. Ajuste Manual, 2. Objeto XML, 3. Configuración del Tercero
+    const rentaIdFinal = parseNumericId(
+      retencionesManuales?.retencion_renta_id ?? datosXml.retencion_renta_id ?? terceroEncontrado.retencion_renta_id
+    );
+    const ivaIdFinal = parseNumericId(
+      retencionesManuales?.retencion_iva_id ?? datosXml.retencion_iva_id ?? terceroEncontrado.retencion_iva_id
+    );
+    const icaIdFinal = parseNumericId(
+      retencionesManuales?.retencion_ica_id ?? datosXml.retencion_ica_id ?? terceroEncontrado.retencion_ica_id
+    );
 
     // 3. Obtener el prefijo/sigla de la Clase de Documento
     const { data: claseDocData } = await supabaseAdmin
@@ -283,13 +291,10 @@ export async function procesarFacturaXmlAdmin(
       p_xml_url: xmlUrlStored,
       p_pdf_url: pdfUrl || datosXml.pdfUrl ? String(pdfUrl || datosXml.pdfUrl).trim() : null,
       
-      // Nuevos parámetros de retención enviados a la base de datos
       p_retencion_renta_id: rentaIdFinal > 0 ? rentaIdFinal : null,
       p_retencion_iva_id: ivaIdFinal > 0 ? ivaIdFinal : null,
       p_retencion_ica_id: icaIdFinal > 0 ? icaIdFinal : null,
     };
-
-    console.log("PAYLOAD SANITIZADO RPC CON RETENCIONES AUTOMÁTICAS Y MANUALES:", rpcPayload);
 
     // 7. Inserción Atómica llamando a la RPC
     const { data: facturaId, error: errorRpc } = await supabaseAdmin.rpc(
@@ -315,12 +320,13 @@ export async function procesarFacturaXmlAdmin(
       },
       error: null,
     };
-  } catch (err: any) {
-    console.error("Error en procesarFacturaXmlAdmin:", err);
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al procesar la factura.";
+    console.error("Error en procesarFacturaXmlAdmin:", mensaje);
     return {
       success: false,
       data: null,
-      error: err.message || "Error al procesar la factura.",
+      error: mensaje,
     };
   }
 }
@@ -331,9 +337,9 @@ export async function procesarFacturaXmlAdmin(
 
 export async function procesarFacturasXmlMasivoAdmin(
   listaXml: DatosXmlItem[],
-  empresaId: string | number,
-  sucursalId: string | number,
-  claseDocumentoId: string | number,
+  empresaId?: string | number | null,
+  sucursalId?: string | number | null,
+  claseDocumentoId?: string | number | null,
   fechaContabilidad?: string
 ) {
   if (!listaXml || listaXml.length === 0) {
@@ -349,13 +355,10 @@ export async function procesarFacturasXmlMasivoAdmin(
   let exitososCount = 0;
   let fallidosCount = 0;
 
-  // Iterar y procesar cada factura reutilizando de manera segura la función individual
   for (const itemXml of listaXml) {
     const numFactura = itemXml.numero_factura || "SIN_NUMERO";
 
     try {
-      // Al ser masivo, si el objeto itemXml trae explícitamente retenciones (ej. desde un Excel cargado), 
-      // se le pasarán automáticamente a la función individual. De lo contrario, heredará los del tercero.
       const res = await procesarFacturaXmlAdmin(
         itemXml,
         empresaId,
@@ -387,12 +390,13 @@ export async function procesarFacturasXmlMasivoAdmin(
           error: res.error,
         });
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       fallidosCount++;
+      const mensaje = err instanceof Error ? err.message : "Error desconocido durante la ejecución.";
       detalleResultados.push({
         numeroFactura: numFactura,
         exito: false,
-        error: err.message || "Error desconocido durante la ejecución.",
+        error: mensaje,
       });
     }
   }

@@ -31,6 +31,11 @@ export default function ConsultarNotasEmitidasPage() {
 
   useEffect(() => {
     setIsMounted(true);
+    // Leer cookie inicial de empresa activa si existe en el navegador
+    const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'));
+    if (match) {
+      setEmpresaId(match[2]);
+    }
   }, []);
 
   useEffect(() => {
@@ -39,7 +44,10 @@ export default function ConsultarNotasEmitidasPage() {
       const res = await obtenerEmpresas();
       if (res.success && res.data.length > 0) {
         setEmpresas(res.data);
-        setEmpresaId(String(res.data[0].id));
+        // Si no había cookie activa, seleccionamos la primera por defecto
+        if (!empresaId) {
+          setEmpresaId(String(res.data[0].id));
+        }
       }
     }
     cargarEmpresasAction();
@@ -62,6 +70,16 @@ export default function ConsultarNotasEmitidasPage() {
       cargarNotas();
     }
   }, [empresaId, sucursalId, isMounted]);
+
+  // Manejar cambio de empresa sincronizando Cookie y LocalStorage
+  const handleCambioEmpresa = (nuevoEmpresaId: string) => {
+    setEmpresaId(nuevoEmpresaId);
+    setSucursalId("");
+    if (nuevoEmpresaId) {
+      localStorage.setItem("empresa_activa", nuevoEmpresaId);
+      document.cookie = `empresa_activa=${nuevoEmpresaId}; path=/; max-age=86400; SameSite=Lax`;
+    }
+  };
 
   async function cargarNotas() {
     if (!empresaId) return;
@@ -90,7 +108,6 @@ export default function ConsultarNotasEmitidasPage() {
     setLoadingAsiento(false);
   }
 
-  // Validación independiente para saber si la NOTA está anulada
   const esNotaAnulada = (nota: any) => {
     const estadoNota = String(nota.estado || nota.estado_nota || "").toUpperCase();
     const textoNota = `${nota.concepto || ""} ${nota.motivo || ""} ${nota.observaciones || ""} ${nota.descripcion || ""} ${nota.tipo_operacion || ""}`.toUpperCase();
@@ -102,7 +119,6 @@ export default function ConsultarNotasEmitidasPage() {
     );
   };
 
-  // Validación independiente para saber si la FACTURA asociada está anulada
   const esFacturaAnulada = (nota: any) => {
     const fe = nota.facturas_emitidas || {};
     const estadoFactura = String(fe.estado || fe.estado_factura || "").toUpperCase();
@@ -115,7 +131,6 @@ export default function ConsultarNotasEmitidasPage() {
     );
   };
 
-  // Filtrado usando las columnas exactas de cliente
   const notasFiltradas = useMemo(() => {
     return notas.filter((n) => {
       const tipo = (n.tipo_nota || "").toUpperCase();
@@ -141,7 +156,6 @@ export default function ConsultarNotasEmitidasPage() {
     });
   }, [notas, busqueda, tipoNotaFiltro]);
 
-  // Agrupamiento utilizando cliente_nombre y cliente_nit
   const { gruposPorCliente, totalesGenerales } = useMemo(() => {
     const grupos: {
       [key: string]: {
@@ -315,7 +329,7 @@ export default function ConsultarNotasEmitidasPage() {
           </label>
           <select
             value={empresaId}
-            onChange={(e) => setEmpresaId(e.target.value)}
+            onChange={(e) => handleCambioEmpresa(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 font-medium outline-none focus:ring-2 focus:ring-blue-500"
           >
             {empresas.map((emp) => (
@@ -447,7 +461,6 @@ export default function ConsultarNotasEmitidasPage() {
                           </td>
                           <td className="p-3 font-bold text-slate-900 flex items-center gap-2">
                             <span>{n.numero_nota}</span>
-                            {/* Solo se muestra si la nota como tal está anulada */}
                             {notaAnulada && (
                               <span className="px-1.5 py-0.5 bg-red-600 text-white font-black text-[9px] rounded tracking-wide uppercase shadow-sm animate-pulse">
                                 ANULADA
@@ -461,7 +474,6 @@ export default function ConsultarNotasEmitidasPage() {
                               ) : (
                                 <span className="text-slate-400 italic">No especificada</span>
                               )}
-                              {/* Solo se muestra si la factura asociada está anulada */}
                               {facturaAnulada && (
                                 <span className="px-1.5 py-0.5 bg-red-600 text-white font-black text-[9px] rounded tracking-wide uppercase shadow-sm">
                                   ANULADA

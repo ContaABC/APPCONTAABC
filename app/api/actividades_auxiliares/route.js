@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -24,9 +25,12 @@ const TIPOS_ENTIDAD_VALIDOS = [
 // ==========================================
 export async function GET(request) {
   try {
+    const cookieStore = cookies()
     const { searchParams } = new URL(request.url)
     const accion = searchParams.get('accion')
-    const empresaId = searchParams.get('empresa_id')
+    
+    // Captura automática de empresa_id desde los parámetros o la cookie de sesión activa
+    const empresaId = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
 
     // 1. CASO: Listar empresas activas
     if (accion === 'listar_empresas') {
@@ -45,7 +49,7 @@ export async function GET(request) {
     if (accion === 'listar_subconceptos_niif') {
       if (!empresaId) {
         return NextResponse.json(
-          { exito: false, mensaje: 'El parámetro empresa_id es obligatorio' },
+          { exito: false, mensaje: 'El parámetro empresa_id es obligatorio o no hay sesión activa' },
           { status: 400 }
         )
       }
@@ -64,7 +68,7 @@ export async function GET(request) {
     // 3. CASO POR DEFECTO: Listar Conceptos Auxiliares
     if (!empresaId) {
       return NextResponse.json(
-        { exito: false, mensaje: 'El parámetro empresa_id es requerido para listar conceptos' },
+        { exito: false, mensaje: 'El parámetro empresa_id es requerido para listar conceptos o no hay sesión activa' },
         { status: 400 }
       )
     }
@@ -105,10 +109,13 @@ export async function GET(request) {
 // ==========================================
 export async function POST(request) {
   try {
+    const cookieStore = cookies()
     const body = await request.json()
 
+    // Captura automática de empresa_id desde el body o la cookie activa
+    const empresa_id = body.empresa_id || body.empresaId || cookieStore.get('empresa_activa')?.value
+
     const {
-      empresa_id,
       subconcepto_niif_id,
       codigo_auxiliar,
       nombre,
@@ -122,7 +129,7 @@ export async function POST(request) {
 
     if (!empresa_id || !codigo_auxiliar || !nombre) {
       return NextResponse.json(
-        { exito: false, mensaje: 'Faltan campos obligatorios (empresa_id, codigo_auxiliar, nombre)' },
+        { exito: false, mensaje: 'Faltan campos obligatorios o no hay sesión activa (empresa_id, codigo_auxiliar, nombre)' },
         { status: 400 }
       )
     }
@@ -194,11 +201,14 @@ export async function POST(request) {
 // ==========================================
 export async function PUT(request) {
   try {
+    const cookieStore = cookies()
     const body = await request.json()
+
+    // Captura automática de empresa_id si viene en el body o por cookie
+    const empresa_id = body.empresa_id || body.empresaId || cookieStore.get('empresa_activa')?.value
 
     const {
       id,
-      empresa_id,
       subconcepto_niif_id,
       codigo_auxiliar,
       nombre,

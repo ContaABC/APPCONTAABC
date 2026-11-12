@@ -6,6 +6,45 @@ import { registrarFacturaEmitida, procesarFacturaEmitidaXmlAdmin, FacturaXmlData
 import { supabase } from '@/lib/supabaseClient';
 import { validarPeriodoContable } from "@/lib/accounting-validations";
 
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre?: string;
+  nit_identificacion?: string;
+}
+
+interface Sucursal {
+  id: number | string;
+  nombre: string;
+  codigo_sucursal?: string;
+}
+
+interface ClaseDocumento {
+  id: number | string;
+  codigo_clase?: string;
+  nombre_clase?: string;
+  descripcion?: string;
+  nombre?: string;
+}
+
+interface TerceroCliente {
+  id: number | string;
+  razon_social: string;
+  nit?: string;
+  numero_identificacion?: string;
+  email?: string;
+}
+
+interface CatalogoItem {
+  id: number | string;
+  codigo?: string;
+  nombre?: string;
+  descripcion?: string;
+  precio_venta?: number;
+  valor_unitario?: number;
+  porcentaje_iva?: number;
+}
+
 interface ItemSeleccionado {
   id: string;
   item_id: string;
@@ -32,16 +71,16 @@ export default function EmitirFacturaPage() {
 
   const [isMounted, setIsMounted] = useState(false);
 
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
-  const [clasesDoc, setClasesDoc] = useState<any[]>([]);
-  const [tercerosClientes, setTercerosClientes] = useState<any[]>([]);
-  const [catalogoItems, setCatalogoItems] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [clasesDoc, setClasesDoc] = useState<ClaseDocumento[]>([]);
+  const [tercerosClientes, setTercerosClientes] = useState<TerceroCliente[]>([]);
+  const [catalogoItems, setCatalogoItems] = useState<CatalogoItem[]>([]);
 
   const [empresaId, setEmpresaId] = useState<number | ''>('');
   const [sucursalId, setSucursalId] = useState<number | ''>('');
   const [claseDocId, setClaseDocId] = useState<number | ''>('');
-  const [cliente, setCliente] = useState<any>(null);
+  const [cliente, setCliente] = useState<TerceroCliente | null>(null);
 
   const [fechaEmision, setFechaEmision] = useState<string>('');
   const [fechaVencimiento, setFechaVencimiento] = useState<string>('');
@@ -96,7 +135,7 @@ export default function EmitirFacturaPage() {
     if (empresaId && sucursalId && fechaContable) {
       verificarPeriodo(fechaContable);
     }
-  }, [empresaId, sucursalId]);
+  }, [empresaId, sucursalId, fechaContable]);
 
   useEffect(() => {
     setIsMounted(true);
@@ -189,7 +228,6 @@ export default function EmitirFacturaPage() {
 
   const formularioCompleto = Boolean(empresaId && sucursalId && claseDocId && cliente);
 
-  // Función para procesar y previsualizar uno o varios archivos XML
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -205,7 +243,7 @@ export default function EmitirFacturaPage() {
 
     const empresaSeleccionada = empresas.find(emp => Number(emp.id) === Number(empresaId));
     const nitEmpresaSistema = String(empresaSeleccionada?.nit_identificacion || "").trim();
-    const nitClienteSistema = String(cliente.nit || cliente.numero_identificacion || "").trim();
+    const nitClienteSistema = String(cliente?.nit || cliente?.numero_identificacion || "").trim();
 
     limpiarMensaje();
     setCargando(true);
@@ -221,7 +259,7 @@ export default function EmitirFacturaPage() {
         const xmlDoc = parser.parseFromString(xmlText, "text/xml");
 
         const numeroFactura = xmlDoc.querySelector("ID")?.textContent || 
-                              xmlDoc.getElementsByTagNameNS("*", "ID")[0]?.textContent || `DOC-${i+1}`;
+                            xmlDoc.getElementsByTagNameNS("*", "ID")[0]?.textContent || `DOC-${i+1}`;
         
         const fechaEm = xmlDoc.querySelector("IssueDate")?.textContent || 
                         xmlDoc.getElementsByTagNameNS("*", "IssueDate")[0]?.textContent || fechaEmision;
@@ -384,7 +422,7 @@ export default function EmitirFacturaPage() {
       const datosAProcesar = {
         ...staged.datos,
         fecha_contable: fechaContable || staged.datos.fecha_emision,
-        fecha_vencimiento: fechaVencimiento || staged.datos.fecha_vencimiento,
+        fecha_vencimiento: fechaVencimiento || staged.datos.fecha_vencimiento || staged.datos.fecha_emision,
         fecha_emision: fechaEmision || staged.datos.fecha_emision
       };
 
@@ -442,7 +480,7 @@ export default function EmitirFacturaPage() {
     ]);
   };
 
-  const seleccionarItemCatalogo = (filaId: string, itemCatalog: any) => {
+  const seleccionarItemCatalogo = (filaId: string, itemCatalog: CatalogoItem) => {
     limpiarMensaje();
     setFilaActivaMenu(null);
 
@@ -633,7 +671,6 @@ export default function EmitirFacturaPage() {
           Emitir o Importar Factura de Venta (XML / Manual)
         </h1>
 
-        {/* BOTÓN / INPUT PARA SUBIR XML (BLOQUEADO HASTA COMPLETAR ENCABEZADO) */}
         <div className="flex items-center gap-2">
           <label className={`inline-flex items-center gap-1.5 px-4 py-2 font-semibold text-xs rounded-lg transition shadow-sm ${
             formularioCompleto 
@@ -684,7 +721,7 @@ export default function EmitirFacturaPage() {
         </div>
       )}
 
-      {/* ENCABEZADO DE CONFIGURACIÓN (SIEMPRE ARRIBA) */}
+      {/* ENCABEZADO DE CONFIGURACIÓN */}
       <div className="space-y-4 mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
@@ -899,7 +936,7 @@ export default function EmitirFacturaPage() {
         </div>
       )}
 
-      {/* FORMULARIO DE EMISIÓN MANUAL (MANTENIDO) */}
+      {/* FORMULARIO DE EMISIÓN MANUAL */}
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-3">
           <div className="flex justify-between items-center">

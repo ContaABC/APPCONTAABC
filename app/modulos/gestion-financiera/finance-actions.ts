@@ -2,10 +2,59 @@
 
 import { createClient } from "@supabase/supabase-js";
 
+interface FormulaDetalle {
+  id: number | string;
+  empresa_id: number;
+  sucursal_id: number;
+  nivel_agrupacion?: "concepto_auxiliar" | "concepto_niif" | "subconcepto" | string;
+  numerador_ids: string | null;
+  numerador_restando_ids: string | null;
+  denominador_ids: string | null;
+  denominador_restando_ids: string | null;
+  operacion_tipo?: "DIVISION_PORCENTAJE" | "DIVISION" | string;
+  indicadores_financieros?: {
+    codigo?: string;
+    nombre?: string;
+    categoria?: string;
+  };
+}
+
+interface SaldoAcumuladoRegistro {
+  anio: number;
+  mes: number;
+  empresa_id: number;
+  sucursal_id: number;
+  saldo_final: number;
+  [key: string]: any;
+}
+
+interface VariacionResultado {
+  valor: number;
+  varAbs: number;
+  varPorc: number;
+}
+
+interface CalculoIndicadoresRespuesta {
+  success: boolean;
+  modoComparativo?: boolean;
+  indicadores?: Record<string, VariacionResultado | number>;
+  balance?: Record<string, VariacionResultado | number>;
+  resultadosOp?: Record<string, VariacionResultado | number>;
+  historico?: Array<Record<string, any>>;
+  historicoBalance?: Array<Record<string, any>>;
+  historicoResultados?: Array<Record<string, any>>;
+  error?: string;
+}
+
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  return createClient(supabaseUrl!, serviceRoleKey!, {
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("Faltan las variables de entorno de Supabase (URL o Service Role Key).");
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
@@ -16,7 +65,7 @@ export async function calcularIndicadoresDinamicos(
   anio: string, 
   mes: string,
   compararAnioAnterior: boolean = false
-) {
+): Promise<CalculoIndicadoresRespuesta> {
   try {
     const supabase = getSupabaseAdmin();
     const numAnio = Number(anio);
@@ -38,12 +87,14 @@ export async function calcularIndicadoresDinamicos(
       return { success: true, indicadores: {}, balance: {}, resultadosOp: {}, historico: [], historicoBalance: [], historicoResultados: [] };
     }
 
+    const formulasTyped = formulas as FormulaDetalle[];
+
     // 2. Recopilar IDs únicos
     const idsConceptosSet = new Set<string>();
     let usaConceptosNiif = false;
     let usaSubconceptos = false;
 
-    for (const f of formulas) {
+    for (const f of formulasTyped) {
       const nivel = f.nivel_agrupacion || "concepto_auxiliar";
       if (nivel === "concepto_niif") usaConceptosNiif = true;
       else if (nivel === "subconcepto") usaSubconceptos = true;
@@ -85,9 +136,9 @@ export async function calcularIndicadoresDinamicos(
       aniosAConsultar.push(numAnioAnterior);
     }
 
-    const { data: todosLosRegistros, error: saldoErr } = await (supabase
+    const { data: todosLosRegistros, error: saldoErr } = await supabase
       .from(nombreTabla)
-      .select("*") as any)
+      .select("*")
       .in(campoId, formattedIds)
       .eq("empresa_id", Number(empresaId))
       .eq("sucursal_id", Number(sucursalId))
@@ -97,9 +148,11 @@ export async function calcularIndicadoresDinamicos(
       return { success: true, indicadores: {}, balance: {}, resultadosOp: {}, historico: [], historicoBalance: [], historicoResultados: [] };
     }
 
+    const registrosTyped = todosLosRegistros as SaldoAcumuladoRegistro[];
+
     // Mapear saldos por clave compuesta: "anio-mes-id"
     const mapaSaldos = new Map<string, number>();
-    for (const reg of (todosLosRegistros as any[])) {
+    for (const reg of registrosTyped) {
       const a = Number(reg.anio);
       const m = Number(reg.mes);
       const idVal = String(reg[campoId]);
@@ -117,7 +170,7 @@ export async function calcularIndicadoresDinamicos(
       return suma;
     };
 
-    const evaluarFormulaIndicador = (formula: any, a: number, m: number) => {
+    const evaluarFormulaIndicador = (formula: FormulaDetalle, a: number, m: number): number => {
       const sumaNum = calcularSaldosAbsolutos(formula.numerador_ids, a, m);
       const restaNum = calcularSaldosAbsolutos(formula.numerador_restando_ids, a, m);
       const valorNumerador = Math.max(0, sumaNum - restaNum);
@@ -147,7 +200,7 @@ export async function calcularIndicadoresDinamicos(
       return suma;
     };
 
-    const evaluarFormulaContable = (formula: any, a: number, m: number, forzarAbs: boolean = false) => {
+    const evaluarFormulaContable = (formula: FormulaDetalle, a: number, m: number, forzarAbs: boolean = false): number => {
       const sumaNum = calcularSaldosContables(formula.numerador_ids, a, m);
       const restaNum = calcularSaldosContables(formula.numerador_restando_ids, a, m);
       const valorNumerador = sumaNum - restaNum;
@@ -169,13 +222,12 @@ export async function calcularIndicadoresDinamicos(
 
     // Función auxiliar para calcular valores de un año específico
     const procesarPeriodo = (anioEval: number, mesEval: number) => {
-      const inds: { [key: string]: number } = {};
-      const balVal: { [key: string]: number } = { ACTIVO: 0, PASIVO: 0, PATRIMONIO: 0 };
-      const resVal: { [key: string]: number } = { INGRESOS: 0, COSTOS: 0, GASTOS: 0 };
+      const inds: Record<string, number> = {};
+      const balVal: Record<string, number> = { ACTIVO: 0, PASIVO: 0, PATRIMONIO: 0 };
+      const resVal: Record<string, number> = { INGRESOS: 0, COSTOS: 0, GASTOS: 0 };
 
-      for (const formula of formulas) {
+      for (const formula of formulasTyped) {
         const codigo = formula.indicadores_financieros?.codigo?.toUpperCase();
-        const categoria = formula.indicadores_financieros?.categoria;
         if (!codigo) continue;
 
         if (["ACTIVO", "PASIVO", "PATRIMONIO"].includes(codigo)) {
@@ -219,27 +271,29 @@ export async function calcularIndicadoresDinamicos(
       return { varAbs, varPorc };
     };
 
-    const indicadoresConVariacion: { [key: string]: any } = {};
+    const indicadoresConVariacion: Record<string, VariacionResultado> = {};
     for (const [key, val] of Object.entries(actual.indicadores)) {
-      const antVal = anterior?.indicadores[key];
+      const antVal = anterior ? anterior.indicadores[key] : undefined;
       indicadoresConVariacion[key] = {
         valor: val,
         ...calcularVariacion(val, antVal)
       };
     }
 
-    const balanceConVariacion: { [key: string]: any } = {};
+    const balanceConVariacion: Record<string, VariacionResultado> = {};
     for (const [key, val] of Object.entries(actual.balance)) {
-      const antVal = (anterior?.balance as any)?.[key];
+      const typedKey = key as keyof typeof actual.balance;
+      const antVal = anterior ? anterior.balance[typedKey] : undefined;
       balanceConVariacion[key] = {
         valor: val,
         ...calcularVariacion(val, antVal)
       };
     }
 
-    const resultadosConVariacion: { [key: string]: any } = {};
+    const resultadosConVariacion: Record<string, VariacionResultado> = {};
     for (const [key, val] of Object.entries(actual.resultados)) {
-      const antVal = (anterior?.resultados as any)?.[key];
+      const typedKey = key as keyof typeof actual.resultados;
+      const antVal = anterior ? anterior.resultados[typedKey] : undefined;
       resultadosConVariacion[key] = {
         valor: val,
         ...calcularVariacion(val, antVal)
@@ -268,7 +322,8 @@ export async function calcularIndicadoresDinamicos(
       historicoBalance, 
       historicoResultados 
     };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    return { success: false, error: errorMsg };
   }
 }

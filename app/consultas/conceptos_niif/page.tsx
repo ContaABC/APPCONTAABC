@@ -7,7 +7,7 @@ import { obtenerEmpresas, obtenerReporteNiiF } from "./actions";
 export default function ReportesNiiFPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [empresas, setEmpresas] = useState<any[]>([]);
-  const [empresaId, setEmpresaId] = useState<any>("");
+  const [empresaId, setEmpresaId] = useState<string>("");
   const [tipoReporte, setTipoReporte] = useState<"conceptos_niif" | "subconceptos_niif" | "conceptos_auxiliares" | "consolidado_niif">("consolidado_niif");
   
   const [datosReporte, setDatosReporte] = useState<any[]>([]);
@@ -25,12 +25,13 @@ export default function ReportesNiiFPage() {
         const res = await obtenerEmpresas();
         if (res && res.success && res.data && res.data.length > 0) {
           setEmpresas(res.data);
-          setEmpresaId(res.data[0].id);
+          setEmpresaId(String(res.data[0].id));
         } else {
           setErrorMsg(res?.error || "No se encontraron empresas registradas.");
         }
-      } catch (err: any) {
-        setErrorMsg("Error de conexión al cargar empresas: " + err.message);
+      } catch (err: unknown) {
+        const mensaje = err instanceof Error ? err.message : "Error desconocido.";
+        setErrorMsg("Error de conexión al cargar empresas: " + mensaje);
       }
     }
     init();
@@ -264,8 +265,8 @@ export default function ReportesNiiFPage() {
               {datosReporte.map((item, idx) => (
                 <tr key={item.id || idx} className="hover:bg-slate-50">
                   {tipoReporte === "conceptos_niif" && <><td className="p-2 font-mono font-bold">{item.codigo_concepto}</td><td className="p-2">{item.nombre}</td><td className="p-2">{item.elemento}</td><td className="p-2">{item.clasificacion_balance}</td></>}
-                  {tipoReporte === "subconceptos_niif" && <><td className="p-2 font-mono font-bold">{item.codigo}</td><td className="p-2">{item.nombre}</td><td className="p-2">{item.conceptos_niif?.codigo_concepto} - {item.conceptos_niif?.nombre}</td><td className="p-2">{item.elemento}</td></>}
-                  {tipoReporte === "conceptos_auxiliares" && <><td className="p-2 font-mono font-bold">{item.codigo_auxiliar}</td><td className="p-2">{item.nombre}</td><td className="p-2 text-blue-700 font-semibold">{item.tipo_entidad}</td><td className="p-2">{item.subconceptos_niif?.codigo} - {item.subconceptos_niif?.nombre}</td></>}
+                  {tipoReporte === "subconceptos_niif" && <><td className="p-2 font-mono font-bold">{item.codigo}</td><td className="p-2">{item.nombre}</td><td className="p-2">{item.conceptos_niif ? `${item.conceptos_niif.codigo_concepto} - ${item.conceptos_niif.nombre}` : ""}</td><td className="p-2">{item.elemento}</td></>}
+                  {tipoReporte === "conceptos_auxiliares" && <><td className="p-2 font-mono font-bold">{item.codigo_auxiliar}</td><td className="p-2">{item.nombre}</td><td className="p-2 text-blue-700 font-semibold">{item.tipo_entidad}</td><td className="p-2">{item.subconceptos_niif ? `${item.subconceptos_niif.codigo} - ${item.subconceptos_niif.nombre}` : ""}</td></>}
                 </tr>
               ))}
             </tbody>

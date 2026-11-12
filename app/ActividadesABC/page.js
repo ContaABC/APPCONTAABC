@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useEmpresaContext } from '@/app/context/EmpresaContext'
 
 // ==========================================
 // MODAL CLONAR ACTIVIDADES ABC
@@ -11,7 +12,7 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
   const [copiando, setCopiando] = useState(false)
 
   const empresasDestinoPosibles = empresas.filter(
-    (emp) => String(emp.id) !== String(empresaOrigenId)
+    (emp) => String(emp.id || emp.empresa_id) !== String(empresaOrigenId)
   )
 
   const handleOrigenChange = (e) => {
@@ -31,7 +32,7 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
     if (empresasDestinoIds.length === empresasDestinoPosibles.length) {
       setEmpresasDestinoIds([])
     } else {
-      setEmpresasDestinoIds(empresasDestinoPosibles.map((emp) => String(emp.id)))
+      setEmpresasDestinoIds(empresasDestinoPosibles.map((emp) => String(emp.id || emp.empresa_id)))
     }
   }
 
@@ -94,11 +95,15 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
             className="w-full text-sm border border-gray-300 px-2.5 py-1.5 rounded-md bg-white outline-none"
           >
             <option value="">-- Seleccionar Empresa --</option>
-            {empresas.map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                🏢 {emp.razon_social || emp.nombre_comercial}
-              </option>
-            ))}
+            {empresas.map((emp) => {
+              const id = String(emp.id || emp.empresa_id)
+              const nombre = emp.razon_social || emp.nombre_comercial || emp.nombre
+              return (
+                <option key={id} value={id}>
+                  🏢 {nombre}
+                </option>
+              )
+            })}
           </select>
         </div>
 
@@ -117,17 +122,18 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
               <p className="p-3 text-xs text-gray-400 text-center">No hay otras empresas disponibles.</p>
             ) : (
               empresasDestinoPosibles.map((emp) => {
-                const stringId = String(emp.id)
-                const isChecked = empresasDestinoIds.includes(stringId)
+                const id = String(emp.id || emp.empresa_id)
+                const nombre = emp.razon_social || emp.nombre_comercial || emp.nombre
+                const isChecked = empresasDestinoIds.includes(id)
                 return (
-                  <label key={emp.id} className="flex items-center space-x-2.5 px-3 py-2 hover:bg-white rounded cursor-pointer text-xs text-gray-700">
+                  <label key={id} className="flex items-center space-x-2.5 px-3 py-2 hover:bg-white rounded cursor-pointer text-xs text-gray-700">
                     <input
                       type="checkbox"
                       checked={isChecked}
-                      onChange={() => handleToggleEmpresaDestino(emp.id)}
+                      onChange={() => handleToggleEmpresaDestino(id)}
                       className="rounded border-gray-300 text-blue-600 h-4 w-4"
                     />
-                    <span className="font-medium">{emp.razon_social || emp.nombre_comercial}</span>
+                    <span className="font-medium">{nombre}</span>
                   </label>
                 )
               })
@@ -238,11 +244,15 @@ function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEdit
         <div>
           <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">Empresa *</label>
           <select value={formData.empresa_id} disabled className="w-full text-sm border border-gray-300 px-2.5 py-1.5 rounded-md bg-gray-100 font-semibold text-gray-700">
-            {empresas.map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                {emp.razon_social || emp.nombre_comercial}
-              </option>
-            ))}
+            {empresas.map((emp) => {
+              const id = String(emp.id || emp.empresa_id)
+              const nombre = emp.razon_social || emp.nombre_comercial || emp.nombre
+              return (
+                <option key={id} value={id}>
+                  {nombre}
+                </option>
+              )
+            })}
           </select>
         </div>
 
@@ -292,7 +302,14 @@ function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEdit
 // PÁGINA PRINCIPAL ACTIVIDADES ABC
 // ==========================================
 export default function ActividadesABCPage() {
-  const [empresas, setEmpresas] = useState([])
+  const {
+    empresasPermitidas,
+    empresaActiva,
+    setEmpresaActiva,
+    bloquearSelectores,
+    cargandoContexto
+  } = useEmpresaContext()
+
   const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState('')
   const [actividades, setActividades] = useState([])
   const [cargando, setCargando] = useState(true)
@@ -321,46 +338,41 @@ export default function ActividadesABCPage() {
     }
   }, [])
 
+  // Sincronizar con el contexto global
   useEffect(() => {
-    async function cargarInicial() {
-      try {
-        const res = await fetch('/api/actividades_abc?accion=listar_empresas')
-        const data = await res.json()
-        if (data.exito && data.datos.length > 0) {
-          const ordenadas = [...data.datos].sort((a, b) =>
-            (a.razon_social || a.nombre_comercial || '').localeCompare(b.razon_social || b.nombre_comercial || '', 'es')
-          )
-          setEmpresas(ordenadas)
-          const primeraId = String(ordenadas[0].id)
-          setEmpresaIdSeleccionada(primeraId)
-          cargarActividades(primeraId)
-        } else {
-          setCargando(false)
-        }
-      } catch (err) {
-        console.error('Error empresas:', err)
-        setCargando(false)
-      }
+    if (empresaActiva) {
+      setEmpresaIdSeleccionada(empresaActiva)
+      cargarActividades(empresaActiva)
+    } else if (empresasPermitidas.length > 0 && !empresaIdSeleccionada) {
+      const primeraId = String(empresasPermitidas[0].id || empresasPermitidas[0].empresa_id)
+      setEmpresaIdSeleccionada(primeraId)
+      cargarActividades(primeraId)
+    } else if (!cargandoContexto) {
+      setCargando(false)
     }
-    cargarInicial()
-  }, [cargarActividades])
+  }, [empresaActiva, empresasPermitidas, cargandoContexto, cargarActividades])
 
   const handleEmpresaChange = (e) => {
     const id = e.target.value
     setEmpresaIdSeleccionada(id)
+    setEmpresaActiva(id) // Actualiza contexto global y cookie de sesión
     cargarActividades(id)
   }
 
   const handleEliminar = async (actividad) => {
     if (!confirm(`¿Eliminar la actividad "${actividad.nombre}"?`)) return
     try {
-      const res = await fetch(`/api/actividades_abc?id=${actividad.id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/actividades_abc?id=${actividad.id}&empresa_id=${empresaIdSeleccionada}`, { method: 'DELETE' })
       const data = await res.json()
       if (data.exito) cargarActividades(empresaIdSeleccionada)
       else alert(data.mensaje || 'Error al eliminar.')
     } catch (err) {
       console.error('Error eliminar:', err)
     }
+  }
+
+  if (!isMounted || cargandoContexto) {
+    return <div className="p-12 text-center text-sm text-gray-500">Cargando entorno seguro...</div>
   }
 
   return (
@@ -376,19 +388,28 @@ export default function ActividadesABCPage() {
           <select
             value={empresaIdSeleccionada}
             onChange={handleEmpresaChange}
-            className="border border-gray-300 px-3 py-1.5 rounded-md bg-white text-xs md:text-sm font-semibold text-gray-700 shadow-sm outline-none min-w-[200px]"
+            disabled={bloquearSelectores || empresasPermitidas.length === 0}
+            className="border border-gray-300 px-3 py-1.5 rounded-md bg-white text-xs md:text-sm font-semibold text-gray-700 shadow-sm outline-none min-w-[200px] disabled:opacity-60"
           >
-            {empresas.map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                🏢 {emp.razon_social || emp.nombre_comercial}
-              </option>
-            ))}
+            {empresasPermitidas.length === 0 ? (
+              <option value="">Sin empresas asignadas</option>
+            ) : (
+              empresasPermitidas.map((emp) => {
+                const id = String(emp.id || emp.empresa_id)
+                const nombre = emp.razon_social || emp.nombre_comercial || emp.nombre
+                return (
+                  <option key={id} value={id}>
+                    🏢 {nombre}
+                  </option>
+                )
+              })
+            )}
           </select>
 
           <button
             type="button"
             onClick={() => setModalClonarAbierto(true)}
-            disabled={!isMounted || !empresaIdSeleccionada || empresas.length <= 1}
+            disabled={!isMounted || !empresaIdSeleccionada || empresasPermitidas.length <= 1}
             suppressHydrationWarning
             className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-3 py-1.5 rounded-md shadow-sm text-xs md:text-sm disabled:opacity-50 flex items-center gap-1.5"
           >
@@ -401,7 +422,7 @@ export default function ActividadesABCPage() {
               setActividadSeleccionada(null)
               setModalFormAbierto(true)
             }}
-            disabled={!isMounted || !empresaIdSeleccionada}
+            disabled={!isMounted || !empresaIdSeleccionada || empresasPermitidas.length === 0}
             suppressHydrationWarning
             className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-3.5 py-1.5 rounded-md shadow-sm text-xs md:text-sm disabled:opacity-50"
           >
@@ -409,6 +430,12 @@ export default function ActividadesABCPage() {
           </button>
         </div>
       </div>
+
+      {bloquearSelectores && (
+        <div className="text-xs text-amber-600 font-medium bg-amber-50 border border-amber-200 p-3 rounded-md">
+          🔒 El selector de empresa se encuentra bloqueado automáticamente por contar con una única asignación autorizada.
+        </div>
+      )}
 
       {/* Tabla */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
@@ -463,7 +490,7 @@ export default function ActividadesABCPage() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-gray-100">
             <SubformularioActividad
-              empresas={empresas}
+              empresas={empresasPermitidas}
               empresaIdSeleccionada={empresaIdSeleccionada}
               actividadEditar={actividadSeleccionada}
               onClose={() => setModalFormAbierto(false)}
@@ -480,7 +507,7 @@ export default function ActividadesABCPage() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-gray-100">
             <ModalClonarActividades
-              empresas={empresas}
+              empresas={empresasPermitidas}
               empresaOrigenInicial={empresaIdSeleccionada}
               onClose={() => setModalClonarAbierto(false)}
               onSuccess={() => {

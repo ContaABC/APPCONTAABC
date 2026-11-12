@@ -5,10 +5,10 @@ import { procesarFacturaXmlAdmin } from "@/app/facturas/cargar/actions";
 import { supabase } from "@/lib/supabaseClient";
 
 interface XmlUploaderProps {
-  selectedCompanyId: string;
-  selectedBranchId: string;
-  selectedDocumentClassId: string;
-  fechaContabilizacion: string;
+  selectedCompanyId?: string;
+  selectedBranchId?: string;
+  selectedDocumentClassId?: string;
+  fechaContabilizacion?: string;
   onSuccess?: () => void;
 }
 
@@ -47,10 +47,10 @@ interface ConceptoRetencion {
 }
 
 export default function XmlUploader({
-  selectedCompanyId,
-  selectedBranchId,
-  selectedDocumentClassId,
-  fechaContabilizacion,
+  selectedCompanyId: propCompanyId,
+  selectedBranchId: propBranchId,
+  selectedDocumentClassId: propDocumentClassId,
+  fechaContabilizacion: propFechaContabilizacion,
   onSuccess,
 }: XmlUploaderProps) {
   const [file, setFile] = useState<File | null>(null);
@@ -59,6 +59,30 @@ export default function XmlUploader({
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Sincronización corporativa automática con localStorage / Cookies si no se pasa por props
+  const [empresaActivaId, setEmpresaActivaId] = useState<string>(propCompanyId || "");
+
+  useEffect(() => {
+    if (propCompanyId) {
+      setEmpresaActivaId(propCompanyId);
+    } else {
+      const cookieEmpresa = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("empresa_activa="));
+      const empresaCookie = cookieEmpresa ? cookieEmpresa.split("=")[1] : null;
+      const empresaLocal = localStorage.getItem("empresa_activa");
+      
+      if (empresaCookie || empresaLocal) {
+        setEmpresaActivaId(empresaCookie || empresaLocal || "");
+      }
+    }
+  }, [propCompanyId]);
+
+  const selectedCompanyId = propCompanyId || empresaActivaId;
+  const selectedBranchId = propBranchId || "";
+  const selectedDocumentClassId = propDocumentClassId || "";
+  const fechaContabilizacion = propFechaContabilizacion || new Date().toISOString().split("T")[0];
 
   // Conceptos de retención para la empresa activa
   const [conceptosRetencion, setConceptosRetencion] = useState<ConceptoRetencion[]>([]);
@@ -439,8 +463,8 @@ export default function XmlUploader({
               type="file"
               accept=".xml"
               onChange={handleFileChange}
-              disabled={isParsing}
-              className="block w-full text-xs text-gray-500 file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+              disabled={isParsing || !selectedCompanyId}
+              className="block w-full text-xs text-gray-500 file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer disabled:opacity-50"
             />
           </div>
           <div>
@@ -484,7 +508,7 @@ export default function XmlUploader({
               <button
                 type="button"
                 onClick={() => setParsedInvoice(null)}
-                className="ml-2 px-2 py-1 text-[10px] text-gray-600 hover:text-red-600 bg-white border border-gray-300 hover:border-red-300 rounded font-medium shadow-2xs whitespace-nowrap"
+                className="ml-2 px-2 py-1 text-[10px] text-gray-600 hover:text-red-600 bg-white border border-gray-300 hover:border-red-300 rounded font-medium shadow-2xs whitespace-nowrap cursor-pointer"
               >
                 Cambiar XML
               </button>
@@ -500,7 +524,7 @@ export default function XmlUploader({
               <select
                 value={retRentaId}
                 onChange={(e) => setRetRentaId(e.target.value)}
-                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate"
+                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer"
               >
                 <option value="">-- Seleccione --</option>
                 {conceptosRenta.map((c) => {
@@ -527,7 +551,7 @@ export default function XmlUploader({
               <select
                 value={retIvaId}
                 onChange={(e) => setRetIvaId(e.target.value)}
-                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate"
+                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer"
               >
                 <option value="">-- Seleccione --</option>
                 {conceptosIva.map((c) => {
@@ -554,7 +578,7 @@ export default function XmlUploader({
               <select
                 value={retIcaId}
                 onChange={(e) => setRetIcaId(e.target.value)}
-                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate"
+                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer"
               >
                 <option value="">-- Seleccione --</option>
                 {conceptosIca.map((c) => {

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -11,14 +12,17 @@ const supabase = createClient(supabaseUrl, supabaseKey)
 // -----------------------------------------------------------------------------
 export async function GET(request) {
   try {
+    const cookieStore = await cookies()
     const { searchParams } = new URL(request.url)
-    const empresaId = searchParams.get('empresa_id')
+    
+    // Captura automática de empresaId: desde los parámetros o leyendo la cookie activa
+    const empresaId = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
     const numeroIdentificacion = searchParams.get('numero_identificacion')
     const id = searchParams.get('id')
 
     if (!empresaId) {
       return NextResponse.json(
-        { exito: false, mensaje: 'El parámetro empresa_id es requerido.' },
+        { exito: false, mensaje: 'El parámetro empresa_id es requerido o no hay sesión activa.' },
         { status: 400 }
       )
     }
@@ -87,7 +91,9 @@ export async function GET(request) {
 // -----------------------------------------------------------------------------
 export async function POST(request) {
   try {
+    const cookieStore = await cookies()
     const body = await request.json()
+    const cookieEmpresaActiva = cookieStore.get('empresa_activa')?.value
 
     if (Array.isArray(body)) {
       if (body.length === 0) {
@@ -101,6 +107,7 @@ export async function POST(request) {
         const { es_contratista, ...resto } = item
         return {
           ...resto,
+          empresa_id: resto.empresa_id || cookieEmpresaActiva,
           es_arrendador: item.es_arrendador !== undefined ? !!item.es_arrendador : !!es_contratista
         }
       })
@@ -126,7 +133,7 @@ export async function POST(request) {
       })
     }
 
-    const {
+    let {
       empresa_id,
       tipo_documento,
       numero_identificacion,
@@ -160,9 +167,12 @@ export async function POST(request) {
       estado
     } = body
 
+    // Captura automática si no viene en el body
+    empresa_id = empresa_id || cookieEmpresaActiva
+
     if (!empresa_id || !numero_identificacion || !razon_social) {
       return NextResponse.json(
-        { exito: false, mensaje: 'Empresa, número de identificación y razón social son obligatorios.' },
+        { exito: false, mensaje: 'Empresa (o sesión activa), número de identificación y razón social son obligatorios.' },
         { status: 400 }
       )
     }
@@ -244,7 +254,9 @@ export async function POST(request) {
 // -----------------------------------------------------------------------------
 export async function PUT(request) {
   try {
+    const cookieStore = await cookies()
     const body = await request.json()
+    const cookieEmpresaActiva = cookieStore.get('empresa_activa')?.value
     const { id, created_at, updated_at, es_contratista, ...datosRecibidos } = body
 
     if (!id) {
@@ -275,6 +287,10 @@ export async function PUT(request) {
         }
       }
     })
+
+    if (!payloadActualizacion.empresa_id && cookieEmpresaActiva) {
+      payloadActualizacion.empresa_id = cookieEmpresaActiva
+    }
 
     if (es_contratista !== undefined && payloadActualizacion.es_arrendador === undefined) {
       payloadActualizacion.es_arrendador = !!es_contratista

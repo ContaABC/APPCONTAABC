@@ -1,10 +1,11 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error("Faltan variables de entorno de Supabase.");
@@ -15,37 +16,51 @@ function getSupabaseAdmin() {
   });
 }
 
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
+}
+
 // Obtener clases de documentos según tipo
-export async function obtenerClasesDocumentosPorTipo(empresaId: number | string, afectaCajaBancos: boolean) {
+export async function obtenerClasesDocumentosPorTipo(empresaId?: number | string | null, afectaCajaBancos?: boolean) {
   const supabase = getSupabaseAdmin();
   try {
-    const parsedEmpresaId = Number(empresaId);
-    if (!parsedEmpresaId) return { success: true, data: [] };
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa) return { success: true, data: [] };
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("clases_documento")
       .select("id, codigo_clase, nombre_clase, afecta_caja_bancos")
-      .eq("empresa_id", parsedEmpresaId)
-      .eq("afecta_caja_bancos", afectaCajaBancos)
-      .order("codigo_clase", { ascending: true });
+      .eq("empresa_id", idEmpresa);
+
+    if (afectaCajaBancos !== undefined) {
+      query = query.eq("afecta_caja_bancos", afectaCajaBancos);
+    }
+
+    const { data, error } = await query.order("codigo_clase", { ascending: true });
 
     if (error) throw error;
     return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener clases de documentos.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
 // Obtener conceptos auxiliares (Cuentas_Bancarias y Cuentas de Ingresos)
-export async function obtenerAuxiliaresParaDocumentos(empresaId: number | string, soloBancarios: boolean = false) {
+export async function obtenerAuxiliaresParaDocumentos(empresaId?: number | string | null, soloBancarios: boolean = false) {
   const supabase = getSupabaseAdmin();
   try {
-    let query = supabase
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa) return { success: true, data: [] };
+
+    const { data, error } = await supabase
       .from("conceptos_auxiliares")
       .select("id, codigo_auxiliar, nombre, tipo_entidad")
-      .eq("empresa_id", Number(empresaId));
-
-    const { data, error } = await query.order("codigo_auxiliar", { ascending: true });
+      .eq("empresa_id", idEmpresa)
+      .order("codigo_auxiliar", { ascending: true });
 
     if (error) throw error;
 
@@ -65,35 +80,40 @@ export async function obtenerAuxiliaresParaDocumentos(empresaId: number | string
     }));
 
     return { success: true, data: mapeados };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener auxiliares.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
 // Obtener terceros
-export async function obtenerTerceros(empresaId: number | string) {
+export async function obtenerTerceros(empresaId?: number | string | null) {
   const supabase = getSupabaseAdmin();
   try {
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa) return { success: true, data: [] };
+
     const { data, error } = await supabase
       .from("terceros")
       .select("id, razon_social, nombre_comercial, numero_identificacion")
-      .eq("empresa_id", Number(empresaId))
+      .eq("empresa_id", idEmpresa)
       .order("razon_social", { ascending: true });
 
     if (error) throw error;
     return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener terceros.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
 // Obtener Títulos Valores (Cheques) cruzando el auxiliar seleccionado con la cuenta financiera real
-export async function obtenerTitulosValoresPorCuenta(empresaId: number | string, conceptoAuxiliarId: number | string) {
+export async function obtenerTitulosValoresPorCuenta(empresaId?: number | string | null, conceptoAuxiliarId?: number | string | null) {
   const supabase = getSupabaseAdmin();
   try {
-    const parsedEmpresaId = Number(empresaId);
-    const parsedAuxId = Number(conceptoAuxiliarId);
-    if (!parsedEmpresaId || !parsedAuxId) return { success: true, data: [] };
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    const parsedAuxId = conceptoAuxiliarId ? Number(conceptoAuxiliarId) : null;
+    if (!idEmpresa || !parsedAuxId) return { success: true, data: [] };
 
     // 1. Buscar el id de la cuenta financiera asociado a este concepto auxiliar
     const { data: cuentaFin, error: errCta } = await supabase
@@ -112,7 +132,7 @@ export async function obtenerTitulosValoresPorCuenta(empresaId: number | string,
     const { data, error } = await supabase
       .from("titulos_valores")
       .select("id, numero_titulo, monto, tipo_titulo, estado, tercero_girador_id, tercero_beneficiario_id, cuenta_financiera_id")
-      .eq("empresa_id", parsedEmpresaId)
+      .eq("empresa_id", idEmpresa)
       .eq("cuenta_financiera_id", cuentaFinancieraIdReal)
       .in("estado", ["Consignado", "Devuelto"])
       .order("created_at", { ascending: false });
@@ -120,8 +140,9 @@ export async function obtenerTitulosValoresPorCuenta(empresaId: number | string,
     if (error) throw error;
 
     return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener títulos valores.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
@@ -173,7 +194,8 @@ export async function guardarDocumentoContable(formData: {
     }
 
     return { success: true, message: data.message };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Error crítico de conexión." };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error crítico de conexión.";
+    return { success: false, error: mensaje };
   }
 }

@@ -1,18 +1,69 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, ChangeEvent, FormEvent } from 'react'
+
+// ==========================================
+// INTERFACES DE TIPADO
+// ==========================================
+interface Empresa {
+  id: string | number;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nit?: string;
+}
+
+interface Departamento {
+  codigo_departamento: string;
+  departamento: string;
+}
+
+interface Municipio {
+  codigo_municipio: string;
+  municipio: string;
+}
+
+interface Sucursal {
+  id?: string | number;
+  empresa_id?: string | number;
+  codigo_sucursal?: string;
+  nombre?: string;
+  nombre_sucursal?: string;
+  direccion?: string;
+  telefono?: string;
+  email?: string;
+  departamento?: string;
+  ciudad?: string;
+  municipio?: string;
+  codigo_dane?: string;
+  estado?: string;
+}
+
+interface SubformularioSucursalProps {
+  empresas: Empresa[];
+  empresaIdSeleccionada: string | number;
+  sucursalEditar: Sucursal | null;
+  onClose: () => void;
+  onSave: () => void;
+}
 
 // ==========================================
 // COMPONENTE: SUBFORMULARIO MODAL SUCURSAL
 // ==========================================
-function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar, onClose, onSave }) {
-  const [departamentos, setDepartamentos] = useState([])
-  const [municipios, setMunicipios] = useState([])
-  const [cargandoUbicaciones, setCargandoUbicaciones] = useState(false)
-  const [guardando, setGuardando] = useState(false)
-  const [errorEmail, setErrorEmail] = useState('')
+function SubformularioSucursal({
+  empresas,
+  empresaIdSeleccionada,
+  sucursalEditar,
+  onClose,
+  onSave
+}: SubformularioSucursalProps) {
+  const [departamentos, setDepartamentos] = useState<Departamento[]>([])
+  const [municipios, setMunicipios] = useState<Municipio[]>([])
+  const [cargandoUbicaciones, setCargandoUbicaciones] = useState<boolean>(false)
+  const [guardando, setGuardando] = useState<boolean>(false)
+  const [errorEmail, setErrorEmail] = useState<string>('')
 
   const [formData, setFormData] = useState({
+    id: sucursalEditar?.id || '',
     empresa_id: empresaIdSeleccionada || '',
     codigo_sucursal: '',
     nombre: '',
@@ -45,43 +96,46 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
   }, [])
 
   // 2. Cargar Municipios pasando 'codigo_departamento' a la API
-  const cargarMunicipiosPorCodigoDepto = useCallback(async (codDepto, ciudadActual = '', daneActual = '') => {
-    if (!codDepto) {
-      setMunicipios([])
-      return
-    }
-
-    setCargandoUbicaciones(true)
-    try {
-      const res = await fetch(`/api/ubicaciones?codigo_departamento=${encodeURIComponent(codDepto)}`)
-      const data = await res.json()
-
-      if (data.exito && Array.isArray(data.datos)) {
-        setMunicipios(data.datos)
-
-        if (ciudadActual) {
-          const munEncontrado = data.datos.find(
-            (m) => m.municipio.toLowerCase().trim() === ciudadActual.toLowerCase().trim()
-          )
-          if (munEncontrado) {
-            setFormData((prev) => ({ ...prev, codigo_dane: munEncontrado.codigo_municipio }))
-          } else if (daneActual) {
-            setFormData((prev) => ({ ...prev, codigo_dane: daneActual }))
-          }
-        }
-      } else {
+  const cargarMunicipiosPorCodigoDepto = useCallback(
+    async (codDepto: string, ciudadActual: string = '', daneActual: string = '') => {
+      if (!codDepto) {
         setMunicipios([])
+        return
       }
-    } catch (err) {
-      console.error('Error al cargar municipios:', err)
-      setMunicipios([])
-    } finally {
-      setCargandoUbicaciones(false)
-    }
-  }, [])
+
+      setCargandoUbicaciones(true)
+      try {
+        const res = await fetch(`/api/ubicaciones?codigo_departamento=${encodeURIComponent(codDepto)}`)
+        const data = await res.json()
+
+        if (data.exito && Array.isArray(data.datos)) {
+          setMunicipios(data.datos)
+
+          if (ciudadActual) {
+            const munEncontrado = data.datos.find(
+              (m: Municipio) => m.municipio.toLowerCase().trim() === ciudadActual.toLowerCase().trim()
+            )
+            if (munEncontrado) {
+              setFormData((prev) => ({ ...prev, codigo_dane: munEncontrado.codigo_municipio }))
+            } else if (daneActual) {
+              setFormData((prev) => ({ ...prev, codigo_dane: daneActual }))
+            }
+          }
+        } else {
+          setMunicipios([])
+        }
+      } catch (err) {
+        console.error('Error al cargar municipios:', err)
+        setMunicipios([])
+      } finally {
+        setCargandoUbicaciones(false)
+      }
+    },
+    []
+  )
 
   // 3. Obtener consecutivo de código de la sucursal
-  const obtenerCodigoAuto = async (empId) => {
+  const obtenerCodigoAuto = async (empId: string | number) => {
     if (!empId) return
     try {
       const res = await fetch(`/api/sucursales?empresa_id=${empId}&accion=siguiente_codigo`)
@@ -102,7 +156,7 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
       const dane = sucursalEditar.codigo_dane || ''
 
       setFormData({
-        id: sucursalEditar.id,
+        id: sucursalEditar.id || '',
         empresa_id: sucursalEditar.empresa_id || empresaIdSeleccionada || '',
         codigo_sucursal: sucursalEditar.codigo_sucursal || '',
         nombre: sucursalEditar.nombre || sucursalEditar.nombre_sucursal || '',
@@ -134,7 +188,7 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
   }, [sucursalEditar, empresaIdSeleccionada, departamentos, cargarMunicipiosPorCodigoDepto])
 
   // Manejar cambio de Departamento
-  const handleDepartamentoChange = (e) => {
+  const handleDepartamentoChange = (e: ChangeEvent<HTMLSelectElement>) => {
     const nombreDeptoSel = e.target.value
 
     if (!nombreDeptoSel) {
@@ -163,7 +217,7 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
   }
 
   // Manejar cambio de Municipio
-  const handleMunicipioChange = (e) => {
+  const handleMunicipioChange = (e: ChangeEvent<HTMLSelectElement>) => {
     const nombreMunSel = e.target.value
 
     if (!nombreMunSel) {
@@ -184,12 +238,12 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
     }))
   }
 
-  const validarEmail = (email) => {
+  const validarEmail = (email: string) => {
     if (!email) return true
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
   }
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
 
     if (!formData.empresa_id) {
@@ -204,7 +258,6 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
 
     setGuardando(true)
 
-    // Payload dual para soportar cualquier tipo de validación/campo
     const payload = {
       ...formData,
       nombre: formData.nombre,
@@ -242,7 +295,7 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
         <button
           onClick={onClose}
           type="button"
-          className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors"
+          className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors cursor-pointer"
         >
           ✕
         </button>
@@ -324,7 +377,7 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
             <select
               value={formData.departamento}
               onChange={handleDepartamentoChange}
-              className="w-full text-xs border border-gray-300 p-2 rounded-md bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full text-xs border border-gray-300 p-2 rounded-md bg-white focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
             >
               <option value="">-- Seleccionar --</option>
               {departamentos.map((d) => (
@@ -343,7 +396,7 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
               value={formData.ciudad}
               onChange={handleMunicipioChange}
               disabled={!formData.departamento || cargandoUbicaciones}
-              className="w-full text-xs border border-gray-300 p-2 rounded-md bg-white disabled:bg-gray-100 focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full text-xs border border-gray-300 p-2 rounded-md bg-white disabled:bg-gray-100 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
             >
               <option value="">
                 {cargandoUbicaciones
@@ -409,14 +462,14 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 hover:bg-gray-50"
+            className="px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 hover:bg-gray-50 cursor-pointer"
           >
             Cancelar
           </button>
           <button
             type="submit"
             disabled={guardando || Boolean(errorEmail)}
-            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-medium disabled:opacity-50"
+            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-medium disabled:opacity-50 cursor-pointer"
           >
             {guardando ? 'Guardando...' : 'Guardar Sucursal'}
           </button>
@@ -430,19 +483,19 @@ function SubformularioSucursal({ empresas, empresaIdSeleccionada, sucursalEditar
 // COMPONENTE PRINCIPAL: PÁGINA SUCURSALES
 // ==========================================
 export default function SucursalesPage() {
-  const [empresas, setEmpresas] = useState([])
-  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState('')
-  const [sucursales, setSucursales] = useState([])
-  const [cargando, setCargando] = useState(true)
-  const [modalAbierto, setModalAbierto] = useState(false)
-  const [sucursalSeleccionada, setSucursalSeleccionada] = useState(null)
-  const [isMounted, setIsMounted] = useState(false)
+  const [empresas, setEmpresas] = useState<Empresa[]>([])
+  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState<string | number>('')
+  const [sucursales, setSucursales] = useState<Sucursal[]>([])
+  const [cargando, setCargando] = useState<boolean>(true)
+  const [modalAbierto, setModalAbierto] = useState<boolean>(false)
+  const [sucursalSeleccionada, setSucursalSeleccionada] = useState<Sucursal | null>(null)
+  const [isMounted, setIsMounted] = useState<boolean>(false)
 
   useEffect(() => {
     setIsMounted(true)
   }, [])
 
-  const cargarSucursales = useCallback(async (empId) => {
+  const cargarSucursales = useCallback(async (empId: string | number) => {
     if (!empId) return
     setCargando(true)
     try {
@@ -467,7 +520,7 @@ export default function SucursalesPage() {
         const res = await fetch('/api/sucursales?accion=listar_empresas')
         const data = await res.json()
         if (data.exito && data.datos.length > 0) {
-          const empresasOrdenadas = [...data.datos].sort((a, b) => {
+          const empresasOrdenadas = [...data.datos].sort((a: Empresa, b: Empresa) => {
             const nombreA = a.razon_social || a.nombre_comercial || ''
             const nombreB = b.razon_social || b.nombre_comercial || ''
             return nombreA.localeCompare(nombreB, 'es', { sensitivity: 'base' })
@@ -475,9 +528,16 @@ export default function SucursalesPage() {
 
           setEmpresas(empresasOrdenadas)
 
-          const primeraEmpresaId = String(empresasOrdenadas[0].id)
-          setEmpresaIdSeleccionada(primeraEmpresaId)
-          cargarSucursales(primeraEmpresaId)
+          // Leer cookie corporativa empresa_activa o usar la primera por defecto
+          const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'))
+          let empresaIdAUsar: string | number = empresasOrdenadas[0].id
+
+          if (match && empresasOrdenadas.some((e: Empresa) => String(e.id) === match[2])) {
+            empresaIdAUsar = match[2]
+          }
+
+          setEmpresaIdSeleccionada(empresaIdAUsar)
+          cargarSucursales(empresaIdAUsar)
         } else {
           setCargando(false)
         }
@@ -489,10 +549,14 @@ export default function SucursalesPage() {
     cargarEmpresasIniciales()
   }, [cargarSucursales])
 
-  const handleEmpresaChange = (e) => {
+  const handleEmpresaChange = (e: ChangeEvent<HTMLSelectElement>) => {
     const nuevoId = e.target.value
     setEmpresaIdSeleccionada(nuevoId)
     cargarSucursales(nuevoId)
+
+    // Guardar cookie y localStorage al cambiar empresa
+    localStorage.setItem("empresa_activa", nuevoId)
+    document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`
   }
 
   const handleNuevaSucursal = () => {
@@ -500,12 +564,12 @@ export default function SucursalesPage() {
     setModalAbierto(true)
   }
 
-  const handleEditarSucursal = (sucursal) => {
+  const handleEditarSucursal = (sucursal: Sucursal) => {
     setSucursalSeleccionada(sucursal)
     setModalAbierto(true)
   }
 
-  const handleToggleEstado = async (sucursal) => {
+  const handleToggleEstado = async (sucursal: Sucursal) => {
     const nuevoEstado = sucursal.estado === 'Activa' ? 'Inactiva' : 'Activa'
     try {
       const res = await fetch('/api/sucursales', {
@@ -524,7 +588,7 @@ export default function SucursalesPage() {
     }
   }
 
-  const handleEliminar = async (sucursal) => {
+  const handleEliminar = async (sucursal: Sucursal) => {
     const nombreVisual = sucursal.nombre || sucursal.nombre_sucursal || 'esta sucursal'
     if (!confirm(`¿Deseas eliminar la sucursal "${nombreVisual}"?`)) return
 
@@ -556,7 +620,7 @@ export default function SucursalesPage() {
           <select
             value={empresaIdSeleccionada}
             onChange={handleEmpresaChange}
-            className="border border-gray-300 p-2 rounded-md bg-white text-sm font-semibold text-gray-700 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none min-w-[240px]"
+            className="border border-gray-300 p-2 rounded-md bg-white text-sm font-semibold text-gray-700 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none min-w-[240px] cursor-pointer"
           >
             {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>
@@ -570,7 +634,7 @@ export default function SucursalesPage() {
             onClick={handleNuevaSucursal}
             disabled={!isMounted || !empresaIdSeleccionada}
             suppressHydrationWarning
-            className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-md shadow-sm transition-colors disabled:opacity-50 text-sm whitespace-nowrap"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-md shadow-sm transition-colors disabled:opacity-50 text-sm whitespace-nowrap cursor-pointer"
           >
             + Nueva Sucursal
           </button>
@@ -619,7 +683,7 @@ export default function SucursalesPage() {
                       <button
                         onClick={() => handleToggleEstado(suc)}
                         type="button"
-                        className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                        className={`px-2.5 py-0.5 rounded-full text-xs font-semibold cursor-pointer ${
                           suc.estado === 'Activa'
                             ? 'bg-green-100 text-green-800 hover:bg-green-200'
                             : 'bg-red-100 text-red-800 hover:bg-red-200'
@@ -633,7 +697,7 @@ export default function SucursalesPage() {
                         <button
                           onClick={() => handleEditarSucursal(suc)}
                           type="button"
-                          className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded"
+                          className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded cursor-pointer"
                           title="Editar"
                         >
                           ✏️
@@ -642,7 +706,7 @@ export default function SucursalesPage() {
                           onClick={() => handleEliminar(suc)}
                           type="button"
                           disabled={suc.codigo_sucursal === 'SUC-001'}
-                          className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded disabled:opacity-30"
+                          className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded disabled:opacity-30 cursor-pointer"
                           title="Eliminar"
                         >
                           🗑️

@@ -8,14 +8,21 @@ import {
   obtenerConceptosAuxiliares,
   obtenerMovimientosRetencionesPorPeriodo,
   registrarAsientoCierreRetenciones,
+  EmpresaRow,
+  SucursalRow,
+  ClaseDocumentoRow,
+  ConceptoAuxiliarRow,
+  RetencionMovimientoRow,
+  DetalleAgrupadoItem
 } from "./actions-declaracion";
-import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
+import { validarPeriodoContable } from "@/lib/accounting-validations";
 
 export default function DeclaracionRetencionesPage() {
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
-  const [clasesDocumento, setClasesDocumento] = useState<any[]>([]);
-  const [conceptosAuxiliares, setConceptosAuxiliares] = useState<any[]>([]);
+  const [isMounted, setIsMounted] = useState<boolean>(false);
+  const [empresas, setEmpresas] = useState<EmpresaRow[]>([]);
+  const [sucursales, setSucursales] = useState<SucursalRow[]>([]);
+  const [clasesDocumento, setClasesDocumento] = useState<ClaseDocumentoRow[]>([]);
+  const [conceptosAuxiliares, setConceptosAuxiliares] = useState<ConceptoAuxiliarRow[]>([]);
 
   const [empresaId, setEmpresaId] = useState<string>("");
   const [sucursalId, setSucursalId] = useState<string>("");
@@ -26,19 +33,23 @@ export default function DeclaracionRetencionesPage() {
   const [tipoRetencion, setTipoRetencion] = useState<string>("RENTA"); // RENTA, IVA, ICA
   const [periodoDesde, setPeriodoDesde] = useState<string>("");
   const [periodoHasta, setPeriodoHasta] = useState<string>("");
-  const [fechaContable, setFechaContable] = useState<string>(""); // <--- 2. Estado para la Fecha Contable del Cierre
+  const [fechaContable, setFechaContable] = useState<string>("");
   const [aproximarAlMil, setAproximarAlMil] = useState<boolean>(true);
 
-  // Estados para Control de Periodo Contable (NUEVO)
+  // Estados para Control de Periodo Contable
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
   // Datos y Resultados
-  const [movimientos, setMovimientos] = useState<any[]>([]);
+  const [movimientos, setMovimientos] = useState<RetencionMovimientoRow[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [procesandoCierre, setProcesandoCierre] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Inicializar fecha contable con el día de hoy al montar
   useEffect(() => {
@@ -46,7 +57,7 @@ export default function DeclaracionRetencionesPage() {
     setFechaContable(hoyStr);
   }, []);
 
-  // Función de validación de periodo en tiempo real (NUEVO)
+  // Función de validación de periodo en tiempo real
   const verificarPeriodo = async (fecha: string) => {
     if (!empresaId || !sucursalId || !fecha) {
       setErrorPeriodo(null);
@@ -71,13 +82,19 @@ export default function DeclaracionRetencionesPage() {
     }
   }, [empresaId, sucursalId]);
 
-  // 1. Cargar Empresas al montar
+  // 1. Cargar Empresas al montar y leer cookie corporativa empresa_activa
   useEffect(() => {
     async function cargarEmpresas() {
       const res = await obtenerEmpresas();
-      if (res.success && res.data.length > 0) {
+      if (res.success && res.data && res.data.length > 0) {
         setEmpresas(res.data);
-        setEmpresaId(String(res.data[0].id));
+        
+        const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'));
+        if (match && res.data.some((e: EmpresaRow) => String(e.id) === match[2])) {
+          setEmpresaId(match[2]);
+        } else {
+          setEmpresaId(String(res.data[0].id));
+        }
       }
     }
     cargarEmpresas();
@@ -98,10 +115,10 @@ export default function DeclaracionRetencionesPage() {
         obtenerConceptosAuxiliares(empresaId),
       ]);
 
-      if (resSuc.success) {
+      if (resSuc.success && resSuc.data) {
         setSucursales(resSuc.data);
         const sucursalDefault = resSuc.data.find(
-          (s: any) => s.codigo_sucursal === "SUC-001"
+          (s: SucursalRow) => s.codigo_sucursal === "SUC-001"
         );
         if (sucursalDefault) {
           setSucursalId(String(sucursalDefault.id));
@@ -110,17 +127,21 @@ export default function DeclaracionRetencionesPage() {
         }
       }
 
-      if (resDoc.success) {
+      if (resDoc.success && resDoc.data) {
         setClasesDocumento(resDoc.data);
         if (resDoc.data.length > 0) setClaseDocumentoId(String(resDoc.data[0].id));
       }
 
-      if (resAux.success) {
+      if (resAux.success && resAux.data) {
         setConceptosAuxiliares(resAux.data);
         if (resAux.data.length > 0) setConceptoAuxiliarCreditoId(String(resAux.data[0].id));
       }
     }
     cargarDatosEmpresa();
+
+    // Actualizar cookie y localStorage al cambiar empresa
+    localStorage.setItem("empresa_activa", empresaId);
+    document.cookie = `empresa_activa=${empresaId}; path=/; max-age=86400; SameSite=Lax`;
   }, [empresaId]);
 
   // Limpiar resultados al cambiar filtros
@@ -149,7 +170,7 @@ export default function DeclaracionRetencionesPage() {
     });
 
     if (res.success) {
-      setMovimientos(res.data);
+      setMovimientos(res.data || []);
     } else {
       setErrorMsg(res.error || "Error al consultar los movimientos de retención.");
     }
@@ -162,21 +183,21 @@ export default function DeclaracionRetencionesPage() {
   };
 
   // 4. Agrupar datos por Concepto de Retención y capturar ajustes dinámicos
+  interface GrupoConceptoItem {
+    concepto: string;
+    conceptoAuxiliarId: number | string | null;
+    ajusteDebitoId: number | string | null;
+    ajusteCreditoId: number | string | null;
+    tarifaDisplay: string;
+    baseTotal: number;
+    valorRetencionTotal: number;
+  }
+
   const datosAgrupadosPorConcepto = useMemo(() => {
-    const agrupado: { 
-      [key: string]: { 
-        concepto: string; 
-        conceptoAuxiliarId: any; 
-        ajusteDebitoId: any; 
-        ajusteCreditoId: any; 
-        tarifaDisplay: string; 
-        baseTotal: number; 
-        valorRetencionTotal: number 
-      } 
-    } = {};
+    const agrupado: { [key: string]: GrupoConceptoItem } = {};
 
     movimientos.forEach((m) => {
-      const nombreConcepto = m.conceptos_retencion?.concepto || m.concepto || "CONCEPTO GENERAL";
+      const nombreConcepto = m.conceptos_retencion?.concepto || (m.concepto as string) || "CONCEPTO GENERAL";
       const conceptoAuxId = m.conceptos_retencion?.concepto_auxiliar_id || null;
       const ajusteDebitoId = m.conceptos_retencion?.concepto_auxiliar_ajuste_debito_id || null;
       const ajusteCreditoId = m.conceptos_retencion?.concepto_auxiliar_ajuste_credito_id || null;
@@ -253,6 +274,14 @@ export default function DeclaracionRetencionesPage() {
     setErrorMsg(null);
     setSuccessMsg(null);
 
+    const detallesParaAccion: DetalleAgrupadoItem[] = datosAgrupadosPorConcepto.map((item) => ({
+      conceptoAuxiliarId: item.conceptoAuxiliarId || "",
+      concepto: item.concepto,
+      valorRetencionTotal: item.valorRetencionTotal,
+      ajusteDebitoId: item.ajusteDebitoId,
+      ajusteCreditoId: item.ajusteCreditoId,
+    }));
+
     const res = await registrarAsientoCierreRetenciones({
       empresaId,
       sucursalId,
@@ -261,18 +290,20 @@ export default function DeclaracionRetencionesPage() {
       tipoRetencion,
       periodoDesde,
       periodoHasta,
-      fechaContable, // <--- 3. Pasar la fecha contable elegida al Server Action
+      fechaContable,
       totales: totalesDeclaracion,
-      detallesAgrupados: datosAgrupadosPorConcepto,
+      detallesAgrupados: detallesParaAccion,
     });
 
-    if (res.success) {
-      setSuccessMsg(`¡Asiento contable de cierre generado con éxito! N° Documento: ${res.data?.numeroDocumento}`);
+    if (res.success && res.data) {
+      setSuccessMsg(`¡Asiento contable de cierre generado con éxito! N° Documento: ${res.data.numeroDocumento}`);
     } else {
       setErrorMsg(res.error || "Error al registrar el asiento contable de cierre.");
     }
     setProcesandoCierre(false);
   }
+
+  if (!isMounted) return null;
 
   return (
     <div className="p-3 max-w-[98%] mx-auto space-y-3 text-xs">
@@ -361,7 +392,7 @@ export default function DeclaracionRetencionesPage() {
         </div>
       </div>
 
-      {/* Selectores del Comprobante Contable y Fecha Contable (MODIFICADO) */}
+      {/* Selectores del Comprobante Contable y Fecha Contable */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-100 text-[11px]">
         <div>
           <label className="block text-[9px] font-bold text-indigo-800 uppercase mb-1">Clase de Documento Contable</label>
@@ -395,7 +426,6 @@ export default function DeclaracionRetencionesPage() {
           </select>
         </div>
 
-        {/* <--- 4. Campo de Fecha Contable para el asiento de cierre con validación en tiempo real */}
         <div>
           <label className="block text-[9px] font-bold text-indigo-800 uppercase mb-1">Fecha Contable de Cierre *</label>
           <input
@@ -499,7 +529,6 @@ export default function DeclaracionRetencionesPage() {
           <div className="text-right text-[11px] text-slate-500">
             Se contabilizará el asiento aplicando los débitos, el crédito principal y las cuentas de ajuste dinámicas.
           </div>
-          {/* <--- 5. Bloqueo preventivo en el botón si el periodo contable no es válido */}
           <button
             type="button"
             onClick={handleGenerarAsientoCierre}

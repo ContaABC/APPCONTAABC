@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -12,8 +13,11 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
 })
 
 export async function GET(request) {
+  const cookieStore = cookies()
   const { searchParams } = new URL(request.url)
-  const empresaId = searchParams.get('empresaId')
+  
+  // Captura automática de empresaId: si no viene en la URL, se lee de la cookie activa
+  const empresaId = searchParams.get('empresaId') || cookieStore.get('empresa_activa')?.value
   const claseDocumentoId = searchParams.get('claseDocumentoId')
   const fetchEmpresas = searchParams.get('empresas')
 
@@ -78,7 +82,7 @@ export async function GET(request) {
       })
     }
 
-    return NextResponse.json({ error: 'Parámetros faltantes en la consulta' }, { status: 400 })
+    return NextResponse.json({ error: 'Parámetros faltantes en la consulta o no hay sesión de empresa activa' }, { status: 400 })
   } catch (error) {
     console.error('Error en GET /api/clase-documento-conceptos:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
@@ -87,7 +91,12 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
-    const { empresaId, claseDocumentoId, conceptoDebitoId, conceptoCreditoId, conceptoIvaId } = await request.json()
+    const cookieStore = cookies()
+    const body = await request.json()
+    let { empresaId, claseDocumentoId, conceptoDebitoId, conceptoCreditoId, conceptoIvaId } = body
+
+    // Captura automática de empresaId desde el body o la cookie de sesión
+    empresaId = empresaId || cookieStore.get('empresa_activa')?.value
 
     if (!claseDocumentoId || !conceptoDebitoId || !conceptoCreditoId) {
       return NextResponse.json(

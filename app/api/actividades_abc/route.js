@@ -1,12 +1,16 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET: Listar actividades ABC por empresa o generar consecutivo
 export async function GET(req) {
   try {
+    const cookieStore = cookies()
     const { searchParams } = new URL(req.url)
     const accion = searchParams.get('accion')
-    const empresa_id = searchParams.get('empresa_id')
+    
+    // Captura automática: si la URL no trae empresa_id, se lee de la cookie de la sesión activa
+    const empresa_id = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
 
     // Listar todas las empresas para los selectores
     if (accion === 'listar_empresas') {
@@ -49,7 +53,7 @@ export async function GET(req) {
     // Listar actividades ABC de una empresa específica
     if (!empresa_id) {
       return NextResponse.json(
-        { exito: false, mensaje: 'El parámetro empresa_id es obligatorio.' },
+        { exito: false, mensaje: 'El parámetro empresa_id es obligatorio o no hay sesión activa.' },
         { status: 400 }
       )
     }
@@ -75,6 +79,7 @@ export async function GET(req) {
 // POST: Crear actividad ABC o Clonar masivamente
 export async function POST(req) {
   try {
+    const cookieStore = cookies()
     const body = await req.json()
 
     // CASO 1: ACCIÓN CLONAR / COPIAR A OTRAS EMPRESAS
@@ -150,17 +155,19 @@ export async function POST(req) {
     }
 
     // CASO 2: CREAR UNA SOLA ACTIVIDAD ABC
-    const { empresa_id, codigo, nombre, descripcion } = body
+    // Inyección automática desde la cookie si falta en el body
+    const empresa_id = body.empresa_id || cookieStore.get('empresa_activa')?.value
+    const { codigo, nombre, descripcion } = body
 
     if (!empresa_id || !nombre) {
       return NextResponse.json(
-        { exito: false, mensaje: 'Campos requeridos faltantes: empresa_id y nombre son obligatorios.' },
+        { exito: false, mensaje: 'Campos requeridos faltantes: empresa_id (o sesión activa) y nombre son obligatorios.' },
         { status: 400 }
       )
     }
 
     const nuevaActividad = {
-      empresa_id,
+      empresa_id: Number(empresa_id),
       codigo: codigo || 'ABC-001',
       nombre,
       descripcion: descripcion || ''

@@ -1,5 +1,6 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
@@ -16,16 +17,23 @@ function getSupabaseAdmin() {
 }
 
 export async function obtenerBalanceGeneral(
-  empresaId: number,
-  sucursalId: number | null,
-  anio: number,
-  mes: number,
-  tipoReporte: "ACUMULADO" | "MES"
+  empresaId?: number | string | null,
+  sucursalId?: number | string | null,
+  anio?: number | string | null,
+  mes?: number | string | null,
+  tipoReporte: "ACUMULADO" | "MES" = "ACUMULADO"
 ) {
   try {
+    const cookieStore = await cookies();
+    const idEmpresa = empresaId || cookieStore.get("empresa_activa")?.value;
+
+    if (!idEmpresa) {
+      return { success: false, data: [], error: "No se especificó la empresa o no hay sesión activa." };
+    }
+
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase.rpc("obtener_balance_general", {
-      p_empresa_id: Number(empresaId),
+      p_empresa_id: Number(idEmpresa),
       p_sucursal_id: sucursalId ? Number(sucursalId) : null,
       p_anio: Number(anio),
       p_mes: Number(mes),
@@ -34,7 +42,8 @@ export async function obtenerBalanceGeneral(
 
     if (error) throw new Error(error.message);
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+  } catch (err: unknown) {
+    const mensajeError = err instanceof Error ? err.message : "Error desconocido al generar el balance general.";
+    return { success: false, data: [], error: mensajeError };
   }
 }

@@ -9,10 +9,10 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 
 interface XmlUploaderMasivoProps {
-  selectedCompanyId: string;
-  selectedBranchId: string;
-  selectedDocumentClassId: string;
-  fechaContabilizacion: string;
+  selectedCompanyId?: string;
+  selectedBranchId?: string;
+  selectedDocumentClassId?: string;
+  fechaContabilizacion?: string;
 }
 
 interface ConceptoRetencion {
@@ -26,10 +26,10 @@ interface ConceptoRetencion {
 }
 
 export default function XmlUploaderMasivo({
-  selectedCompanyId,
-  selectedBranchId,
-  selectedDocumentClassId,
-  fechaContabilizacion,
+  selectedCompanyId: propCompanyId,
+  selectedBranchId: propBranchId,
+  selectedDocumentClassId: propDocumentClassId,
+  fechaContabilizacion: propFechaContabilizacion,
 }: XmlUploaderMasivoProps) {
   const [archivosXml, setArchivosXml] = useState<File[]>([]);
   const [itemsPrevios, setItemsPrevios] = useState<DatosXmlItem[]>([]);
@@ -42,6 +42,30 @@ export default function XmlUploaderMasivo({
   } | null>(null);
   const [resultados, setResultados] = useState<ResultadoFacturaItem[]>([]);
   const [errorGlobal, setErrorGlobal] = useState<string | null>(null);
+
+  // Sincronización corporativa automática con localStorage / Cookies si no se pasa por props
+  const [empresaActivaId, setEmpresaActivaId] = useState<string>(propCompanyId || "");
+
+  useEffect(() => {
+    if (propCompanyId) {
+      setEmpresaActivaId(propCompanyId);
+    } else {
+      const cookieEmpresa = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("empresa_activa="));
+      const empresaCookie = cookieEmpresa ? cookieEmpresa.split("=")[1] : null;
+      const empresaLocal = localStorage.getItem("empresa_activa");
+      
+      if (empresaCookie || empresaLocal) {
+        setEmpresaActivaId(empresaCookie || empresaLocal || "");
+      }
+    }
+  }, [propCompanyId]);
+
+  const selectedCompanyId = propCompanyId || empresaActivaId;
+  const selectedBranchId = propBranchId || "";
+  const selectedDocumentClassId = propDocumentClassId || "";
+  const fechaContabilizacion = propFechaContabilizacion || new Date().toISOString().split("T")[0];
 
   // Conceptos de retención para la empresa activa
   const [conceptosRetencion, setConceptosRetencion] = useState<ConceptoRetencion[]>([]);
@@ -413,6 +437,12 @@ export default function XmlUploaderMasivo({
         </p>
       </div>
 
+      {!selectedCompanyId && (
+        <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-800 rounded font-medium">
+          ⚠ Seleccione una empresa activa en la barra superior para habilitar la carga masiva y vinculación de retenciones.
+        </div>
+      )}
+
       {errorGlobal && (
         <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded font-medium space-y-1">
           <div className="font-bold">⚠ Advertencia / Error:</div>
@@ -427,13 +457,13 @@ export default function XmlUploaderMasivo({
           accept=".xml"
           multiple
           onChange={handleFileChange}
-          disabled={loading}
+          disabled={loading || !selectedCompanyId}
           className="hidden"
           id="masivo-xml-input"
         />
         <label
           htmlFor="masivo-xml-input"
-          className="cursor-pointer flex flex-col items-center justify-center space-y-1"
+          className={`cursor-pointer flex flex-col items-center justify-center space-y-1 ${!selectedCompanyId ? "opacity-50 cursor-not-allowed" : ""}`}
         >
           <span className="text-xl">📁</span>
           <span className="font-semibold text-blue-600 hover:underline">

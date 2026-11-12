@@ -1,6 +1,22 @@
 'use client'
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, FormEvent } from 'react'
+
+// Interfaces corporativas estrictas
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+}
+
+interface ConceptoNiif {
+  id: number | string;
+  empresa_id: number | string;
+  codigo_concepto: string;
+  nombre: string;
+  elemento?: string;
+  clasificacion_balance?: string;
+}
 
 // Opciones estándar para el Marco Conceptual NIIF
 const ELEMENTOS_NIIF = [
@@ -10,7 +26,7 @@ const ELEMENTOS_NIIF = [
   'Ingresos',
   'Gastos',
   'Costos'
-]
+] as const;
 
 const CLASIFICACIONES_BALANCE = [
   'Corriente',
@@ -18,10 +34,10 @@ const CLASIFICACIONES_BALANCE = [
   'Resultado del Periodo',
   'Otro Resultado Integral (ORI)',
   'No Aplica'
-]
+] as const;
 
 // Colores distintivos por Elemento NIIF
-const ELEMENTO_BADGE_COLORS = {
+const ELEMENTO_BADGE_COLORS: { [key: string]: string } = {
   'Activo': 'bg-emerald-50 text-emerald-700 border-emerald-200',
   'Pasivo': 'bg-sky-50 text-sky-700 border-sky-200',
   'Patrimonio': 'bg-purple-50 text-purple-700 border-purple-200',
@@ -32,24 +48,42 @@ const ELEMENTO_BADGE_COLORS = {
 }
 
 // ==========================================
+// PROPS INTERFACES PARA MODALES
+// ==========================================
+interface ModalClonarProps {
+  empresas: Empresa[];
+  empresaOrigenInicial: string;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+interface SubformularioProps {
+  empresas: Empresa[];
+  empresaIdSeleccionada: string;
+  conceptoEditar: ConceptoNiif | null;
+  onClose: () => void;
+  onSave: () => void;
+}
+
+// ==========================================
 // COMPONENTE: MODAL CLONAR / COPIAR CONCEPTOS NIIF
 // ==========================================
-function ModalClonarConceptos({ empresas, empresaOrigenInicial, onClose, onSuccess }) {
-  const [empresaOrigenId, setEmpresaOrigenId] = useState(empresaOrigenInicial || '')
-  const [empresasDestinoIds, setEmpresasDestinoIds] = useState([])
-  const [copiando, setCopiando] = useState(false)
+function ModalClonarConceptos({ empresas, empresaOrigenInicial, onClose, onSuccess }: ModalClonarProps) {
+  const [empresaOrigenId, setEmpresaOrigenId] = useState<string>(empresaOrigenInicial || '')
+  const [empresasDestinoIds, setEmpresasDestinoIds] = useState<string[]>([])
+  const [copiando, setCopiando] = useState<boolean>(false)
 
   const empresasDestinoPosibles = empresas.filter(
     (emp) => String(emp.id) !== String(empresaOrigenId)
   )
 
-  const handleOrigenChange = (e) => {
+  const handleOrigenChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const nuevoOrigenId = e.target.value
     setEmpresaOrigenId(nuevoOrigenId)
     setEmpresasDestinoIds((prev) => prev.filter((id) => String(id) !== String(nuevoOrigenId)))
   }
 
-  const handleToggleEmpresaDestino = (id) => {
+  const handleToggleEmpresaDestino = (id: number | string) => {
     const stringId = String(id)
     setEmpresasDestinoIds((prev) =>
       prev.includes(stringId)
@@ -66,7 +100,7 @@ function ModalClonarConceptos({ empresas, empresaOrigenInicial, onClose, onSucce
     }
   }
 
-  const handleSubmitClonar = async (e) => {
+  const handleSubmitClonar = async (e: FormEvent) => {
     e.preventDefault()
 
     if (!empresaOrigenId) {
@@ -226,10 +260,17 @@ function ModalClonarConceptos({ empresas, empresaOrigenInicial, onClose, onSucce
 // ==========================================
 // COMPONENTE: SUBFORMULARIO MODAL CONCEPTO NIIF
 // ==========================================
-function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEditar, onClose, onSave }) {
-  const [guardando, setGuardando] = useState(false)
+function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEditar, onClose, onSave }: SubformularioProps) {
+  const [guardando, setGuardando] = useState<boolean>(false)
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    id?: number | string;
+    empresa_id: string;
+    codigo_concepto: string;
+    nombre: string;
+    elemento: string;
+    clasificacion_balance: string;
+  }>({
     empresa_id: empresaIdSeleccionada || '',
     codigo_concepto: '',
     nombre: '',
@@ -237,7 +278,7 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
     clasificacion_balance: ''
   })
 
-  const obtenerCodigoAuto = async (empId) => {
+  const obtenerCodigoAuto = async (empId: string) => {
     if (!empId) return
     try {
       const res = await fetch(`/api/conceptos_niif?empresa_id=${empId}&accion=siguiente_codigo`)
@@ -254,7 +295,7 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
     if (conceptoEditar) {
       setFormData({
         id: conceptoEditar.id,
-        empresa_id: conceptoEditar.empresa_id || empresaIdSeleccionada || '',
+        empresa_id: String(conceptoEditar.empresa_id || empresaIdSeleccionada || ''),
         codigo_concepto: conceptoEditar.codigo_concepto || '',
         nombre: conceptoEditar.nombre || '',
         elemento: conceptoEditar.elemento || '',
@@ -263,7 +304,7 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
     } else {
       setFormData((prev) => ({
         ...prev,
-        empresa_id: empresaIdSeleccionada || ''
+        empresa_id: String(empresaIdSeleccionada || '')
       }))
       if (empresaIdSeleccionada) {
         obtenerCodigoAuto(empresaIdSeleccionada)
@@ -271,7 +312,7 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
     }
   }, [conceptoEditar, empresaIdSeleccionada])
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
 
     if (!formData.empresa_id) {
@@ -430,22 +471,22 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
 // COMPONENTE PRINCIPAL: PÁGINA CONCEPTOS NIIF
 // ==========================================
 export default function ConceptosNiifPage() {
-  const [empresas, setEmpresas] = useState([])
-  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState('')
-  const [conceptos, setConceptos] = useState([])
-  const [cargando, setCargando] = useState(true)
+  const [empresas, setEmpresas] = useState<Empresa[]>([])
+  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState<string>('')
+  const [conceptos, setConceptos] = useState<ConceptoNiif[]>([])
+  const [cargando, setCargando] = useState<boolean>(true)
 
-  const [modalFormAbierto, setModalFormAbierto] = useState(false)
-  const [modalClonarAbierto, setModalClonarAbierto] = useState(false)
+  const [modalFormAbierto, setModalFormAbierto] = useState<boolean>(false)
+  const [modalClonarAbierto, setModalClonarAbierto] = useState<boolean>(false)
 
-  const [conceptoSeleccionado, setConceptoSeleccionado] = useState(null)
-  const [isMounted, setIsMounted] = useState(false)
+  const [conceptoSeleccionado, setConceptoSeleccionado] = useState<ConceptoNiif | null>(null)
+  const [isMounted, setIsMounted] = useState<boolean>(false)
 
   useEffect(() => {
     setIsMounted(true)
   }, [])
 
-  const cargarConceptos = useCallback(async (empId) => {
+  const cargarConceptos = useCallback(async (empId: string) => {
     if (!empId) return
     setCargando(true)
     try {
@@ -470,7 +511,7 @@ export default function ConceptosNiifPage() {
         const res = await fetch('/api/conceptos_niif?accion=listar_empresas')
         const data = await res.json()
         if (data.exito && data.datos.length > 0) {
-          const empresasOrdenadas = [...data.datos].sort((a, b) => {
+          const empresasOrdenadas = [...data.datos].sort((a: Empresa, b: Empresa) => {
             const nombreA = a.razon_social || a.nombre_comercial || ''
             const nombreB = b.razon_social || b.nombre_comercial || ''
             return nombreA.localeCompare(nombreB, 'es', { sensitivity: 'base' })
@@ -478,7 +519,20 @@ export default function ConceptosNiifPage() {
 
           setEmpresas(empresasOrdenadas)
 
-          const primeraEmpresaId = String(empresasOrdenadas[0].id)
+          // Sincronizar con cookies y localStorage corporativo
+          const cookieEmpresa = document.cookie
+            .split('; ')
+            .find((row) => row.startsWith('empresa_activa='))
+          const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null
+          const empresaGuardadaLocal = localStorage.getItem('empresa_activa')
+
+          const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal
+          const existeEmpresa = empresasOrdenadas.some((emp) => String(emp.id) === String(empresaIdParaSeleccionar))
+
+          const primeraEmpresaId = existeEmpresa && empresaIdParaSeleccionar
+            ? String(empresaIdParaSeleccionar)
+            : String(empresasOrdenadas[0].id)
+
           setEmpresaIdSeleccionada(primeraEmpresaId)
           cargarConceptos(primeraEmpresaId)
         } else {
@@ -492,7 +546,15 @@ export default function ConceptosNiifPage() {
     cargarEmpresasIniciales()
   }, [cargarConceptos])
 
-  const handleEmpresaChange = (e) => {
+  // Persistir cambios de empresaIdSeleccionada en cookies y localStorage
+  useEffect(() => {
+    if (empresaIdSeleccionada) {
+      localStorage.setItem('empresa_activa', String(empresaIdSeleccionada))
+      document.cookie = `empresa_activa=${empresaIdSeleccionada}; path=/; max-age=86400; SameSite=Lax`
+    }
+  }, [empresaIdSeleccionada])
+
+  const handleEmpresaChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const nuevoId = e.target.value
     setEmpresaIdSeleccionada(nuevoId)
     cargarConceptos(nuevoId)
@@ -503,12 +565,12 @@ export default function ConceptosNiifPage() {
     setModalFormAbierto(true)
   }
 
-  const handleEditarConcepto = (concepto) => {
+  const handleEditarConcepto = (concepto: ConceptoNiif) => {
     setConceptoSeleccionado(concepto)
     setModalFormAbierto(true)
   }
 
-  const handleEliminar = async (concepto) => {
+  const handleEliminar = async (concepto: ConceptoNiif) => {
     if (!confirm(`¿Deseas eliminar el concepto NIIF "${concepto.nombre}"?`)) return
 
     try {
@@ -528,7 +590,7 @@ export default function ConceptosNiifPage() {
 
   // Agrupar conceptos por Elemento NIIF manteniendo el orden estándar
   const conceptosAgrupados = useMemo(() => {
-    const grupos = {}
+    const grupos: { [key: string]: ConceptoNiif[] } = {}
     ELEMENTOS_NIIF.forEach((elem) => {
       grupos[elem] = []
     })

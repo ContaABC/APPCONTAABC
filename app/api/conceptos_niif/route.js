@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // ==========================================
@@ -6,9 +7,12 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 // ==========================================
 export async function GET(req) {
   try {
+    const cookieStore = cookies()
     const { searchParams } = new URL(req.url)
     const accion = searchParams.get('accion')
-    const empresaId = searchParams.get('empresa_id')
+    
+    // Captura automática de empresaId: desde parámetros o leyendo la cookie activa
+    const empresaId = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
 
     // 1. Cargar la lista de empresas para el selector
     if (accion === 'listar_empresas') {
@@ -31,7 +35,7 @@ export async function GET(req) {
     if (accion === 'siguiente_codigo') {
       if (!empresaId) {
         return NextResponse.json(
-          { exito: false, mensaje: 'empresa_id es requerido para generar el consecutivo.' },
+          { exito: false, mensaje: 'empresa_id es requerido o no hay sesión activa para generar el consecutivo.' },
           { status: 400 }
         )
       }
@@ -67,7 +71,7 @@ export async function GET(req) {
     // 3. Listar conceptos NIIF filtrados por empresa
     if (!empresaId) {
       return NextResponse.json(
-        { exito: false, mensaje: 'El parámetro empresa_id es requerido.' },
+        { exito: false, mensaje: 'El parámetro empresa_id es requerido o no hay sesión activa.' },
         { status: 400 }
       )
     }
@@ -100,6 +104,7 @@ export async function GET(req) {
 // ==========================================
 export async function POST(req) {
   try {
+    const cookieStore = cookies()
     const body = await req.json()
 
     // ==========================================
@@ -202,19 +207,21 @@ export async function POST(req) {
     }
 
     // ==========================================
-    // CASO 2: CREAR UN SOLO CONCEPTO NIIF (Tu código original)
+    // CASO 2: CREAR UN SOLO CONCEPTO NIIF
     // ==========================================
-    const { empresa_id, codigo_concepto, nombre, elemento, clasificacion_balance } = body
+    // Captura automática: si el body no trae empresa_id, se inyecta desde la cookie activa
+    const empresa_id = body.empresa_id || cookieStore.get('empresa_activa')?.value
+    const { codigo_concepto, nombre, elemento, clasificacion_balance } = body
 
     if (!empresa_id || !nombre) {
       return NextResponse.json(
-        { exito: false, mensaje: 'Campos requeridos faltantes: empresa_id y nombre son obligatorios.' },
+        { exito: false, mensaje: 'Campos requeridos faltantes: empresa_id (o sesión activa) y nombre son obligatorios.' },
         { status: 400 }
       )
     }
 
     const nuevoConcepto = {
-      empresa_id,
+      empresa_id: Number(empresa_id),
       codigo_concepto: codigo_concepto || 'NIIF-001',
       nombre,
       elemento: elemento || '',

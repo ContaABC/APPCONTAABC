@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // ==========================================
@@ -6,9 +7,12 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 // ==========================================
 export async function GET(req) {
   try {
+    const cookieStore = await cookies()
     const { searchParams } = new URL(req.url)
     const accion = searchParams.get('accion')
-    const empresaId = searchParams.get('empresa_id')
+    
+    // Captura automática de empresaId: desde parámetros o leyendo la cookie activa
+    const empresaId = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
 
     // 1. Accionar listado de empresas para el select principal
     if (accion === 'listar_empresas') {
@@ -31,7 +35,7 @@ export async function GET(req) {
     if (accion === 'siguiente_codigo') {
       if (!empresaId) {
         return NextResponse.json(
-          { exito: false, mensaje: 'empresa_id es requerido para el consecutivo.' },
+          { exito: false, mensaje: 'empresa_id es requerido o no hay sesión activa para el consecutivo.' },
           { status: 400 }
         )
       }
@@ -69,7 +73,7 @@ export async function GET(req) {
     // 3. Listar sucursales por empresa
     if (!empresaId) {
       return NextResponse.json(
-        { exito: false, mensaje: 'El parámetro empresa_id es requerido.' },
+        { exito: false, mensaje: 'El parámetro empresa_id es requerido o no hay sesión activa.' },
         { status: 400 }
       )
     }
@@ -102,9 +106,13 @@ export async function GET(req) {
 // ==========================================
 export async function POST(req) {
   try {
+    const cookieStore = await cookies()
     const body = await req.json()
+    
+    // Captura automática de empresa_id: desde el body o la cookie de sesión activa
+    const empresa_id = body.empresa_id || body.empresaId || cookieStore.get('empresa_activa')?.value
+
     const {
-      empresa_id,
       codigo_sucursal,
       direccion,
       telefono,
@@ -119,13 +127,13 @@ export async function POST(req) {
 
     if (!empresa_id || !nombreFinal) {
       return NextResponse.json(
-        { exito: false, mensaje: 'Campos requeridos faltantes: empresa_id o nombre' },
+        { exito: false, mensaje: 'Campos requeridos faltantes: empresa_id (o sesión activa) o nombre' },
         { status: 400 }
       )
     }
 
     const nuevaSucursal = {
-      empresa_id,
+      empresa_id: Number(empresa_id),
       codigo_sucursal: codigo_sucursal || 'SUC-001',
       nombre: nombreFinal,
       direccion: direccion || '',

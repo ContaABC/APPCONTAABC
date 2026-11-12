@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, FormEvent } from 'react'
 import {
   Plus,
   Edit2,
@@ -18,7 +18,47 @@ import {
   Filter
 } from 'lucide-react'
 
-const OPCIONES_TIPO_AUXILIAR = [
+// Interfaces corporativas estrictas
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+}
+
+interface SubconceptoNiif {
+  id: number | string;
+  codigo: string;
+  nombre: string;
+  elemento?: string;
+  clasificacion_elemento?: string;
+  tipo_elemento?: string;
+  naturaleza?: string;
+  elemento_niif?: string;
+}
+
+interface ConceptoAuxiliar {
+  id: number | string;
+  empresa_id: number | string;
+  subconcepto_niif_id: number | string;
+  codigo_auxiliar: string;
+  nombre: string;
+  tipo_entidad: string;
+  descripcion?: string;
+  estado: 'Activo' | 'Inactivo';
+  elemento?: string;
+  elemento_niif?: string;
+  codigo_subconcepto_niif?: string;
+  nombre_subconcepto_niif?: string;
+  codigo_concepto_niif?: string;
+  nombre_concepto_niif?: string;
+}
+
+interface TipoAuxiliarOption {
+  valor: string;
+  etiqueta: string;
+}
+
+const OPCIONES_TIPO_AUXILIAR: TipoAuxiliarOption[] = [
   { valor: 'Auxiliar_General', etiqueta: 'Auxiliar General' },
   { valor: 'Cuentas_Bancarias', etiqueta: 'Cuentas Bancarias' },
   { valor: 'Cuentas_Caja', etiqueta: 'Cuentas de Caja' },
@@ -34,38 +74,50 @@ const OPCIONES_TIPO_AUXILIAR = [
 ]
 
 export default function ConceptosAuxiliaresPage() {
-  const [isMounted, setIsMounted] = useState(false)
+  const [isMounted, setIsMounted] = useState<boolean>(false)
 
-  const [empresas, setEmpresas] = useState([])
-  const [empresaSeleccionada, setEmpresaSeleccionada] = useState('')
-  const [conceptos, setConceptos] = useState([])
-  const [subconceptosNiif, setSubconceptosNiif] = useState([])
+  const [empresas, setEmpresas] = useState<Empresa[]>([])
+  const [empresaSeleccionada, setEmpresaSeleccionada] = useState<string>('')
+  const [conceptos, setConceptos] = useState<ConceptoAuxiliar[]>([])
+  const [subconceptosNiif, setSubconceptosNiif] = useState<SubconceptoNiif[]>([])
 
-  const [loadingEmpresas, setLoadingEmpresas] = useState(true)
-  const [loadingTabla, setLoadingTabla] = useState(false)
-  const [loadingNiif, setLoadingNiif] = useState(false)
-  const [guardando, setGuardando] = useState(false)
-  const [eliminandoId, setEliminandoId] = useState(null)
+  const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(true)
+  const [loadingTabla, setLoadingTabla] = useState<boolean>(false)
+  const [loadingNiif, setLoadingNiif] = useState<boolean>(false)
+  const [guardando, setGuardando] = useState<boolean>(false)
+  const [eliminandoId, setEliminandoId] = useState<number | string | null>(null)
 
   // Filtros avanzados
-  const [filtroBusqueda, setFiltroBusqueda] = useState('')
-  const [filtroSubconcepto, setFiltroSubconcepto] = useState('')
-  const [filtroEstado, setFiltroEstado] = useState('')
+  const [filtroBusqueda, setFiltroBusqueda] = useState<string>('')
+  const [filtroSubconcepto, setFiltroSubconcepto] = useState<string>('')
+  const [filtroEstado, setFiltroEstado] = useState<string>('')
 
-  const [modalAbierto, setModalAbierto] = useState(false)
-  const [modoEdicion, setModoEdicion] = useState(false)
-  const [conceptoEditarId, setConceptoEditarId] = useState(null)
+  const [modalAbierto, setModalAbierto] = useState<boolean>(false)
+  const [modoEdicion, setModoEdicion] = useState<boolean>(false)
+  const [conceptoEditarId, setConceptoEditarId] = useState<number | string | null>(null)
 
   // Mensaje de éxito específico para inserciones continuas en el modal
-  const [ultimoCreado, setUltimoCreado] = useState(null)
+  const [ultimoCreado, setUltimoCreado] = useState<{ codigo: string; nombre: string } | null>(null)
 
-  const [notificacion, setNotificacion] = useState({
+  const [notificacion, setNotificacion] = useState<{
+    visible: boolean;
+    tipo: 'exito' | 'error' | 'info';
+    mensaje: string;
+  }>({
     visible: false,
     tipo: 'exito',
     mensaje: ''
   })
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    subconcepto_niif_id: string;
+    codigo_auxiliar: string;
+    nombre: string;
+    tipo_entidad: string;
+    descripcion: string;
+    estado: 'Activo' | 'Inactivo';
+    elemento: string;
+  }>({
     subconcepto_niif_id: '',
     codigo_auxiliar: '',
     nombre: '',
@@ -75,9 +127,9 @@ export default function ConceptosAuxiliaresPage() {
     elemento: ''
   })
 
-  const [erroresForm, setErroresForm] = useState({})
+  const [erroresForm, setErroresForm] = useState<{ [key: string]: string | null }>({})
 
-  const mostrarNotificacion = useCallback((tipo, mensaje) => {
+  const mostrarNotificacion = useCallback((tipo: 'exito' | 'error' | 'info', mensaje: string) => {
     setNotificacion({ visible: true, tipo, mensaje })
   }, [])
 
@@ -102,10 +154,24 @@ export default function ConceptosAuxiliaresPage() {
 
       const json = await res.json()
       if (json.exito) {
-        const listaEmpresas = json.datos || []
+        const listaEmpresas: Empresa[] = json.datos || []
         setEmpresas(listaEmpresas)
         if (listaEmpresas.length > 0) {
-          setEmpresaSeleccionada(String(listaEmpresas[0].id))
+          // Leer la empresa activa de cookies o localStorage corporativo
+          const cookieEmpresa = document.cookie
+            .split('; ')
+            .find((row) => row.startsWith('empresa_activa='))
+          const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null
+          const empresaGuardadaLocal = localStorage.getItem('empresa_activa')
+          
+          const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal
+          const existeEmpresa = listaEmpresas.some((emp) => String(emp.id) === String(empresaIdParaSeleccionar))
+
+          if (existeEmpresa && empresaIdParaSeleccionar) {
+            setEmpresaSeleccionada(String(empresaIdParaSeleccionar))
+          } else {
+            setEmpresaSeleccionada(String(listaEmpresas[0].id))
+          }
         }
       } else {
         mostrarNotificacion('error', json.mensaje || 'Error al obtener empresas')
@@ -118,7 +184,15 @@ export default function ConceptosAuxiliaresPage() {
     }
   }, [mostrarNotificacion])
 
-  const cargarSubconceptosNiif = useCallback(async (empId) => {
+  // Persistir cambios de empresaSeleccionada en cookies y localStorage
+  useEffect(() => {
+    if (empresaSeleccionada) {
+      localStorage.setItem('empresa_activa', String(empresaSeleccionada))
+      document.cookie = `empresa_activa=${empresaSeleccionada}; path=/; max-age=86400; SameSite=Lax`
+    }
+  }, [empresaSeleccionada])
+
+  const cargarSubconceptosNiif = useCallback(async (empId: string) => {
     if (!empId) return
     setLoadingNiif(true)
     try {
@@ -137,7 +211,7 @@ export default function ConceptosAuxiliaresPage() {
     }
   }, [mostrarNotificacion])
 
-  const cargarDatosEmpresa = useCallback(async (empId) => {
+  const cargarDatosEmpresa = useCallback(async (empId: string) => {
     if (!empId) return
     setLoadingTabla(true)
     try {
@@ -170,7 +244,7 @@ export default function ConceptosAuxiliaresPage() {
     }
   }, [empresaSeleccionada, cargarDatosEmpresa, cargarSubconceptosNiif])
 
-  const obtenerElementoTexto = (c) => {
+  const obtenerElementoTexto = (c: any): string => {
     return (
       c.elemento ||
       c.clasificacion_elemento ||
@@ -182,7 +256,7 @@ export default function ConceptosAuxiliaresPage() {
   }
 
   const subconceptosNiifAgrupadosPorElemento = useMemo(() => {
-    const grupos = {}
+    const grupos: { [key: string]: SubconceptoNiif[] } = {}
     subconceptosNiif.forEach((n) => {
       const elemento = obtenerElementoTexto(n) || 'GENERAL / OTROS'
       if (!grupos[elemento]) {
@@ -193,7 +267,7 @@ export default function ConceptosAuxiliaresPage() {
     return grupos
   }, [subconceptosNiif])
 
-  const handleCambioSubconceptoNiif = (niifId) => {
+  const handleCambioSubconceptoNiif = (niifId: string) => {
     setErroresForm((prev) => ({ ...prev, subconcepto_niif_id: null }))
 
     if (!niifId) {
@@ -237,7 +311,7 @@ export default function ConceptosAuxiliaresPage() {
     }
   }
 
-  const handleToggleEstado = async (item) => {
+  const handleToggleEstado = async (item: ConceptoAuxiliar) => {
     const nuevoEstado = item.estado === 'Activo' ? 'Inactivo' : 'Activo'
 
     try {
@@ -263,7 +337,7 @@ export default function ConceptosAuxiliaresPage() {
     }
   }
 
-  const handleEliminar = async (item) => {
+  const handleEliminar = async (item: ConceptoAuxiliar) => {
     const confirmacion = window.confirm(
       `¿Está seguro de eliminar el concepto auxiliar "${item.nombre}"?`
     )
@@ -307,7 +381,7 @@ export default function ConceptosAuxiliaresPage() {
     setModalAbierto(true)
   }
 
-  const abrirModalEditar = (item) => {
+  const abrirModalEditar = (item: ConceptoAuxiliar) => {
     setModoEdicion(true)
     setConceptoEditarId(item.id)
     setUltimoCreado(null)
@@ -325,8 +399,8 @@ export default function ConceptosAuxiliaresPage() {
     setModalAbierto(true)
   }
 
-  const validarFormulario = () => {
-    const nuevosErrores = {}
+  const validarFormulario = (): boolean => {
+    const nuevosErrores: { [key: string]: string } = {}
 
     if (!formData.subconcepto_niif_id) {
       nuevosErrores.subconcepto_niif_id = 'Debe seleccionar un Subconcepto NIIF'
@@ -342,7 +416,7 @@ export default function ConceptosAuxiliaresPage() {
     return Object.keys(nuevosErrores).length === 0
   }
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!validarFormulario()) return
 
@@ -399,7 +473,6 @@ export default function ConceptosAuxiliaresPage() {
     }
   }
 
-  // Filtrado general e individual por selectores
   const conceptosFiltrados = useMemo(() => {
     return conceptos.filter((item) => {
       const termino = filtroBusqueda.toLowerCase().trim()
@@ -423,9 +496,9 @@ export default function ConceptosAuxiliaresPage() {
     })
   }, [conceptos, filtroBusqueda, filtroSubconcepto, filtroEstado])
 
-  // Agrupación y ordenamiento ascendente por el código del subconcepto NIIF
   const conceptosAgrupadosPorPadre = useMemo(() => {
-    const grupos = {}
+    const grupos: { [key: string]: { padreId: any; padreCodigo: string; padreNombre: string; conceptoNiifNombre: string; items: ConceptoAuxiliar[] } } = {}
+    
     conceptosFiltrados.forEach((item) => {
       const padreId = item.subconcepto_niif_id || 'sin_padre'
       const padreCodigo = item.codigo_subconcepto_niif || 'S/C'
@@ -444,20 +517,18 @@ export default function ConceptosAuxiliaresPage() {
       grupos[padreId].items.push(item)
     })
 
-    // Ordenar los items de cada grupo de forma ascendente por código auxiliar
     Object.values(grupos).forEach((grupo) => {
       grupo.items.sort((a, b) => 
         (a.codigo_auxiliar || '').localeCompare(b.codigo_auxiliar || '', undefined, { numeric: true, sensitivity: 'base' })
       )
     })
 
-   // Retornar los grupos ordenados ascendentemente por el código del subconcepto NIIF
     return Object.values(grupos).sort((a, b) => 
       a.padreCodigo.localeCompare(b.padreCodigo, undefined, { numeric: true, sensitivity: 'base' })
     )
   }, [conceptosFiltrados])
 
-  const obtenerEtiquetaTipoAuxiliar = (valor) => {
+  const obtenerEtiquetaTipoAuxiliar = (valor: string): string => {
     const encontrado = OPCIONES_TIPO_AUXILIAR.find((op) => op.valor === valor)
     return encontrado ? encontrado.etiqueta : valor || '-'
   }
@@ -550,7 +621,7 @@ export default function ConceptosAuxiliaresPage() {
         </div>
       </div>
 
-      {/* Barra de Filtros y Buscador Avanzado (Filtro de Subconcepto Agrupado por Elemento) */}
+      {/* Barra de Filtros y Buscador Avanzado */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 bg-white p-3 rounded-xl border border-slate-200/80 shadow-sm">
         <div className="md:col-span-6 relative">
           <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -765,7 +836,6 @@ export default function ConceptosAuxiliaresPage() {
               </button>
             </div>
 
-            {/* Banner de éxito al registrar de forma continua */}
             {ultimoCreado && !modoEdicion && (
               <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-2 rounded-lg flex items-center gap-2 text-xs">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />

@@ -6,26 +6,35 @@ import {
   obtenerConceptosRetencion, 
   guardarConceptoRetencion, 
   obtenerAuxiliaresPorElemento,
-  clonarConceptosAnioAnterior
+  clonarConceptosAnioAnterior,
+  ConceptoRetencionRow,
+  ConceptoAuxiliarInfo
 } from "./conceptos-actions";
-import { Plus, Edit, CheckCircle, XCircle, Search, X, Copy } from "lucide-react";
+import { Plus, Edit, CheckCircle, XCircle, X, Copy } from "lucide-react";
+
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nombre?: string;
+}
 
 export default function ConceptosRetencionPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [empresas, setEmpresas] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [empresaId, setEmpresaId] = useState<string>("");
   
   const anioActual = new Date().getFullYear();
   const [anioSeleccionado, setAnioSeleccionado] = useState<number>(anioActual);
 
-  const [conceptos, setConceptos] = useState<any[]>([]);
+  const [conceptos, setConceptos] = useState<ConceptoRetencionRow[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
 
-  const [auxiliaresPasivo, setAuxiliaresPasivo] = useState<any[]>([]);
-  const [auxiliaresActivo, setAuxiliaresActivo] = useState<any[]>([]);
+  const [auxiliaresPasivo, setAuxiliaresPasivo] = useState<ConceptoAuxiliarInfo[]>([]);
+  const [auxiliaresActivo, setAuxiliaresActivo] = useState<ConceptoAuxiliarInfo[]>([]);
 
   const [modalAbierto, setModalAbierto] = useState<boolean>(false);
-  const [conceptoEditando, setConceptoEditando] = useState<any | null>(null);
+  const [conceptoEditando, setConceptoEditando] = useState<ConceptoRetencionRow | null>(null);
 
   const [tipoRetencion, setTipoRetencion] = useState<"RENTA" | "IVA" | "ICA">("RENTA");
   const [conceptoTexto, setConceptoTexto] = useState<string>("");
@@ -45,7 +54,14 @@ export default function ConceptosRetencionPage() {
       const res = await obtenerEmpresas();
       if (res.success && res.data && res.data.length > 0) {
         setEmpresas(res.data);
-        setEmpresaId(String(res.data[0].id));
+        
+        // Leer cookie corporativa empresa_activa
+        const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'));
+        if (match && res.data.some((e: Empresa) => String(e.id) === match[2])) {
+          setEmpresaId(match[2]);
+        } else {
+          setEmpresaId(String(res.data[0].id));
+        }
       }
     }
     init();
@@ -54,6 +70,10 @@ export default function ConceptosRetencionPage() {
   useEffect(() => {
     if (!empresaId) return;
     cargarDatosEmpresa();
+
+    // Actualizar cookie y localStorage al cambiar empresa
+    localStorage.setItem("empresa_activa", empresaId);
+    document.cookie = `empresa_activa=${empresaId}; path=/; max-age=86400; SameSite=Lax`;
   }, [empresaId, anioSeleccionado]);
 
   async function cargarDatosEmpresa() {
@@ -101,7 +121,7 @@ export default function ConceptosRetencionPage() {
     setModalAbierto(true);
   };
 
-  const abrirModalEditar = (item: any) => {
+  const abrirModalEditar = (item: ConceptoRetencionRow) => {
     setConceptoEditando(item);
     setTipoRetencion(item.tipo_retencion);
     setConceptoTexto(item.concepto);
@@ -181,7 +201,6 @@ export default function ConceptosRetencionPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6 text-sm font-sans">
-      {/* ENCABEZADO */}
       <div className="border-b pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-800">
@@ -211,7 +230,6 @@ export default function ConceptosRetencionPage() {
         </div>
       </div>
 
-      {/* FILTROS DE EMPRESA Y AÑO */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
         <div className="md:col-span-6">
           <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">Empresa</label>
@@ -220,8 +238,8 @@ export default function ConceptosRetencionPage() {
             onChange={(e) => setEmpresaId(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 font-semibold text-sm outline-none"
           >
-            {empresas.map((emp: any) => (
-              <option key={emp.id} value={emp.id}>{emp.razon_social || emp.nombre_comercial}</option>
+            {empresas.map((emp) => (
+              <option key={emp.id} value={emp.id}>{emp.razon_social || emp.nombre_comercial || emp.nombre}</option>
             ))}
           </select>
         </div>
@@ -240,7 +258,6 @@ export default function ConceptosRetencionPage() {
         </div>
       </div>
 
-      {/* TABLA DE CONCEPTOS */}
       <div className="bg-white border rounded-xl shadow-xs overflow-hidden">
         {loading ? (
           <div className="p-12 text-center text-slate-500 font-semibold">Cargando conceptos para el año {anioSeleccionado}...</div>
@@ -271,7 +288,7 @@ export default function ConceptosRetencionPage() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {conceptos.map((item: any) => (
+                {conceptos.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50">
                     <td className="p-3.5 font-bold text-slate-900">
                       <span className={`px-2 py-1 rounded text-[10px] font-bold ${
@@ -316,7 +333,6 @@ export default function ConceptosRetencionPage() {
         )}
       </div>
 
-      {/* MODAL DE CREACIÓN / EDICIÓN */}
       {modalAbierto && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl shadow-2xl border max-w-2xl w-full p-8 space-y-6 relative font-sans text-slate-900 text-sm max-h-[90vh] overflow-y-auto">
@@ -337,7 +353,7 @@ export default function ConceptosRetencionPage() {
                   <label className="block font-bold text-slate-700 uppercase mb-1.5 text-xs">Tipo de Impuesto</label>
                   <select
                     value={tipoRetencion}
-                    onChange={(e) => setTipoRetencion(e.target.value as any)}
+                    onChange={(e) => setTipoRetencion(e.target.value as "RENTA" | "IVA" | "ICA")}
                     disabled={!!conceptoEditando}
                     className={`w-full border border-slate-300 rounded-lg px-3 py-2.5 font-semibold outline-none ${
                       conceptoEditando ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-white text-slate-900'
@@ -400,7 +416,6 @@ export default function ConceptosRetencionPage() {
                 </div>
               </div>
 
-              {/* DOBLE PARAMETRIZACIÓN DE CUENTAS AUXILIARES */}
               <div className="space-y-4 pt-2 border-t">
                 <div>
                   <label className="block font-bold text-slate-700 uppercase mb-1.5 text-xs">
@@ -412,7 +427,7 @@ export default function ConceptosRetencionPage() {
                     className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2.5 font-semibold outline-none text-xs font-mono"
                   >
                     <option value="">-- Seleccione Cuenta de Pasivo --</option>
-                    {auxiliaresPasivo.map((aux: any) => (
+                    {auxiliaresPasivo.map((aux) => (
                       <option key={aux.id} value={aux.id}>
                         {aux.codigo_auxiliar} - {aux.nombre}
                       </option>
@@ -430,7 +445,7 @@ export default function ConceptosRetencionPage() {
                     className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2.5 font-semibold outline-none text-xs font-mono"
                   >
                     <option value="">-- Seleccione Cuenta de Activo (Opcional) --</option>
-                    {auxiliaresActivo.map((aux: any) => (
+                    {auxiliaresActivo.map((aux) => (
                       <option key={aux.id} value={aux.id}>
                         {aux.codigo_auxiliar} - {aux.nombre}
                       </option>

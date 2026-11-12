@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
 import { createClient } from '@supabase/supabase-js';
 import { parseDianXml } from '@/lib/dian-xml-parser';
 
@@ -9,13 +10,19 @@ const supabase = createClient(
 
 export async function POST(req: NextRequest) {
   try {
+    // Se agrega 'await' ya que cookies() es una promesa en Next.js moderno
+    const cookieStore = await cookies();
     const formData = await req.formData();
     const file = formData.get('file') as File;
-    const empresaId = formData.get('empresa_id') as string; // BIGINT
+    
+    // Captura automática de empresaId: desde el formData o leyendo la cookie de sesión activa
+    const empresaIdForm = formData.get('empresa_id') as string;
+    const empresaId = empresaIdForm || cookieStore.get('empresa_activa')?.value;
+
     const esRecibida = formData.get('es_recibida') === 'true'; // true = Compra/Recibida, false = Venta/Emitida
 
     if (!file || !empresaId) {
-      return NextResponse.json({ error: 'El archivo XML y el empresa_id son obligatorios.' }, { status: 400 });
+      return NextResponse.json({ error: 'El archivo XML y el empresa_id (o cookie activa) son obligatorios.' }, { status: 400 });
     }
 
     const xmlContent = await file.text();

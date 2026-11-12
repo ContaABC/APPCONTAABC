@@ -1,17 +1,17 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { registrarNotaDesdeXml, DatosXmlNota } from "@/app/facturas/notas/actions";
 
 interface NotaXmlUploaderProps {
-  selectedCompanyId: string;
-  selectedBranchId: string;
+  selectedCompanyId?: string;
+  selectedBranchId?: string;
   onNotaProcesada?: () => void;
 }
 
 export default function NotaXmlUploader({
-  selectedCompanyId,
-  selectedBranchId,
+  selectedCompanyId: propCompanyId,
+  selectedBranchId: propBranchId,
   onNotaProcesada,
 }: NotaXmlUploaderProps) {
   const [loading, setLoading] = useState(false);
@@ -19,6 +19,28 @@ export default function NotaXmlUploader({
     new Date().toISOString().split("T")[0]
   );
   const [mensaje, setMensaje] = useState<{ tipo: "exito" | "error"; texto: string } | null>(null);
+
+  // Sincronización corporativa automática con localStorage / Cookies si no se pasa por props
+  const [empresaActivaId, setEmpresaActivaId] = useState<string>(propCompanyId || "");
+
+  useEffect(() => {
+    if (propCompanyId) {
+      setEmpresaActivaId(propCompanyId);
+    } else {
+      const cookieEmpresa = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("empresa_activa="));
+      const empresaCookie = cookieEmpresa ? cookieEmpresa.split("=")[1] : null;
+      const empresaLocal = localStorage.getItem("empresa_activa");
+      
+      if (empresaCookie || empresaLocal) {
+        setEmpresaActivaId(empresaCookie || empresaLocal || "");
+      }
+    }
+  }, [propCompanyId]);
+
+  const selectedCompanyId = propCompanyId || empresaActivaId;
+  const selectedBranchId = propBranchId || "";
 
   const parseXmlNota = (content: string): DatosXmlNota => {
     const parser = new DOMParser();
@@ -75,7 +97,7 @@ export default function NotaXmlUploader({
     if (!file) return;
 
     if (!selectedCompanyId) {
-      setMensaje({ tipo: "error", texto: "Debe seleccionar una empresa." });
+      setMensaje({ tipo: "error", texto: "Debe seleccionar una empresa activa." });
       return;
     }
 
@@ -162,6 +184,9 @@ export default function NotaXmlUploader({
           disabled={loading || !selectedCompanyId}
           className="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer disabled:opacity-50"
         />
+        {!selectedCompanyId && (
+          <p className="text-[10px] text-amber-600 mt-1">Seleccione una empresa en la barra superior para habilitar la carga.</p>
+        )}
       </div>
 
       {loading && <p className="text-blue-600 animate-pulse font-medium">Procesando Nota Electrónica...</p>}

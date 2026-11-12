@@ -1,16 +1,26 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error("Faltan variables de entorno NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY.");
   }
+
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
+
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
 }
 
 /**
@@ -26,18 +36,19 @@ export async function obtenerEmpresas() {
 
     if (error) throw new Error(error.message);
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al obtener empresas.";
+    return { success: false, data: [], error: mensaje };
   }
 }
 
 /**
  * Obtener Sucursales por empresa_id
  */
-export async function obtenerSucursales(empresaId: number | string) {
+export async function obtenerSucursales(empresaId?: number | string | null) {
   try {
     const supabaseAdmin = getSupabaseAdmin();
-    const parsedEmpresaId = Number(empresaId);
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
     if (!parsedEmpresaId) return { success: true, data: [], error: null };
 
     const { data, error } = await supabaseAdmin
@@ -48,21 +59,22 @@ export async function obtenerSucursales(empresaId: number | string) {
 
     if (error) throw new Error(error.message);
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al obtener sucursales.";
+    return { success: false, data: [], error: mensaje };
   }
 }
 
 /**
  * Obtiene el listado de facturas recibidas (incluye fecha_emision)
  */
-export async function obtenerFacturasRecibidas(empresaId: number | string, sucursalId?: number | string) {
+export async function obtenerFacturasRecibidas(empresaId?: number | string | null, sucursalId?: number | string | null) {
   try {
     const supabaseAdmin = getSupabaseAdmin();
-    const parsedEmpresaId = Number(empresaId);
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
 
     if (!parsedEmpresaId) {
-      return { success: false, data: [], error: "Debe seleccionar una empresa válida." };
+      return { success: false, data: [], error: "Debe seleccionar o tener activa una empresa válida." };
     }
 
     let query = supabaseAdmin
@@ -93,8 +105,9 @@ export async function obtenerFacturasRecibidas(empresaId: number | string, sucur
     if (error) throw new Error(error.message);
 
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message || "Error al obtener las facturas." };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al obtener las facturas.";
+    return { success: false, data: [], error: mensaje };
   }
 }
 
@@ -105,7 +118,6 @@ export async function obtenerFacturasRecibidas(empresaId: number | string, sucur
 export async function obtenerAsientoPorFactura(facturaId: string | number) {
   try {
     const supabaseAdmin = getSupabaseAdmin();
-
     const uuidFactura = String(facturaId).trim();
 
     // 1. Buscar la transacción en transacciones
@@ -151,8 +163,8 @@ export async function obtenerAsientoPorFactura(facturaId: string | number) {
         )
       `)
       .eq("transaccion_id", transaccion.id)
-      .order("debito", { ascending: false }) // <--- Ordena para poner los débitos arriba
-      .order("id", { ascending: true });      // <--- Mantiene el orden secundario por ID
+      .order("debito", { ascending: false }) // Pone los débitos arriba
+      .order("id", { ascending: true });      // Orden secundario por ID
 
     if (errorDetalles) throw new Error(errorDetalles.message);
 
@@ -168,7 +180,8 @@ export async function obtenerAsientoPorFactura(facturaId: string | number) {
       },
       error: null,
     };
-  } catch (err: any) {
-    return { success: false, data: null, error: err.message || "Error al consultar el asiento." };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al consultar el asiento.";
+    return { success: false, data: null, error: mensaje };
   }
 }

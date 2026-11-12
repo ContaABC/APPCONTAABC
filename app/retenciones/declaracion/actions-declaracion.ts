@@ -1,5 +1,6 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseClient() {
@@ -13,6 +14,82 @@ function getSupabaseClient() {
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
+
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId !== undefined && empresaId !== null && String(empresaId) !== "0" && String(empresaId) !== "") {
+    return Number(empresaId);
+  }
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
+}
+
+export interface EmpresaRow {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nit?: string;
+}
+
+export interface SucursalRow {
+  id: number | string;
+  nombre?: string;
+  codigo_sucursal?: string;
+  ciudad?: string;
+  departamento?: string;
+}
+
+export interface ClaseDocumentoRow {
+  id: number | string;
+  codigo_clase?: string;
+  nombre_clase?: string;
+  afecta_caja_bancos?: boolean;
+}
+
+export interface ConceptoAuxiliarRow {
+  id: number | string;
+  codigo_auxiliar?: string;
+  nombre?: string;
+  elemento?: string;
+}
+
+export interface ConceptoRetencionNested {
+  id: number | string;
+  concepto?: string;
+  tarifa?: number;
+  concepto_auxiliar_id?: number | string | null;
+  concepto_auxiliar_ajuste_debito_id?: number | string | null;
+  concepto_auxiliar_ajuste_credito_id?: number | string | null;
+}
+
+export interface RetencionMovimientoRow {
+  id: number | string;
+  empresa_id: number | string;
+  sucursal_id?: number | string;
+  tercero_id?: number | string;
+  base_gravable?: number;
+  valor_retencion?: number;
+  tipo_retencion?: string;
+  tipo_operacion?: string;
+  fecha_contable?: string;
+  conceptos_retencion?: ConceptoRetencionNested | null;
+  [key: string]: unknown;
+}
+
+export interface TotalesDeclaracion {
+  base: number;
+  retencionReal: number;
+  retencionAproximada: number;
+}
+
+export interface DetalleAgrupadoItem {
+  conceptoAuxiliarId: number | string;
+  concepto?: string;
+  valorRetencionTotal: number;
+  ajusteDebitoId?: number | string | null;
+  ajusteCreditoId?: number | string | null;
+  [key: string]: unknown;
 }
 
 // 1. Obtener Empresas ordenadas alfabéticamente
@@ -30,60 +107,77 @@ export async function obtenerEmpresas() {
       data = resAlt.data;
     }
 
-    return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+    return { success: true, data: (data || []) as EmpresaRow[] };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: errorMsg, data: [] as EmpresaRow[] };
   }
 }
 
-// 2. Obtener Sucursales por Empresa ordenadas por código de sucursal
-export async function obtenerSucursales(empresaId: string | number) {
+// 2. Obtener Sucursales por Empresa
+export async function obtenerSucursales(empresaId?: string | number | null) {
   try {
     const supabase = getSupabaseClient();
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
+
+    if (!parsedEmpresaId) {
+      return { success: true, data: [] as SucursalRow[] };
+    }
+
     const { data, error } = await supabase
       .from("sucursales")
       .select("id, nombre, codigo_sucursal, ciudad, departamento")
-      .eq("empresa_id", empresaId)
+      .eq("empresa_id", parsedEmpresaId)
       .order("codigo_sucursal", { ascending: true });
 
     if (error) throw error;
-    return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+    return { success: true, data: (data || []) as SucursalRow[] };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: errorMsg, data: [] as SucursalRow[] };
   }
 }
 
-// 3. Obtener Clases de Documento filtradas estrictamente por empresa y afecta_caja_bancos = false
-export async function obtenerClasesDocumento(empresaId: string | number) {
+// 3. Obtener Clases de Documento
+export async function obtenerClasesDocumento(empresaId?: string | number | null) {
   try {
     const supabase = getSupabaseClient();
-    const idNumerico = Number(empresaId);
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
+
+    if (!parsedEmpresaId) {
+      return { success: true, data: [] as ClaseDocumentoRow[] };
+    }
     
-    let { data, error } = await supabase
+    const { data, error } = await supabase
       .from("clases_documento")
       .select("id, codigo_clase, nombre_clase, afecta_caja_bancos")
-      .eq("empresa_id", idNumerico)
+      .eq("empresa_id", parsedEmpresaId)
       .eq("afecta_caja_bancos", false)
       .order("codigo_clase", { ascending: true });
 
     if (error) throw error;
 
-    return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+    return { success: true, data: (data || []) as ClaseDocumentoRow[] };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: errorMsg, data: [] as ClaseDocumentoRow[] };
   }
 }
 
 // 4. Obtener Conceptos Auxiliares 
-export async function obtenerConceptosAuxiliares(empresaId: string | number) {
+export async function obtenerConceptosAuxiliares(empresaId?: string | number | null) {
   try {
     const supabase = getSupabaseClient();
-    const idNumerico = Number(empresaId);
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
+
+    if (!parsedEmpresaId) {
+      return { success: true, data: [] as ConceptoAuxiliarRow[] };
+    }
     
     let { data, error } = await supabase
       .from("conceptos_auxiliares")
-      .select("id, codigo_auxiliar,nombre, elemento")
-      .eq("empresa_id", idNumerico)
+      .select("id, codigo_auxiliar, nombre, elemento")
+      .eq("empresa_id", parsedEmpresaId)
       .eq("elemento", "Pasivo")
       .order("codigo_auxiliar", { ascending: true });
 
@@ -97,13 +191,14 @@ export async function obtenerConceptosAuxiliares(empresaId: string | number) {
       data = resAlt.data;
     }
 
-    return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+    return { success: true, data: (data || []) as ConceptoAuxiliarRow[] };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: errorMsg, data: [] as ConceptoAuxiliarRow[] };
   }
 }
 
-// 5. Consultar movimientos y verificar si ya existe un cierre previo para el periodo y sucursal
+// 5. Consultar movimientos y verificar cierre previo
 export async function obtenerMovimientosRetencionesPorPeriodo({
   empresaId,
   sucursalId,
@@ -111,33 +206,36 @@ export async function obtenerMovimientosRetencionesPorPeriodo({
   periodoDesde,
   periodoHasta,
 }: {
-  empresaId: string | number;
-  sucursalId?: string | number;
+  empresaId?: string | number | null;
+  sucursalId?: string | number | null;
   tipoRetencion: string;
   periodoDesde: string;
   periodoHasta: string;
 }) {
   try {
     const supabase = getSupabaseClient();
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
 
-    // Resolver sucursal para la validación (igual que en el registro)
-    let sucursalFinalId = sucursalId && sucursalId !== "" ? sucursalId : null;
+    if (!parsedEmpresaId) {
+      return { success: false, error: "No se pudo determinar la empresa activa.", data: [] as RetencionMovimientoRow[], yaCerrado: false };
+    }
+
+    let sucursalFinalId: number | string | null = sucursalId !== undefined && sucursalId !== null && String(sucursalId) !== "" ? sucursalId : null;
     if (!sucursalFinalId) {
       const { data: sucDefault } = await supabase
         .from("sucursales")
         .select("id")
-        .eq("empresa_id", empresaId)
+        .eq("empresa_id", parsedEmpresaId)
         .eq("codigo_sucursal", "SUC-001")
         .maybeSingle();
       if (sucDefault) sucursalFinalId = sucDefault.id;
     }
 
     if (sucursalFinalId) {
-      // Validar si ya existe un cierre registrado para este periodo, sucursal y tipo
       const { data: cierreExistente } = await supabase
         .from("cierres")
         .select("numero_documento")
-        .eq("empresa_id", empresaId)
+        .eq("empresa_id", parsedEmpresaId)
         .eq("sucursal_id", sucursalFinalId)
         .eq("modulo", "RETENCIONES")
         .eq("subtipo_proceso", tipoRetencion)
@@ -151,7 +249,7 @@ export async function obtenerMovimientosRetencionesPorPeriodo({
           yaCerrado: true,
           numeroDocumento: cierreExistente.numero_documento,
           error: `⚠️ El proceso de cierre de retenciones (${tipoRetencion}) para este periodo y sucursal ya fue ejecutado previamente bajo el documento N° ${cierreExistente.numero_documento}.`,
-          data: [],
+          data: [] as RetencionMovimientoRow[],
         };
       }
     }
@@ -169,26 +267,27 @@ export async function obtenerMovimientosRetencionesPorPeriodo({
           concepto_auxiliar_ajuste_credito_id
         )
       `)
-      .eq("empresa_id", empresaId)
+      .eq("empresa_id", parsedEmpresaId)
       .eq("tipo_retencion", tipoRetencion)
       .eq("tipo_operacion", "PRACTICADA_A_PROVEEDOR")
       .gte("fecha_contable", periodoDesde)
       .lte("fecha_contable", periodoHasta);
 
-    if (sucursalId && sucursalId !== "") {
-      query = query.eq("sucursal_id", sucursalId);
+    if (sucursalId !== undefined && sucursalId !== null && String(sucursalId) !== "") {
+      query = query.eq("sucursal_id", Number(sucursalId));
     }
 
     const { data, error } = await query;
     if (error) throw error;
 
-    return { success: true, data: data || [], yaCerrado: false };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [], yaCerrado: false };
+    return { success: true, data: (data || []) as RetencionMovimientoRow[], yaCerrado: false };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: errorMsg, data: [] as RetencionMovimientoRow[], yaCerrado: false };
   }
 }
 
-// 6. Registrar Asiento Contable de Cierre de Retenciones con Control de Cierres, Sucursal, Tercero y Rollback
+// 6. Registrar Asiento Contable de Cierre de Retenciones
 export async function registrarAsientoCierreRetenciones({
   empresaId,
   sucursalId,
@@ -201,30 +300,34 @@ export async function registrarAsientoCierreRetenciones({
   totales,
   detallesAgrupados,
 }: {
-  empresaId: string | number;
-  sucursalId?: string | number;
+  empresaId?: string | number | null;
+  sucursalId?: string | number | null;
   claseDocumentoId: string | number;
   conceptoAuxiliarCreditoId: string | number;
   tipoRetencion: string;
   periodoDesde: string;
   periodoHasta: string;
   fechaContable: string;
-  totales: { base: number; retencionReal: number; retencionAproximada: number };
-  detallesAgrupados: any[];
+  totales: TotalesDeclaracion;
+  detallesAgrupados: DetalleAgrupadoItem[];
 }) {
   const supabase = getSupabaseClient();
-  let transaccionIdCreada: any = null;
+  let transaccionIdCreada: number | string | null = null;
   let consecutivoTomado: number | null = null;
 
   try {
-    // A. Resolver sucursal obligatoria (si no viene, toma la SUC-001 por defecto de la empresa)
-    let sucursalFinalId = sucursalId && sucursalId !== "" ? sucursalId : null;
+    const parsedEmpresaId = await resolverEmpresaId(empresaId);
+    if (!parsedEmpresaId) {
+      throw new Error("No se pudo determinar la empresa activa.");
+    }
+
+    let sucursalFinalId: number | string | null = sucursalId !== undefined && sucursalId !== null && String(sucursalId) !== "" ? sucursalId : null;
 
     if (!sucursalFinalId) {
       const { data: sucDefault } = await supabase
         .from("sucursales")
         .select("id")
-        .eq("empresa_id", empresaId)
+        .eq("empresa_id", parsedEmpresaId)
         .eq("codigo_sucursal", "SUC-001")
         .maybeSingle();
 
@@ -234,7 +337,7 @@ export async function registrarAsientoCierreRetenciones({
         const { data: sucAny } = await supabase
           .from("sucursales")
           .select("id")
-          .eq("empresa_id", empresaId)
+          .eq("empresa_id", parsedEmpresaId)
           .limit(1)
           .maybeSingle();
         if (sucAny) sucursalFinalId = sucAny.id;
@@ -245,11 +348,10 @@ export async function registrarAsientoCierreRetenciones({
       throw new Error("No se encontró una sucursal válida (SUC-001) para asociar a la transacción.");
     }
 
-    // B. VALIDACIÓN DE DUPLICIDAD (Verificar si ya existe un cierre previo para esta sucursal, periodo y tipo)
     const { data: cierreExistente } = await supabase
       .from("cierres")
       .select("id, numero_documento")
-      .eq("empresa_id", empresaId)
+      .eq("empresa_id", parsedEmpresaId)
       .eq("sucursal_id", sucursalFinalId)
       .eq("modulo", "RETENCIONES")
       .eq("subtipo_proceso", tipoRetencion)
@@ -261,12 +363,11 @@ export async function registrarAsientoCierreRetenciones({
       throw new Error(`⚠️ Proceso bloqueado: Ya se efectuó el proceso de cierre de retenciones (${tipoRetencion}) para esta sucursal en el periodo del ${periodoDesde} al ${periodoHasta} bajo el documento N° ${cierreExistente.numero_documento}.`);
     }
 
-    // C. Obtener el ID del tercero corporativo/propio asociado a la empresa
-    let terceroEmpresaId: any = null;
+    let terceroEmpresaId: number | string | null = null;
     const { data: terceroData } = await supabase
       .from("terceros")
       .select("id")
-      .eq("empresa_id", empresaId)
+      .eq("empresa_id", parsedEmpresaId)
       .eq("es_empresa_propia", true)
       .limit(1)
       .maybeSingle();
@@ -277,7 +378,7 @@ export async function registrarAsientoCierreRetenciones({
       const { data: cualquierTercero } = await supabase
         .from("terceros")
         .select("id")
-        .eq("empresa_id", empresaId)
+        .eq("empresa_id", parsedEmpresaId)
         .limit(1)
         .maybeSingle();
       if (cualquierTercero) terceroEmpresaId = cualquierTercero.id;
@@ -287,7 +388,6 @@ export async function registrarAsientoCierreRetenciones({
       throw new Error("No se encontró ningún tercero registrado para esta empresa en la tabla 'terceros'. Es obligatorio.");
     }
 
-    // D. Obtener la clase de documento para armar el formato (ej. CRM-000001)
     const { data: claseDocData, error: errClaseDoc } = await supabase
       .from("clases_documento")
       .select("codigo_clase")
@@ -300,11 +400,10 @@ export async function registrarAsientoCierreRetenciones({
 
     const prefijoClase = claseDocData.codigo_clase || "DOC";
 
-    // E. Sincronizar y obtener el consecutivo de la tabla consecutivos
     const { data: consecutivoData, error: errConsGet } = await supabase
       .from("consecutivos")
       .select("id, ultimo_numero, longitud_numero")
-      .eq("empresa_id", empresaId)
+      .eq("empresa_id", parsedEmpresaId)
       .eq("clase_documento_id", claseDocumentoId)
       .single();
 
@@ -315,7 +414,7 @@ export async function registrarAsientoCierreRetenciones({
     const { data: transaccionesExistentes } = await supabase
       .from("transacciones")
       .select("numero_documento")
-      .eq("empresa_id", empresaId)
+      .eq("empresa_id", parsedEmpresaId)
       .eq("clase_documento_id", claseDocumentoId);
 
     let mayorNumero = Number(consecutivoData.ultimo_numero);
@@ -343,14 +442,13 @@ export async function registrarAsientoCierreRetenciones({
     const fechaContableDoc = periodoHasta; 
     const glosaTexto = `Retenciones de ${tipoRetencion}, Correspondientes al periodo desde ${periodoDesde} hasta ${periodoHasta}`;
 
-    // F. Crear cabecera de transacción incluyendo tercero_id y sucursal_id
     const { data: transaccion, error: errTrans } = await supabase
       .from("transacciones")
       .insert({
-        empresa_id: empresaId,
+        empresa_id: parsedEmpresaId,
         sucursal_id: sucursalFinalId,
         clase_documento_id: claseDocumentoId,
-        tercero_id: terceroEmpresaId, // Obligatorio en la cabecera
+        tercero_id: terceroEmpresaId,
         numero_documento: numeroDocumentoFinal,
         fecha_emision: fechaContableDoc,
         fecha_contable: fechaContableDoc,
@@ -366,12 +464,21 @@ export async function registrarAsientoCierreRetenciones({
     }
 
     transaccionIdCreada = transaccion.id;
+    const idTransaccionSeguro = transaccion.id as number | string;
 
-    // G. Preparar los N registros de detalles contables con su tercero_id
-    const detallesInsertar: any[] = [];
+    interface DetalleInsertPayload {
+      transaccion_id: number | string;
+      concepto_auxiliar_id: number | string;
+      tercero_id: number | string;
+      debito: number;
+      credito: number;
+      fecha_contable: string;
+    }
+
+    const detallesInsertar: DetalleInsertPayload[] = [];
     let sumaDebitosAproximados = 0;
-    let ajusteDebitoConfigId = null;
-    let ajusteCreditoConfigId = null;
+    let ajusteDebitoConfigId: number | string | null = null;
+    let ajusteCreditoConfigId: number | string | null = null;
 
     for (const item of detallesAgrupados) {
       if (!item.conceptoAuxiliarId) {
@@ -386,7 +493,7 @@ export async function registrarAsientoCierreRetenciones({
 
       if (valorAproximadoConcepto > 0) {
         detallesInsertar.push({
-          transaccion_id: transaccionIdCreada,
+          transaccion_id: idTransaccionSeguro,
           concepto_auxiliar_id: item.conceptoAuxiliarId,
           tercero_id: terceroEmpresaId,
           debito: valorAproximadoConcepto,
@@ -396,10 +503,9 @@ export async function registrarAsientoCierreRetenciones({
       }
     }
 
-    // Crédito principal
     const valorCreditoPrincipal = totales.retencionReal;
     detallesInsertar.push({
-      transaccion_id: transaccionIdCreada,
+      transaccion_id: idTransaccionSeguro,
       concepto_auxiliar_id: conceptoAuxiliarCreditoId,
       tercero_id: terceroEmpresaId,
       debito: 0,
@@ -407,7 +513,6 @@ export async function registrarAsientoCierreRetenciones({
       fecha_contable: fechaContableDoc,
     });
 
-    // Ajuste por diferencia de aproximación
     const diferenciaAproximacion = sumaDebitosAproximados - valorCreditoPrincipal;
 
     if (diferenciaAproximacion > 0) {
@@ -416,7 +521,7 @@ export async function registrarAsientoCierreRetenciones({
         throw new Error(`Existe una diferencia por aproximación de $${diferenciaAproximacion.toLocaleString("es-CO")}. No se encontró configurado el 'concepto_auxiliar_ajuste_credito_id' en los conceptos.`);
       }
       detallesInsertar.push({
-        transaccion_id: transaccionIdCreada,
+        transaccion_id: idTransaccionSeguro,
         concepto_auxiliar_id: cuentaCreditoAjuste,
         tercero_id: terceroEmpresaId,
         debito: 0,
@@ -429,7 +534,7 @@ export async function registrarAsientoCierreRetenciones({
         throw new Error(`Existe una diferencia por aproximación de $${Math.abs(diferenciaAproximacion).toLocaleString("es-CO")}. No se encontró configurado el 'concepto_auxiliar_ajuste_debito_id' en los conceptos.`);
       }
       detallesInsertar.push({
-        transaccion_id: transaccionIdCreada,
+        transaccion_id: idTransaccionSeguro,
         concepto_auxiliar_id: cuentaDebitoAjuste,
         tercero_id: terceroEmpresaId,
         debito: Math.abs(diferenciaAproximacion),
@@ -438,7 +543,6 @@ export async function registrarAsientoCierreRetenciones({
       });
     }
 
-    // H. Insertar detalles contables en bloque (N registros)
     const { error: errDetalles } = await supabase
       .from("detalle_transacciones")
       .insert(detallesInsertar);
@@ -447,17 +551,16 @@ export async function registrarAsientoCierreRetenciones({
       throw new Error(`Error al insertar los detalles del comprobante: ${errDetalles.message}`);
     }
 
-    // I. REGISTRAR CONTROL EN LA TABLA DE CIERRES
     const { error: errCierreIns } = await supabase
       .from("cierres")
       .insert({
-        empresa_id: empresaId,
+        empresa_id: parsedEmpresaId,
         sucursal_id: sucursalFinalId,
         modulo: "RETENCIONES",
         subtipo_proceso: tipoRetencion,
         periodo_desde: periodoDesde,
         periodo_hasta: periodoHasta,
-        transaccion_id: transaccionIdCreada,
+        transaccion_id: idTransaccionSeguro,
         numero_documento: numeroDocumentoFinal,
       });
 
@@ -472,8 +575,8 @@ export async function registrarAsientoCierreRetenciones({
       },
     };
 
-  } catch (err: any) {
-    // ROLLBACK EN CASO DE FALLO
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
     if (transaccionIdCreada) {
       try {
         await supabase.from("detalle_transacciones").delete().eq("transaccion_id", transaccionIdCreada);
@@ -483,18 +586,19 @@ export async function registrarAsientoCierreRetenciones({
       }
     }
 
-    if (consecutivoTomado && empresaId && claseDocumentoId) {
+    if (consecutivoTomado && claseDocumentoId) {
       try {
+        const parsedEmpresaId = await resolverEmpresaId(empresaId);
         await supabase
           .from("consecutivos")
           .update({ ultimo_numero: consecutivoTomado - 1 })
-          .eq("empresa_id", empresaId)
+          .eq("empresa_id", parsedEmpresaId)
           .eq("clase_documento_id", claseDocumentoId);
       } catch (consRollbackErr) {
         console.error("Error rollback consecutivo:", consRollbackErr);
       }
     }
 
-    return { success: false, error: err.message };
+    return { success: false, error: errorMsg };
   }
 }

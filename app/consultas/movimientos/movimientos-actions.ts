@@ -1,10 +1,11 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error(
@@ -17,6 +18,13 @@ function getSupabaseAdmin() {
   });
 }
 
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
+}
+
 export async function obtenerEmpresas() {
   try {
     const supabase = getSupabaseAdmin();
@@ -27,39 +35,41 @@ export async function obtenerEmpresas() {
 
     if (error) return { success: false, data: [], error: error.message };
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener empresas.";
+    return { success: false, data: [], error: mensaje };
   }
 }
 
-export async function obtenerSucursales(empresaId: number | string) {
+export async function obtenerSucursales(empresaId?: number | string | null) {
   try {
-    const parsedEmpresaId = Number(empresaId);
-    if (!parsedEmpresaId) return { success: true, data: [], error: null };
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa) return { success: true, data: [], error: null };
 
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from("sucursales")
       .select("id, nombre, codigo_sucursal")
-      .eq("empresa_id", parsedEmpresaId)
+      .eq("empresa_id", idEmpresa)
       .order("id", { ascending: true });
 
     if (error) return { success: false, data: [], error: error.message };
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener sucursales.";
+    return { success: false, data: [], error: mensaje };
   }
 }
 
 export async function consultarMovimientosTransacciones(
-  empresaId: number | string,
+  empresaId?: number | string | null,
   sucursalId?: number | string | null,
   anio?: number | string | null,
   mes?: number | string | null
 ) {
   try {
-    const parsedEmpresaId = Number(empresaId);
-    if (!parsedEmpresaId) throw new Error("Debe especificar una empresa válida.");
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa) throw new Error("Debe especificar o tener activa una empresa válida.");
 
     const parsedSucursalId = sucursalId ? Number(sucursalId) : null;
     const parsedAnio = anio ? Number(anio) : null;
@@ -68,7 +78,7 @@ export async function consultarMovimientosTransacciones(
     const supabase = getSupabaseAdmin();
 
     const { data, error } = await supabase.rpc("obtener_movimientos_transacciones", {
-      p_empresa_id: parsedEmpresaId,
+      p_empresa_id: idEmpresa,
       p_sucursal_id: parsedSucursalId,
       p_anio: parsedAnio,
       p_mes: parsedMes,
@@ -81,15 +91,17 @@ export async function consultarMovimientosTransacciones(
       data: data || [],
       error: null,
     };
-  } catch (err: any) {
-    console.error("Error en consultarMovimientosTransacciones:", err);
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al consultar los movimientos contables.";
+    console.error("Error en consultarMovimientosTransacciones:", mensaje);
     return {
       success: false,
       data: [],
-      error: err.message || "Error al consultar los movimientos contables.",
+      error: mensaje,
     };
   }
 }
+
 export async function obtenerComprobanteTransaccion(transaccionId: number | string) {
   try {
     const parsedId = Number(transaccionId);
@@ -107,12 +119,13 @@ export async function obtenerComprobanteTransaccion(transaccionId: number | stri
       data: data || [],
       error: null,
     };
-  } catch (err: any) {
-    console.error("Error en obtenerComprobanteTransaccion:", err);
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al obtener el comprobante contable.";
+    console.error("Error en obtenerComprobanteTransaccion:", mensaje);
     return {
       success: false,
       data: [],
-      error: err.message || "Error al obtener el comprobante contable.",
+      error: mensaje,
     };
   }
 }

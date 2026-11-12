@@ -200,8 +200,9 @@ export default function ModuloCierresPage() {
       if (resAperturas.success) {
         setPeriodosApertura(resAperturas.data || []);
       }
-    } catch (err: any) {
-      setErrorMsg(err.message);
+    } catch (err: unknown) {
+      const mensaje = err instanceof Error ? err.message : "Error desconocido.";
+      setErrorMsg(mensaje);
     } finally {
       setGuardando(false);
     }
@@ -223,7 +224,7 @@ export default function ModuloCierresPage() {
       const resAperturas = await obtenerPeriodosAperturas(Number(empresaId), Number(sucursalId) || 0);
       if (resAperturas.success) setPeriodosApertura(resAperturas.data || []);
     } else {
-      setErrorMsg(res.error);
+      setErrorMsg(res.error || "Error al bloquear.");
     }
   };
 
@@ -243,7 +244,7 @@ export default function ModuloCierresPage() {
       const resAperturas = await obtenerPeriodosAperturas(Number(empresaId), Number(sucursalId) || 0);
       if (resAperturas.success) setPeriodosApertura(resAperturas.data || []);
     } else {
-      setErrorMsg(res.error);
+      setErrorMsg(res.error || "Error al desbloquear.");
     }
   };
 
@@ -270,8 +271,9 @@ export default function ModuloCierresPage() {
 
       setSuccessMsg(res.mensaje ?? null);
       setDatosSimulacionAnual(res.detalles || []);
-    } catch (err: any) {
-      setErrorMsg(err.message ?? "Ocurrió un error desconocido.");
+    } catch (err: unknown) {
+      const mensaje = err instanceof Error ? err.message : "Ocurrió un error desconocido.";
+      setErrorMsg(mensaje);
     } finally {
       setGuardando(false);
     }
@@ -299,8 +301,9 @@ export default function ModuloCierresPage() {
 
       setSuccessMsg(res.mensaje ?? null);
       setDatosSimulacionAnual(null);
-    } catch (err: any) {
-      setErrorMsg(err.message ?? "Ocurrió un error desconocido.");
+    } catch (err: unknown) {
+      const mensaje = err instanceof Error ? err.message : "Ocurrió un error desconocido.";
+      setErrorMsg(mensaje);
     } finally {
       setGuardando(false);
     }
@@ -353,8 +356,9 @@ export default function ModuloCierresPage() {
       }
 
       setSuccessMsg(res.mensaje ?? `¡Cierre del módulo ${moduloSeleccionado} ejecutado con éxito para ${mes}/${anio}!`);
-    } catch (err: any) {
-      setErrorMsg(err.message);
+    } catch (err: unknown) {
+      const mensaje = err instanceof Error ? err.message : "Error desconocido.";
+      setErrorMsg(mensaje);
     } finally {
       setGuardando(false);
     }

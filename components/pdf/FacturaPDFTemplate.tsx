@@ -26,17 +26,19 @@ export interface ItemPDF {
   total: number;
 }
 
-export interface FacturaPDFProps extends DocumentProps {
-  factura: {
-    numero_factura: string;
-    fecha_emision: string;
-    cliente_nombre: string;
-    cliente_nit: string;
-    subtotal: number;
-    iva: number;
-    total_factura: number;
-    cufe: string;
-  };
+export interface FacturaData {
+  numero_factura: string;
+  fecha_emision: string;
+  cliente_nombre: string;
+  cliente_nit: string;
+  subtotal: number;
+  iva: number;
+  total_factura: number;
+  cufe: string;
+}
+
+export interface FacturaPDFProps extends Omit<DocumentProps, 'children'> {
+  factura: FacturaData;
   items: ItemPDF[];
   qrBase64: string;
 }

@@ -1,5 +1,6 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
@@ -13,6 +14,13 @@ function getSupabaseAdmin() {
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
+
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
 }
 
 /**
@@ -29,19 +37,20 @@ export async function obtenerEmpresas() {
     if (error) throw new Error(error.message);
 
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
     console.error("Error consultando empresas:", err);
-    return { success: false, data: [], error: err.message };
+    return { success: false, data: [], error: errorMsg };
   }
 }
 
 /**
  * Obtener sucursales filtradas por empresa_id y ordenadas por codigo_sucursal
  */
-export async function obtenerSucursales(empresaId: number | string) {
+export async function obtenerSucursales(empresaId?: number | string | null) {
   try {
     const supabase = getSupabaseAdmin();
-    const empId = Number(empresaId);
+    const empId = await resolverEmpresaId(empresaId);
     if (!empId) return { success: true, data: [], error: null };
 
     const { data, error } = await supabase
@@ -53,9 +62,10 @@ export async function obtenerSucursales(empresaId: number | string) {
     if (error) throw new Error(error.message);
 
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
     console.error("Error consultando sucursales:", err);
-    return { success: false, data: [], error: err.message };
+    return { success: false, data: [], error: errorMsg };
   }
 }
 
@@ -63,12 +73,12 @@ export async function obtenerSucursales(empresaId: number | string) {
  * Obtener notas a facturas emitidas por empresa y sucursal
  */
 export async function obtenerNotasEmitidas(
-  empresaId: number | string,
-  sucursalId?: number | string
+  empresaId?: number | string | null,
+  sucursalId?: number | string | null
 ) {
   try {
     const supabase = getSupabaseAdmin();
-    const empId = empresaId ? +empresaId : 0;
+    const empId = await resolverEmpresaId(empresaId);
     if (!empId) return { success: true, data: [], error: null };
 
     let query = supabase
@@ -90,7 +100,7 @@ export async function obtenerNotasEmitidas(
       .order("fecha_emision", { ascending: false });
 
     if (sucursalId && sucursalId !== "") {
-      query = query.eq("sucursal_id", +sucursalId);
+      query = query.eq("sucursal_id", Number(sucursalId));
     }
 
     const { data, error } = await query;
@@ -98,9 +108,10 @@ export async function obtenerNotasEmitidas(
     if (error) throw new Error(error.message);
 
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
     console.error("Error consultando notas emitidas:", err);
-    return { success: false, data: [], error: err.message };
+    return { success: false, data: [], error: errorMsg };
   }
 }
 
@@ -122,6 +133,17 @@ export async function obtenerAsientoPorNota(notaId: string) {
       return { success: false, data: null, error: "No se encontró el registro contable de la nota." };
     }
 
+    interface DetalleTransaccion {
+      id: number | string;
+      transaccion_id: number | string;
+      concepto_auxiliar_id?: number | string | null;
+      tercero_id?: number | string | null;
+      cuenta_financiera_id?: number | string | null;
+      debito?: number;
+      credito?: number;
+      [key: string]: unknown;
+    }
+
     const { data: detallesRaw, error: errDetalles } = await supabase
       .from("detalle_transacciones")
       .select("id, transaccion_id, concepto_auxiliar_id, tercero_id, cuenta_financiera_id, debito, credito")
@@ -129,13 +151,13 @@ export async function obtenerAsientoPorNota(notaId: string) {
 
     if (errDetalles) throw new Error(errDetalles.message);
 
-    const detalles = detallesRaw || [];
+    const detalles: DetalleTransaccion[] = detallesRaw || [];
 
     const auxiliarIds = Array.from(
-      new Set(detalles.map((d: any) => d.concepto_auxiliar_id).filter(Boolean))
+      new Set(detalles.map((d) => d.concepto_auxiliar_id).filter(Boolean))
     );
 
-    let conceptosMap: { [key: number]: { codigo: string; nombre: string } } = {};
+    const conceptosMap: Record<string, { codigo: string; nombre: string }> = {};
     if (auxiliarIds.length > 0) {
       const { data: conceptosData } = await supabase
         .from("conceptos_auxiliares")
@@ -143,32 +165,28 @@ export async function obtenerAsientoPorNota(notaId: string) {
         .in("id", auxiliarIds);
 
       if (conceptosData) {
-        conceptosData.forEach((c: any) => {
-          conceptosMap[c.id] = { codigo: c.codigo, nombre: c.nombre };
+        conceptosData.forEach((c: { id: number | string; codigo: string; nombre: string }) => {
+          conceptosMap[String(c.id)] = { codigo: c.codigo, nombre: c.nombre };
         });
       }
     }
 
-    // Mapear y ordenar correctamente sin errores de tipado
+    // Mapear y ordenar correctamente los detalles
     const detallesConConceptos = detalles
-      .map((d: any) => ({
+      .map((d) => ({
         ...d,
-        conceptos_auxiliares: d.concepto_auxiliar_id ? conceptosMap[d.concepto_auxiliar_id] || null : null,
+        conceptos_auxiliares: d.concepto_auxiliar_id ? conceptosMap[String(d.concepto_auxiliar_id)] || null : null,
       }))
-      .sort((a: any, b: any) => {
+      .sort((a, b) => {
         const debA = Number(a.debito || 0);
         const debB = Number(b.debito || 0);
         const credA = Number(a.credito || 0);
         const credB = Number(b.credito || 0);
 
-        // Si A tiene débito y B no, A va primero (-1)
         if (debA > 0 && debB === 0) return -1;
         if (debA === 0 && debB > 0) return 1;
-
-        // Si ambos tienen débito, ordenar de mayor a menor débito
         if (debA > 0 && debB > 0) return debB - debA;
 
-        // Si ambos tienen crédito, ordenar de mayor a menor crédito
         return credB - credA;
       });
 
@@ -180,7 +198,8 @@ export async function obtenerAsientoPorNota(notaId: string) {
       },
       error: null,
     };
-  } catch (err: any) {
-    return { success: false, data: null, error: err.message };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, data: null, error: errorMsg };
   }
 }

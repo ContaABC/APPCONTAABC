@@ -3,7 +3,19 @@
 import React, { useState, useEffect, useRef } from "react";
 import { obtenerEmpresas, obtenerSucursales } from "@/app/consultas/movimientos/movimientos-actions";
 import { obtenerClasesDocumentosPorTipo, obtenerAuxiliaresParaDocumentos, obtenerTerceros, obtenerTitulosValoresPorCuenta, guardarDocumentoContable } from "./documentos-actions";
-import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
+import { validarPeriodoContable } from "@/lib/accounting-validations";
+
+interface DetalleFila {
+  concepto_auxiliar_id: string;
+  busquedaAuxiliar: string;
+  showAuxDropdown: boolean;
+  tercero_id: string;
+  cuenta_financiera_id: string;
+  titulo_valor_id: string;
+  titulosDisponibles: any[];
+  debito: string;
+  credito: string;
+}
 
 export default function DocumentosContablesPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
@@ -24,22 +36,12 @@ export default function DocumentosContablesPage() {
   const [fechaContable, setFechaContable] = useState<string>(new Date().toISOString().split("T")[0]);
   const [glosaConcepto, setGlosaConcepto] = useState<string>("");
 
-  // Estados para Control de Periodo Contable (NUEVO)
+  // Estados para Control de Periodo Contable
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
-  // Detalle dinámico: Cada fila mantiene su propio estado y sus propios títulos disponibles
-  const [detalles, setDetalles] = useState<Array<{
-    concepto_auxiliar_id: string;
-    busquedaAuxiliar: string;
-    showAuxDropdown: boolean;
-    tercero_id: string;
-    cuenta_financiera_id: string;
-    titulo_valor_id: string;
-    titulosDisponibles: any[];
-    debito: string;
-    credito: string;
-  }>>([
+  // Detalle dinámico
+  const [detalles, setDetalles] = useState<DetalleFila[]>([
     { concepto_auxiliar_id: "", busquedaAuxiliar: "", showAuxDropdown: false, tercero_id: "", cuenta_financiera_id: "", titulo_valor_id: "", titulosDisponibles: [], debito: "", credito: "" },
     { concepto_auxiliar_id: "", busquedaAuxiliar: "", showAuxDropdown: false, tercero_id: "", cuenta_financiera_id: "", titulo_valor_id: "", titulosDisponibles: [], debito: "", credito: "" }
   ]);
@@ -47,7 +49,7 @@ export default function DocumentosContablesPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const dropdownRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
 
-  // Función de validación de periodo en tiempo real (NUEVO)
+  // Función de validación de periodo en tiempo real
   const verificarPeriodo = async (fecha: string) => {
     if (!empresaId || !sucursalId || !fecha) {
       setErrorPeriodo(null);
@@ -65,18 +67,17 @@ export default function DocumentosContablesPage() {
     setValidandoPeriodo(false);
   };
 
-  // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha contable cargada
   useEffect(() => {
-    if (empresaId && sucursalId && fechaContable) {
+    if (empresaId && sucursalId && fechaContable && isMounted) {
       verificarPeriodo(fechaContable);
     }
-  }, [empresaId, sucursalId]);
+  }, [empresaId, sucursalId, isMounted]);
 
   useEffect(() => {
     setIsMounted(true);
     async function init() {
       const resEmp = await obtenerEmpresas();
-      if (resEmp.success && resEmp.data.length > 0) {
+      if (resEmp.success && resEmp.data && resEmp.data.length > 0) {
         setEmpresas(resEmp.data);
         setEmpresaId(String(resEmp.data[0].id));
       }
@@ -85,6 +86,7 @@ export default function DocumentosContablesPage() {
   }, []);
 
   useEffect(() => {
+    if (!isMounted) return;
     function handleClickOutside(event: MouseEvent) {
       setDetalles(prev => prev.map((fila, idx) => {
         const ref = dropdownRefs.current[idx];
@@ -96,10 +98,10 @@ export default function DocumentosContablesPage() {
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [isMounted]);
 
   useEffect(() => {
-    if (!empresaId) return;
+    if (!empresaId || !isMounted) return;
     
     async function cargarDatosEmpresa() {
       const parsedEmpresaId = Number(empresaId);
@@ -107,8 +109,8 @@ export default function DocumentosContablesPage() {
       const sucRes = await obtenerSucursales(parsedEmpresaId);
       if (sucRes.success) {
         setSucursales(sucRes.data || []);
-        if (sucRes.data && sucRes.data.length > 0) {
-          setSucursalId(String(sucRes.data[0].id));
+        if (sucRes.data && (sucRes.data as any[]).length > 0) {
+          setSucursalId(String((sucRes.data as any[])[0].id));
         } else {
           setSucursalId("");
         }
@@ -135,7 +137,7 @@ export default function DocumentosContablesPage() {
     }
 
     cargarDatosEmpresa();
-  }, [empresaId, esBancario]);
+  }, [empresaId, esBancario, isMounted]);
 
   const agregarFila = () => {
     setDetalles([...detalles, { 
@@ -169,7 +171,6 @@ export default function DocumentosContablesPage() {
     setDetalles(nuevosDetalles);
   };
 
-  // Seleccionar Auxiliar: Carga de manera independiente los cheques del banco de ESTA FILA
   const seleccionarAuxiliar = async (index: number, aux: any) => {
     const nuevosDetalles = [...detalles];
     nuevosDetalles[index].concepto_auxiliar_id = String(aux.id);
@@ -179,7 +180,7 @@ export default function DocumentosContablesPage() {
     if (aux.tipo_entidad === "Cuentas_Bancarias") {
       const bancoId = aux.id;
       nuevosDetalles[index].cuenta_financiera_id = String(bancoId);
-      nuevosDetalles[index].titulo_valor_id = ""; // Reiniciar cheque seleccionado
+      nuevosDetalles[index].titulo_valor_id = "";
 
       const resTv = await obtenerTitulosValoresPorCuenta(empresaId, bancoId);
       if (resTv.success) {
@@ -194,7 +195,6 @@ export default function DocumentosContablesPage() {
     setDetalles(nuevosDetalles);
   };
 
-  // Seleccionar Título Valor (Cheque devuelto) en esta fila específica
   const seleccionarTituloValor = (index: number, tvId: string) => {
     const nuevosDetalles = [...detalles];
     nuevosDetalles[index].titulo_valor_id = tvId;
@@ -217,7 +217,7 @@ export default function DocumentosContablesPage() {
 
       const montoVal = String(tvSeleccionado.monto || 0);
       nuevosDetalles[index].debito = "";
-      nuevosDetalles[index].credito = montoVal; // Cheque devuelto va al crédito
+      nuevosDetalles[index].credito = montoVal;
     }
 
     setDetalles(nuevosDetalles);
@@ -247,7 +247,6 @@ export default function DocumentosContablesPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Doble control de seguridad para impedir envíos si el periodo tiene errores
     if (errorPeriodo) {
       alert("No se puede guardar el comprobante porque el periodo contable no es válido.");
       return;
@@ -296,7 +295,9 @@ export default function DocumentosContablesPage() {
     }
   };
 
-  if (!isMounted) return null;
+  if (!isMounted) {
+    return <div className="p-4 text-center text-xs text-slate-400">Cargando módulo de documentos...</div>;
+  }
 
   return (
     <form onSubmit={handleSubmit} className="p-4 max-w-7xl mx-auto space-y-4 text-xs font-sans">
@@ -328,6 +329,7 @@ export default function DocumentosContablesPage() {
         <span className="font-bold text-slate-700 uppercase">
           Modo Activo: <span className="text-indigo-600">{esBancario ? "Documentos Bancarios (Afecta Caja/Bancos)" : "Documentos Contables Generales"}</span>
         </span>
+
         <button
           type="submit"
           disabled={loading || Math.abs(diferencia) > 0.01 || Boolean(errorPeriodo)}
@@ -404,7 +406,7 @@ export default function DocumentosContablesPage() {
               setFechaContable(nuevaFecha);
               if (errorPeriodo) setErrorPeriodo(null);
             }}
-            onBlur={() => verificarPeriodo(fechaContable)} // <--- Validación al perder el foco
+            onBlur={() => verificarPeriodo(fechaContable)}
             className="w-full bg-white border border-slate-300 rounded px-1 py-1 text-slate-800 outline-none text-[10px]"
           />
           {validandoPeriodo && (

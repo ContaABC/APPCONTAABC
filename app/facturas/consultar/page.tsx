@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
 import {
   obtenerEmpresas,
@@ -9,13 +9,86 @@ import {
   obtenerAsientoPorFactura,
 } from "./actions-facturas";
 
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nombre?: string;
+  nit?: string;
+  numero_identificacion?: string;
+}
+
+interface Sucursal {
+  id: number | string;
+  nombre: string;
+  codigo?: string;
+}
+
+interface FacturaItem {
+  id: string | number;
+  numero_factura?: string;
+  tercero_nit?: string;
+  tercero_nombre?: string;
+  fecha_emision?: string;
+  fecha_vencimiento?: string;
+  subtotal?: number;
+  impuestos?: number;
+  valor_retencion_renta?: number;
+  retencion_renta?: number;
+  valor_retencion_iva?: number;
+  retencion_iva?: number;
+  valor_retencion_ica?: number;
+  retencion_ica?: number;
+  total_factura?: number;
+  saldo_pendiente?: number;
+  estado_pago?: string;
+  estado_dian?: string;
+  cufe_cude?: string;
+}
+
+interface GrupoProveedor {
+  proveedor: string;
+  nit: string;
+  items: FacturaItem[];
+  subtotalBase: number;
+  subtotalIva: number;
+  subtotalRenta: number;
+  subtotalIvaRet: number;
+  subtotalIca: number;
+  subtotalTotal: number;
+}
+
+interface ConceptoAuxiliar {
+  codigo_auxiliar?: string;
+  nombre?: string;
+}
+
+interface AsientoDetalle {
+  id: number | string;
+  concepto_auxiliar_id: number | string;
+  debito: number;
+  credito: number;
+  conceptos_auxiliares?: ConceptoAuxiliar[] | ConceptoAuxiliar | null;
+}
+
+interface AsientoData {
+  transaccion: {
+    numero_documento: string;
+    fecha_emision: string;
+    fecha_contable?: string;
+    fecha?: string;
+    glosa_concepto: string;
+  };
+  detalles: AsientoDetalle[];
+}
+
 export default function ConsultarFacturasPage() {
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [empresaId, setEmpresaId] = useState<string>("");
   const [sucursalId, setSucursalId] = useState<string>("");
 
-  const [facturas, setFacturas] = useState<any[]>([]);
+  const [facturas, setFacturas] = useState<FacturaItem[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [busqueda, setBusqueda] = useState<string>("");
   const [estadoPago, setEstadoPago] = useState<string>("todos");
@@ -26,8 +99,8 @@ export default function ConsultarFacturasPage() {
   const [proveedoresExpandidos, setProveedoresExpandidos] = useState<{ [key: string]: boolean }>({});
 
   // Modal para ver Asiento
-  const [facturaSeleccionada, setFacturaSeleccionada] = useState<any | null>(null);
-  const [asiento, setAsiento] = useState<any | null>(null);
+  const [facturaSeleccionada, setFacturaSeleccionada] = useState<FacturaItem | null>(null);
+  const [asiento, setAsiento] = useState<AsientoData | null>(null);
   const [loadingAsiento, setLoadingAsiento] = useState<boolean>(false);
 
   // 1. Cargar Empresas al montar
@@ -56,31 +129,31 @@ export default function ConsultarFacturasPage() {
   }, [empresaId]);
 
   // 3. Cargar Facturas de Empresa/Sucursal
-  async function cargarFacturas() {
+  const cargarFacturas = useCallback(async () => {
     if (!empresaId) return;
     setLoading(true);
     setErrorMsg(null);
     const res = await obtenerFacturasRecibidas(empresaId, sucursalId);
-    if (res.success) {
+    if (res.success && res.data) {
       setFacturas(res.data);
       const initialExpanded: { [key: string]: boolean } = {};
-      res.data.forEach((f: any) => {
+      res.data.forEach((f: FacturaItem) => {
         const clave = f.tercero_nombre || f.tercero_nit || "Sin Proveedor";
         initialExpanded[clave] = true;
       });
       setProveedoresExpandidos(initialExpanded);
     } else {
-      setErrorMsg(res.error);
+      setErrorMsg(res.error || "Error al cargar facturas.");
     }
     setLoading(false);
-  }
+  }, [empresaId, sucursalId]);
 
   useEffect(() => {
     setFacturas([]);
     setBusqueda("");
   }, [empresaId, sucursalId]);
 
-  async function abrirAsiento(factura: any) {
+  async function abrirAsiento(factura: FacturaItem) {
     setFacturaSeleccionada(factura);
     setLoadingAsiento(true);
     setAsiento(null);
@@ -121,19 +194,7 @@ export default function ConsultarFacturasPage() {
 
   // 5. Agrupar, Ordenar por Proveedor y Subtotalizar
   const { gruposPorProveedor, totalesGenerales } = useMemo(() => {
-    const grupos: {
-      [key: string]: {
-        proveedor: string;
-        nit: string;
-        items: any[];
-        subtotalBase: number;
-        subtotalIva: number;
-        subtotalRenta: number;
-        subtotalIvaRet: number;
-        subtotalIca: number;
-        subtotalTotal: number;
-      };
-    } = {};
+    const grupos: { [key: string]: GrupoProveedor } = {};
 
     let totalBaseGen = 0;
     let totalIvaGen = 0;
@@ -286,12 +347,14 @@ export default function ConsultarFacturasPage() {
           {facturas.length > 0 && (
             <>
               <button
+                type="button"
                 onClick={() => expandirTodo(true)}
                 className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-medium rounded cursor-pointer"
               >
                 📂 Expandir Todo
               </button>
               <button
+                type="button"
                 onClick={() => expandirTodo(false)}
                 className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-medium rounded cursor-pointer"
               >
@@ -301,6 +364,7 @@ export default function ConsultarFacturasPage() {
           )}
           {facturas.length === 0 ? (
             <button
+              type="button"
               onClick={cargarFacturas}
               disabled={loading}
               className="px-2.5 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-medium rounded shadow-2xs transition cursor-pointer"
@@ -309,6 +373,7 @@ export default function ConsultarFacturasPage() {
             </button>
           ) : (
             <button
+              type="button"
               onClick={exportarAExcel}
               disabled={facturasFiltradas.length === 0}
               className="px-2.5 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-medium rounded shadow-2xs transition flex items-center gap-1 cursor-pointer"
@@ -317,6 +382,7 @@ export default function ConsultarFacturasPage() {
             </button>
           )}
           <button
+            type="button"
             onClick={cargarFacturas}
             disabled={loading}
             className="px-2 py-0.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-[10px] font-medium rounded transition cursor-pointer"
@@ -414,6 +480,7 @@ export default function ConsultarFacturasPage() {
           <div className="p-8 text-center text-slate-500 text-[11px] space-y-1">
             <p>Haz clic en el botón de carga para listar las facturas.</p>
             <button
+              type="button"
               onClick={cargarFacturas}
               className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded text-[10px] cursor-pointer"
             >
@@ -509,6 +576,7 @@ export default function ConsultarFacturasPage() {
                               </td>
                               <td className="py-1 px-3 text-center">
                                 <button
+                                  type="button"
                                   onClick={() => abrirAsiento(f)}
                                   className="px-1.5 py-0.2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded text-[9px] transition border border-slate-300 cursor-pointer"
                                 >
@@ -528,7 +596,7 @@ export default function ConsultarFacturasPage() {
         )}
       </div>
 
-      {/* Barra Inferior Fija Ultra Compacta (Fuentes Micro y Adaptables) */}
+      {/* Barra Inferior Fija Ultra Compacta */}
       {gruposPorProveedor.length > 0 && (
         <div className="bg-slate-900 text-white px-3 py-1.5 rounded flex flex-wrap items-center justify-between gap-2 shadow-md">
           <span className="uppercase tracking-wider text-[9px] font-bold text-slate-400">Total General:</span>
@@ -559,6 +627,7 @@ export default function ConsultarFacturasPage() {
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => setFacturaSeleccionada(null)}
                 className="text-slate-400 hover:text-slate-600 text-sm font-bold cursor-pointer"
               >
@@ -577,7 +646,7 @@ export default function ConsultarFacturasPage() {
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[8px]">Fecha Contable:</span>
-                    <strong className="text-slate-700">{asiento.transaccion.fecha_emision}</strong>
+                    <strong className="text-slate-700">{asiento.transaccion.fecha_contable || asiento.transaccion.fecha_emision}</strong>
                   </div>
                   <div className="col-span-2">
                     <span className="text-slate-400 block text-[8px]">Glosa / Concepto:</span>
@@ -594,16 +663,26 @@ export default function ConsultarFacturasPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {asiento.detalles.map((d: any) => (
-                      <tr key={d.id}>
-                        <td className="p-1 border-r border-slate-200">
-                          <span className="font-mono text-slate-500 mr-1">{d.conceptos_auxiliares?.codigo || `#${d.concepto_auxiliar_id}`}</span>
-                          <span className="font-medium text-slate-800">{d.conceptos_auxiliares?.nombre || "Concepto Auxiliar"}</span>
-                        </td>
-                        <td className="p-1 text-right font-mono border-r border-slate-200">{d.debito > 0 ? `$${d.debito.toLocaleString("es-CO")}` : "-"}</td>
-                        <td className="p-1 text-right font-mono">{d.credito > 0 ? `$${d.credito.toLocaleString("es-CO")}` : "-"}</td>
-                      </tr>
-                    ))}
+                    {asiento.detalles.map((d) => {
+                      const conceptoAux = Array.isArray(d.conceptos_auxiliares)
+                        ? d.conceptos_auxiliares[0]
+                        : d.conceptos_auxiliares;
+
+                      return (
+                        <tr key={d.id}>
+                          <td className="p-1 border-r border-slate-200">
+                            <span className="font-mono text-slate-500 mr-1">
+                              {conceptoAux?.codigo_auxiliar || `#${d.concepto_auxiliar_id}`}
+                            </span>
+                            <span className="font-medium text-slate-800">
+                              {conceptoAux?.nombre || "Concepto Auxiliar"}
+                            </span>
+                          </td>
+                          <td className="p-1 text-right font-mono border-r border-slate-200">{d.debito > 0 ? `$${d.debito.toLocaleString("es-CO")}` : "-"}</td>
+                          <td className="p-1 text-right font-mono">{d.credito > 0 ? `$${d.credito.toLocaleString("es-CO")}` : "-"}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -613,6 +692,7 @@ export default function ConsultarFacturasPage() {
 
             <div className="flex justify-end pt-1">
               <button
+                type="button"
                 onClick={() => setFacturaSeleccionada(null)}
                 className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] font-medium hover:bg-slate-700 cursor-pointer"
               >

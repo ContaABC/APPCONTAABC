@@ -1,22 +1,50 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, ChangeEvent, FormEvent } from "react";
 import { obtenerEmpresas, obtenerSucursales } from "@/app/consultas/movimientos/movimientos-actions";
-import { obtenerDatosBaseConsignacion, ejecutarConsignacionBancaria } from "./consignaciones-actions";
-import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- 1. Importar la validación centralizada
+import { obtenerDatosBaseConsignacion, ejecutarConsignacionBancaria, ChequeEnCaja } from "./consignaciones-actions";
+import { validarPeriodoContable } from "@/lib/accounting-validations";
+
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+}
+
+interface Sucursal {
+  id: number | string;
+  nombre?: string;
+}
+
+interface CuentaFinanciera {
+  id: number | string;
+  nombre_cuenta?: string;
+  numero_cuenta?: string;
+}
+
+interface ConceptoAuxiliar {
+  id: number | string;
+  codigo_auxiliar?: string;
+  nombre?: string;
+}
+
+interface ClaseDocumento {
+  id: number | string;
+  nombre_clase?: string;
+}
 
 export default function ConsignacionesPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [empresaId, setEmpresaId] = useState<string>("");
   const [sucursalId, setSucursalId] = useState<string>("");
 
   // Listas base
-  const [cuentasBancos, setCuentasBancos] = useState<any[]>([]);
-  const [conceptosAuxiliares, setConceptosAuxiliares] = useState<any[]>([]);
-  const [clasesDoc, setClasesDoc] = useState<any[]>([]);
-  const [chequesEnCaja, setChequesEnCaja] = useState<any[]>([]);
+  const [cuentasBancos, setCuentasBancos] = useState<CuentaFinanciera[]>([]);
+  const [conceptosAuxiliares, setConceptosAuxiliares] = useState<ConceptoAuxiliar[]>([]);
+  const [clasesDoc, setClasesDoc] = useState<ClaseDocumento[]>([]);
+  const [chequesEnCaja, setChequesEnCaja] = useState<ChequeEnCaja[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
 
   // Formulario
@@ -30,7 +58,7 @@ export default function ConsignacionesPage() {
   const [glosa, setGlosa] = useState<string>("Consignación bancaria de tesorería");
   const [procesando, setProcesando] = useState<boolean>(false);
 
-  // Estados para Control de Periodo Contable (NUEVO)
+  // Estados para Control de Periodo Contable
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
@@ -39,7 +67,7 @@ export default function ConsignacionesPage() {
     setFechaContable(new Date().toISOString().split("T")[0]);
   }, []);
 
-  // Función de validación de periodo en tiempo real (NUEVO)
+  // Función de validación de periodo en tiempo real
   const verificarPeriodo = async (fecha: string) => {
     if (!empresaId || !sucursalId || !fecha) {
       setErrorPeriodo(null);
@@ -57,39 +85,59 @@ export default function ConsignacionesPage() {
     setValidandoPeriodo(false);
   };
 
-  // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha contable
+  // Validar automáticamente al cambiar empresa, sucursal
   useEffect(() => {
     if (empresaId && sucursalId && fechaContable) {
       verificarPeriodo(fechaContable);
     }
-  }, [empresaId, sucursalId]);
+  }, [empresaId, sucursalId, fechaContable]);
 
+  // Carga inicial de empresas y sincronización con cookie corporativa empresa_activa
   useEffect(() => {
     async function init() {
       const res = await obtenerEmpresas();
       if (res.success && res.data && res.data.length > 0) {
-        setEmpresas(res.data);
-        const primerEmpresaId = String(res.data[0].id);
-        setEmpresaId(primerEmpresaId);
+        const listaEmpresas: Empresa[] = res.data;
+        setEmpresas(listaEmpresas);
 
-        const sucRes = await obtenerSucursales(Number(primerEmpresaId));
-        if (sucRes.success && sucRes.data && (sucRes.data as any[]).length > 0) {
-          setSucursales(sucRes.data);
-          setSucursalId(String((sucRes.data as any[])[0].id));
+        // Leer cookie corporativa empresa_activa o localStorage
+        const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'));
+        let empresaIdAUsar = String(listaEmpresas[0].id);
+
+        if (match && listaEmpresas.some((e) => String(e.id) === match[2])) {
+          empresaIdAUsar = match[2];
+        } else {
+          const idGuardado = localStorage.getItem('empresa_id');
+          if (idGuardado && listaEmpresas.some((e) => String(e.id) === idGuardado)) {
+            empresaIdAUsar = idGuardado;
+          }
+        }
+
+        setEmpresaId(empresaIdAUsar);
+        localStorage.setItem('empresa_id', empresaIdAUsar);
+        document.cookie = `empresa_activa=${empresaIdAUsar}; path=/; max-age=86400; SameSite=Lax`;
+
+        const sucRes = await obtenerSucursales(Number(empresaIdAUsar));
+        if (sucRes.success && sucRes.data && sucRes.data.length > 0) {
+          const listaSucursales: Sucursal[] = sucRes.data;
+          setSucursales(listaSucursales);
+          setSucursalId(String(listaSucursales[0].id));
         }
       }
     }
     init();
   }, []);
 
+  // Cargar sucursales al cambiar de empresa
   useEffect(() => {
     if (!empresaId) return;
     async function cargarSucursalesEmpresa() {
       const sucRes = await obtenerSucursales(Number(empresaId));
       if (sucRes.success) {
-        setSucursales(sucRes.data || []);
-        if (sucRes.data && (sucRes.data as any[]).length > 0) {
-          setSucursalId(String((sucRes.data as any[])[0].id));
+        const listaSuc: Sucursal[] = sucRes.data || [];
+        setSucursales(listaSuc);
+        if (listaSuc.length > 0) {
+          setSucursalId(String(listaSuc[0].id));
         } else {
           setSucursalId("");
         }
@@ -98,6 +146,7 @@ export default function ConsignacionesPage() {
     cargarSucursalesEmpresa();
   }, [empresaId]);
 
+  // Cargar cuentas, conceptos, clases y cheques de la empresa y sucursal activa
   useEffect(() => {
     if (!empresaId || !sucursalId) {
       setCuentasBancos([]);
@@ -120,20 +169,20 @@ export default function ConsignacionesPage() {
         setClasesDoc(baseRes.clasesDocumento || []);
         setChequesEnCaja(baseRes.chequesEnCaja || []);
 
-        if (baseRes.cuentasBancos && (baseRes.cuentasBancos as any[]).length > 0) {
-          setCuentaBancoId(String((baseRes.cuentasBancos as any[])[0].id));
+        if (baseRes.cuentasBancos && baseRes.cuentasBancos.length > 0) {
+          setCuentaBancoId(String(baseRes.cuentasBancos[0].id));
         } else {
           setCuentaBancoId("");
         }
 
-        if (baseRes.clasesDocumento && (baseRes.clasesDocumento as any[]).length > 0) {
-          setClaseDocId(String((baseRes.clasesDocumento as any[])[0].id));
+        if (baseRes.clasesDocumento && baseRes.clasesDocumento.length > 0) {
+          setClaseDocId(String(baseRes.clasesDocumento[0].id));
         } else {
           setClaseDocId("");
         }
 
-        if (baseRes.conceptosAuxiliares && (baseRes.conceptosAuxiliares as any[]).length > 0) {
-          setConceptoAuxiliarId(String((baseRes.conceptosAuxiliares as any[])[0].id));
+        if (baseRes.conceptosAuxiliares && baseRes.conceptosAuxiliares.length > 0) {
+          setConceptoAuxiliarId(String(baseRes.conceptosAuxiliares[0].id));
         } else {
           setConceptoAuxiliarId("");
         }
@@ -155,7 +204,7 @@ export default function ConsignacionesPage() {
       return Object.keys(chequesSeleccionados)
         .filter((id) => chequesSeleccionados[Number(id)])
         .reduce((acc, id) => {
-          const chq = chequesEnCaja.find((c: any) => c.id === Number(id));
+          const chq = chequesEnCaja.find((c) => c.id === Number(id));
           return acc + Number(chq?.monto || 0);
         }, 0);
     }
@@ -163,10 +212,9 @@ export default function ConsignacionesPage() {
 
   const fmt = (v: number) => `$ ${Math.round(Number(v || 0)).toLocaleString("es-CO")}`;
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
-    // Doble control de seguridad para impedir envíos si el periodo está cerrado o es inválido
     if (errorPeriodo) {
       alert("No se puede ejecutar la consignación porque el periodo contable no es válido o está cerrado.");
       return;
@@ -217,11 +265,11 @@ export default function ConsignacionesPage() {
       glosa,
     });
 
-    if (res.success) {
+    if (res && res.success) {
       alert(`¡Consignación procesada con éxito! Comprobante N°: ${res.numero_documento}`);
       window.location.reload();
     } else {
-      alert("Error al procesar la consignación: " + res.error);
+      alert("Error al procesar la consignación: " + (res?.error || "Error desconocido"));
     }
     setProcesando(false);
   };
@@ -239,7 +287,7 @@ export default function ConsignacionesPage() {
           <button
             type="button"
             onClick={() => setTipoConsignacion("EFECTIVO")}
-            className={`px-3 py-1 font-bold rounded text-[11px] transition ${
+            className={`px-3 py-1 font-bold rounded text-[11px] transition cursor-pointer ${
               tipoConsignacion === "EFECTIVO" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-700 hover:bg-slate-300"
             }`}
           >
@@ -248,7 +296,7 @@ export default function ConsignacionesPage() {
           <button
             type="button"
             onClick={() => setTipoConsignacion("CHEQUES")}
-            className={`px-3 py-1 font-bold rounded text-[11px] transition ${
+            className={`px-3 py-1 font-bold rounded text-[11px] transition cursor-pointer ${
               tipoConsignacion === "CHEQUES" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-700 hover:bg-slate-300"
             }`}
           >
@@ -263,10 +311,17 @@ export default function ConsignacionesPage() {
           <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Empresa *</label>
           <select
             value={empresaId}
-            onChange={(e) => setEmpresaId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
+            onChange={(e) => {
+              const nuevoId = e.target.value;
+              setEmpresaId(nuevoId);
+              if (nuevoId) {
+                localStorage.setItem("empresa_id", nuevoId);
+                document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`;
+              }
+            }}
+            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate cursor-pointer"
           >
-            {empresas.map((emp: any) => (
+            {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>{emp.razon_social || emp.nombre_comercial}</option>
             ))}
           </select>
@@ -277,9 +332,9 @@ export default function ConsignacionesPage() {
           <select
             value={sucursalId}
             onChange={(e) => setSucursalId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none"
+            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none cursor-pointer"
           >
-            {sucursales.map((suc: any) => (
+            {sucursales.map((suc) => (
               <option key={suc.id} value={suc.id}>{suc.nombre}</option>
             ))}
           </select>
@@ -290,9 +345,9 @@ export default function ConsignacionesPage() {
           <select
             value={claseDocId}
             onChange={(e) => setClaseDocId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none"
+            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none cursor-pointer"
           >
-            {clasesDoc.map((cd: any) => (
+            {clasesDoc.map((cd) => (
               <option key={cd.id} value={cd.id}>{cd.nombre_clase}</option>
             ))}
           </select>
@@ -303,15 +358,15 @@ export default function ConsignacionesPage() {
           <select
             value={cuentaBancoId}
             onChange={(e) => setCuentaBancoId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
+            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate cursor-pointer"
           >
-            {cuentasBancos.map((cta: any) => (
+            {cuentasBancos.map((cta) => (
               <option key={cta.id} value={cta.id}>{cta.nombre_cuenta} ({cta.numero_cuenta})</option>
             ))}
           </select>
         </div>
 
-        {/* Fecha Contable con Validación en Tiempo Real (MODIFICADO) */}
+        {/* Fecha Contable con Validación en Tiempo Real */}
         <div className="md:col-span-2">
           <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Fecha Contable *</label>
           <input
@@ -335,7 +390,7 @@ export default function ConsignacionesPage() {
           )}
         </div>
 
-        {/* CONCEPTO AUXILIAR CONTABLE - SIEMPRE VISIBLE */}
+        {/* CONCEPTO AUXILIAR CONTABLE */}
         <div className="md:col-span-6">
           <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
             Concepto Auxiliar Contable (Contrapartida Crédito)
@@ -343,9 +398,9 @@ export default function ConsignacionesPage() {
           <select
             value={conceptoAuxiliarId}
             onChange={(e) => setConceptoAuxiliarId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
+            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate cursor-pointer"
           >
-            {conceptosAuxiliares.map((ca: any) => (
+            {conceptosAuxiliares.map((ca) => (
               <option key={ca.id} value={ca.id}>[{ca.codigo_auxiliar}] {ca.nombre}</option>
             ))}
           </select>
@@ -383,13 +438,12 @@ export default function ConsignacionesPage() {
             <span className="font-mono font-bold text-emerald-700 text-base">{fmt(totalValorConsignacion)}</span>
           </div>
 
-          {/* Botón de Ejecución bloqueado si hay error de periodo (MODIFICADO) */}
           <button
             type="button"
             onClick={handleSubmit}
             disabled={!isMounted || procesando || totalValorConsignacion <= 0 || !empresaId || !sucursalId || Boolean(errorPeriodo)}
             suppressHydrationWarning
-            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded shadow transition text-xs"
+            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded shadow transition text-xs cursor-pointer"
           >
             {procesando ? "Procesando..." : "💾 Ejecutar Consignación"}
           </button>
@@ -421,10 +475,10 @@ export default function ConsignacionesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y text-[10px]">
-                  {chequesEnCaja.map((chq: any) => {
+                  {chequesEnCaja.map((chq) => {
                     const sel = !!chequesSeleccionados[chq.id];
                     const bancoNombre = chq.banco_girador?.nombre_banco || "N/A";
-                    const giradorNombre = chq.tercero_girador?.razon_social || chq.tercero_girador?.nombre_comercial || "N/A";
+                    const giradorNombre = chq.tercero_girador?.razon_social || "N/A";
 
                     return (
                       <tr key={chq.id} className={sel ? "bg-indigo-50/40" : "hover:bg-slate-50"}>
@@ -433,7 +487,7 @@ export default function ConsignacionesPage() {
                             type="checkbox"
                             checked={sel}
                             onChange={() => handleToggleCheque(chq.id)}
-                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                           />
                         </td>
                         <td className="p-2 font-bold text-slate-900 align-middle">{chq.numero_titulo}</td>

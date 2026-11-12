@@ -14,14 +14,30 @@ import {
   ShieldCheck, 
   ArrowRight,
   UserCheck,
-  Building,
-  TrendingUp,
-  Layers,
-  FileText
+  ArrowLeft,
+  Building2,
+  MapPin,
+  LucideIcon
 } from "lucide-react";
 
+interface UsuarioPerfil {
+  nombres?: string;
+  apellidos?: string;
+  tipo_usuario?: string;
+  [key: string]: unknown;
+}
+
+interface GrupoModulo {
+  nombre: string;
+  descripcion: string;
+  ruta: string;
+  icono: LucideIcon;
+  badge: string;
+  color: string;
+}
+
 // --- MATRIZ DE PERMISOS INTEGRADA ---
-const PERMISOS_MODULOS: Record<string, string[]> = {
+const PERMISOS_MODULOS: Record<string, readonly string[]> = {
   "/modulos/contabilidad/configuracion": ["Administrador"],
   "/usuarios": ["Administrador"],
   "/usuarios/asignaciones": ["Administrador"],
@@ -30,7 +46,7 @@ const PERMISOS_MODULOS: Record<string, string[]> = {
   "/modulos/contabilidad/tesoreria": ["Administrador", "Contador"],
   "/modulos/contabilidad/consultas": ["Administrador", "Contador", "Auditor"],
   "/modulos/contabilidad/contables": ["Administrador", "Contador"],
-};
+} as const;
 
 function tieneAcceso(tipoUsuario: string, ruta: string): boolean {
   if (tipoUsuario === "Administrador") return true;
@@ -41,17 +57,21 @@ function tieneAcceso(tipoUsuario: string, ruta: string): boolean {
 
 export default function ContabilidadHome() {
   const router = useRouter();
-  const [usuarioActual, setUsuarioActual] = useState<any>(null);
+  const [usuarioActual, setUsuarioActual] = useState<UsuarioPerfil | null>(null);
+  
+  // Estados para la Empresa y Sucursal Activa
+  const [empresaActivaNombre, setEmpresaActivaNombre] = useState<string>("Sin Empresa Seleccionada");
+  const [sucursalActivaNombre, setSucursalActivaNombre] = useState<string>("Sin Sucursal");
 
   useEffect(() => {
-    async function cargarDatosUsuario() {
+    async function cargarDatosSesionYContexto() {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
       if (!supabaseUrl || !supabaseAnonKey) return;
 
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-      // Obtener usuario autenticado y su perfil
+      // 1. Obtener usuario autenticado y su perfil
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const { data: perfil } = await supabase
@@ -61,16 +81,36 @@ export default function ContabilidadHome() {
           .single();
 
         if (perfil) {
-          setUsuarioActual(perfil);
+          setUsuarioActual(perfil as UsuarioPerfil);
         } else {
-          setUsuarioActual({ nombres: user.email, tipo_usuario: "Operador" });
+          setUsuarioActual({ nombres: user.email || "", tipo_usuario: "Operador" });
         }
       }
+
+      // 2. Función helper para leer el localStorage de forma segura
+      const sincronizarContextoLocal = () => {
+        if (typeof window !== "undefined") {
+          const storedEmpresa = localStorage.getItem("empresa_activa_nombre");
+          const storedSucursal = localStorage.getItem("sucursal_activa_nombre");
+          
+          if (storedEmpresa) setEmpresaActivaNombre(storedEmpresa);
+          if (storedSucursal) setSucursalActivaNombre(storedSucursal);
+        }
+      };
+
+      sincronizarContextoLocal();
+
+      // Escuchar cambios en localStorage si se actualizan desde otra vista
+      window.addEventListener("storage", sincronizarContextoLocal);
+      return () => {
+        window.removeEventListener("storage", sincronizarContextoLocal);
+      };
     }
-    cargarDatosUsuario();
+
+    cargarDatosSesionYContexto();
   }, []);
 
-  const grupos = [
+  const grupos: GrupoModulo[] = [
     {
       nombre: "Configuración",
       descripcion: "Empresas, terceros, sucursales y parámetros generales NIIF.",
@@ -122,41 +162,72 @@ export default function ContabilidadHome() {
   ];
 
   // Filtrar los submódulos de acuerdo al rol del usuario autenticado
-  const gruposPermitidos = usuarioActual 
-    ? grupos.filter(g => tieneAcceso(usuarioActual.tipo_usuario, g.ruta))
+  const gruposPermitidos = usuarioActual && usuarioActual.tipo_usuario 
+    ? grupos.filter(g => tieneAcceso(usuarioActual.tipo_usuario as string, g.ruta))
     : grupos;
 
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-4 md:p-8">
       
-      {/* Encabezado sin marco recargado */}
-      <header className="max-w-7xl mx-auto mb-6 px-2 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-blue-600 text-white rounded-2xl shadow-md">
-            <ShieldCheck className="w-7 h-7" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-extrabold tracking-tight">ContaABC</h1>
-              <span className="text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-2.5 py-0.5 rounded-full border border-blue-200 dark:border-blue-800">Módulo Contable</span>
+      {/* ENCABEZADO SUPERIOR CON BOTÓN DE RETROCESO, EMPRESA Y PERFIL */}
+      <header className="max-w-7xl mx-auto mb-8 px-2 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white dark:bg-zinc-900 p-4 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+        
+        <div className="flex items-center gap-3.5">
+          {/* Botón de Atrás hacia el menú principal de módulos */}
+          <Link 
+            href="/" 
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-600 dark:text-zinc-300 hover:text-blue-600 bg-zinc-50 dark:bg-zinc-800 hover:bg-blue-50 px-3 py-2.5 rounded-2xl border border-zinc-200 dark:border-zinc-700 shadow-sm transition cursor-pointer"
+            title="Volver al menú de selección de módulos"
+          >
+            <ArrowLeft className="w-4 h-4" /> Menú Principal
+          </Link>
+
+          <div className="flex items-center gap-3 pl-3 border-l border-zinc-200 dark:border-zinc-800">
+            <div className="p-2.5 bg-blue-600 text-white rounded-2xl shadow-md">
+              <ShieldCheck className="w-6 h-6" />
             </div>
-            <p className="text-xs text-zinc-500 mt-0.5">Sistema ERP Financiero y Contable</p>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-extrabold tracking-tight">ContaABC</h1>
+                <span className="text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-2.5 py-0.5 rounded-full border border-blue-200 dark:border-blue-800">Módulo Contable</span>
+              </div>
+              <p className="text-xs text-zinc-500 mt-0.5">Sistema ERP Financiero y Contable</p>
+            </div>
           </div>
         </div>
 
-        {/* Información resumida de sesión del usuario */}
-        {usuarioActual && (
-          <div className="flex items-center gap-2.5 bg-white dark:bg-zinc-900 px-4 py-2 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-            <UserCheck className="w-4 h-4 text-blue-600" />
-            <div className="text-xs">
-              <p className="font-bold text-zinc-800 dark:text-zinc-200">{usuarioActual.nombres} {usuarioActual.apellidos}</p>
-              <span className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold uppercase">{usuarioActual.tipo_usuario}</span>
+        {/* CÁPSULA DE CONTEXTO: EMPRESA, SUCURSAL Y USUARIO */}
+        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
+          
+          {/* Empresa y Sucursal Activa */}
+          <div className="flex items-center gap-3 bg-zinc-50 dark:bg-zinc-800/60 px-3.5 py-2 rounded-2xl border border-zinc-200/80 dark:border-zinc-700/60 text-xs">
+            <div className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400 font-bold">
+              <Building2 className="w-4 h-4 flex-shrink-0" />
+              <span className="truncate max-w-[140px]">{empresaActivaNombre}</span>
+            </div>
+            <span className="text-zinc-300 dark:text-zinc-700">|</span>
+            <div className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300 font-medium">
+              <MapPin className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
+              <span className="truncate max-w-[110px]">{sucursalActivaNombre}</span>
             </div>
           </div>
-        )}
+
+          {/* Perfil de Usuario */}
+          {usuarioActual && (
+            <div className="flex items-center gap-2.5 bg-zinc-50 dark:bg-zinc-800/60 px-3.5 py-2 rounded-2xl border border-zinc-200/80 dark:border-zinc-700/60 text-xs">
+              <UserCheck className="w-4 h-4 text-blue-600 flex-shrink-0" />
+              <div>
+                <p className="font-bold text-zinc-800 dark:text-zinc-200 leading-tight">{usuarioActual.nombres || ""} {usuarioActual.apellidos || ""}</p>
+                <span className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold uppercase">{usuarioActual.tipo_usuario}</span>
+              </div>
+            </div>
+          )}
+
+        </div>
+
       </header>
 
-      {/* Cuadrícula Principal de los Submódulos Contables Filtrados por Rol */}
+      {/* CUADRÍCULA PRINCIPAL DE LOS SUBMÓDULOS CONTABLES */}
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {gruposPermitidos.map((grupo, index) => {
           const IconComponent = grupo.icono;

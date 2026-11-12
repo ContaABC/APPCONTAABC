@@ -1,10 +1,18 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
+}
 
 export async function obtenerEmpresasParaCierre() {
   try {
@@ -15,37 +23,46 @@ export async function obtenerEmpresasParaCierre() {
 
     if (error) throw error;
     return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener empresas.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
-export async function obtenerSucursalesPorEmpresa(empresaId: number) {
+export async function obtenerSucursalesPorEmpresa(empresaId?: number | string | null) {
   try {
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa) return { success: true, data: [] };
+
     const { data, error } = await supabase
       .from("sucursales")
       .select("*")
-      .eq("empresa_id", empresaId);
+      .eq("empresa_id", idEmpresa);
 
     if (error) throw error;
     return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener sucursales.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
-export async function obtenerClasesDocumentoEmpresa(empresaId: number) {
+export async function obtenerClasesDocumentoEmpresa(empresaId?: number | string | null) {
   try {
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa) return { success: true, data: [] };
+
     const { data, error } = await supabase
       .from("clases_documento")
       .select("*")
-      .eq("empresa_id", empresaId)
+      .eq("empresa_id", idEmpresa)
       .order("nombre_clase", { ascending: true });
 
     if (error) throw error;
     return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener clases de documento.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
@@ -60,8 +77,9 @@ export async function actualizarEstadoClaseDocumento(claseId: number, estado: st
 
     if (error) throw error;
     return { success: true, data };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al actualizar estado de clase de documento.";
+    return { success: false, error: mensaje };
   }
 }
 
@@ -75,8 +93,9 @@ export async function actualizarEstadoTodasClasesDocumento(empresaId: number, es
 
     if (error) throw error;
     return { success: true, data };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al actualizar todas las clases de documento.";
+    return { success: false, error: mensaje };
   }
 }
 
@@ -99,8 +118,9 @@ export async function obtenerUltimoCierrePeriodo(empresaId: number, sucursalId: 
 
     if (error) throw error;
     return { success: true, data };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: null };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al obtener último cierre.";
+    return { success: false, error: mensaje, data: null };
   }
 }
 
@@ -125,7 +145,7 @@ export async function ejecutarCierreServer(payload: {
         .maybeSingle();
 
       if (errSuc || !sucursalDefault) {
-        throw new Error("No se encontró la sucursal por defecto con código '001' para esta empresa.");
+        throw new Error("No se encontró la sucursal por defecto con código 'SUC-001' para esta empresa.");
       }
       sucursalIdFinal = sucursalDefault.id;
     }
@@ -162,8 +182,9 @@ export async function ejecutarCierreServer(payload: {
       if (error) throw error;
       return { success: true, mensaje: `Módulo ${payload.modulo} cerrado correctamente para el período.` };
     }
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al ejecutar cierre.";
+    return { success: false, error: mensaje };
   }
 }
 
@@ -171,9 +192,9 @@ export async function procesarCierreAnualServer(payload: {
   empresaId: number;
   sucursalId: number | null | undefined;
   anio: number;
-  cuentaCierreId?: number;     // ID de la cuenta puente de cierre (ej. PyG / Cuenta 59)
-  cuentaPatrimonioId?: number; // ID de la cuenta definitiva de Patrimonio
-  claseDocumentoId?: number;   // Clase de documento seleccionada
+  cuentaCierreId?: number;
+  cuentaPatrimonioId?: number;
+  claseDocumentoId?: number;
   soloSimular: boolean;
 }) {
   try {
@@ -195,7 +216,6 @@ export async function procesarCierreAnualServer(payload: {
 
     const anioCierre = payload.anio;
 
-    // 1. Validar fecha de inicio de operaciones de la empresa
     const { data: empresa, error: errEmp } = await supabase
       .from("empresas")
       .select("fecha_inicio_operaciones")
@@ -213,7 +233,6 @@ export async function procesarCierreAnualServer(payload: {
       throw new Error(`El año a cerrar (${anioCierre}) no puede ser anterior a la fecha de inicio de operaciones (${anioInicioOperaciones}).`);
     }
 
-    // 2. Validar rango de meses previos cerrados
     let mesInicioValidacion = (anioCierre === anioInicioOperaciones) ? mesInicioOperaciones : 1;
     const periodoInicioRange = `${anioCierre}-${String(mesInicioValidacion).padStart(2, "0")}-01`;
     const periodoFinRange = `${anioCierre}-12-01`;
@@ -232,8 +251,8 @@ export async function procesarCierreAnualServer(payload: {
 
     const mesesCerradosSet = new Set(
       (cierresMensuales || [])
-        .filter((c) => c.estado === "Cerrado")
-        .map((c) => c.periodo_desde.substring(0, 7))
+        .filter((c: any) => c.estado === "Cerrado")
+        .map((c: any) => c.periodo_desde.substring(0, 7))
     );
 
     const mesesFaltantes: string[] = [];
@@ -251,7 +270,6 @@ export async function procesarCierreAnualServer(payload: {
       );
     }
 
-    // 3. Consultar saldos acumulados filtrando estrictamente por Empresa y Sucursal
     let querySaldos = supabase
       .from("saldos_acumulados_auxiliares")
       .select("*")
@@ -271,7 +289,6 @@ export async function procesarCierreAnualServer(payload: {
       conceptosMap.set(c.id, c);
     });
 
-    // 4. Consolidar por concepto auxiliar tomando el mes más reciente
     const saldosPorConceptoMap = new Map();
     (resSaldos.data || []).forEach((s: any) => {
       const conceptoId = s.concepto_auxiliar_id;
@@ -290,7 +307,6 @@ export async function procesarCierreAnualServer(payload: {
 
       const elementoCta = String(cta.elemento || "").toUpperCase().trim();
 
-      // FILTRO ESTRICTO: Únicamente conceptos de resultados (Ingresos, Gastos, Costos)
       if (["INGRESOS", "INGRESO", "GASTOS", "GASTO", "COSTOS", "COSTO"].includes(elementoCta)) {
         let tipoNormalizado = "INGRESOS";
         if (elementoCta.startsWith("GASTO")) tipoNormalizado = "GASTOS";
@@ -308,10 +324,8 @@ export async function procesarCierreAnualServer(payload: {
       }
     });
 
-    // Ordenar alfabéticamente por elemento/tipo
     detallesConceptos.sort((a, b) => a.tipo.localeCompare(b.tipo));
 
-    // 5. Asiento 1: Agregar la cuenta de cierre de resultados (ej. Cuenta 59 / PyG) para cancelar ingresos, costos y gastos
     if (payload.cuentaCierreId) {
       const cuentaCierreObj = conceptosMap.get(Number(payload.cuentaCierreId));
       if (cuentaCierreObj) {
@@ -319,13 +333,12 @@ export async function procesarCierreAnualServer(payload: {
           tipo: "CIERRE DE RESULTADOS",
           cuenta: cuentaCierreObj.codigo_auxiliar || "",
           nombre: cuentaCierreObj.nombre || "Cuenta de Cierre (PyG)",
-          saldo: sumaResultadoNeto, // Absorbe el neto para equilibrar el primer comprobante
+          saldo: sumaResultadoNeto,
           concepto_id: cuentaCierreObj.id
         });
       }
     }
 
-    // 6. Asiento 2: Traslado definitivo a la cuenta de Patrimonio
     if (payload.cuentaPatrimonioId) {
       const cuentaPatrimonioObj = conceptosMap.get(Number(payload.cuentaPatrimonioId));
       if (cuentaPatrimonioObj) {
@@ -333,7 +346,7 @@ export async function procesarCierreAnualServer(payload: {
           tipo: "PATRIMONIO (DESTINO)",
           cuenta: cuentaPatrimonioObj.codigo_auxiliar || "",
           nombre: cuentaPatrimonioObj.nombre || "Resultado del Ejercicio (Patrimonio)",
-          saldo: -sumaResultadoNeto, // Traslado con signo inverso para cancelar la cuenta puente y llevarlo al patrimonio
+          saldo: -sumaResultadoNeto,
           concepto_id: cuentaPatrimonioObj.id
         });
       }
@@ -400,8 +413,9 @@ export async function procesarCierreAnualServer(payload: {
       simulacion: false,
       mensaje: `¡Comprobante de Cierre Anual en doble fase (Mes 13) del año ${anioCierre} grabado con éxito!` 
     };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al procesar cierre anual.";
+    return { success: false, error: mensaje };
   }
 }
 
@@ -431,7 +445,7 @@ export async function obtenerPeriodosAperturas(empresaId: number, sucursalId: nu
     const estadosMap = new Map<string, string>();
     const cierresContablesMap = new Set<string>();
 
-    (cierresData || []).forEach((c) => {
+    (cierresData || []).forEach((c: any) => {
       const key = c.periodo_desde.substring(0, 7);
       if (c.modulo === "CONTABILIDAD" && (c.subtipo_proceso === "CIERRE_MENSUAL" || c.subtipo_proceso === "CIERRE_ANULAR" || c.subtipo_proceso === "CIERRE_ANUAL")) {
         cierresContablesMap.add(key);
@@ -446,7 +460,7 @@ export async function obtenerPeriodosAperturas(empresaId: number, sucursalId: nu
     let maxAnio = fechaActual.getFullYear();
     let maxMes = fechaActual.getMonth() + 1;
 
-    (cierresData || []).forEach((c) => {
+    (cierresData || []).forEach((c: any) => {
       const [y, m] = c.periodo_desde.split("-").map(Number);
       if (y > maxAnio || (y === maxAnio && m > maxMes)) {
         maxAnio = y;
@@ -481,8 +495,9 @@ export async function obtenerPeriodosAperturas(empresaId: number, sucursalId: nu
     }
 
     return { success: true, data: periodos.reverse() };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al obtener periodos y aperturas.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
@@ -551,8 +566,9 @@ export async function habilitarPeriodoAperturaServer(payload: {
 
     if (errInsert) throw errInsert;
     return { success: true, mensaje: `¡Período ${payload.anio}-${String(payload.mes).padStart(2, "0")} habilitado con éxito!` };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al habilitar periodo de apertura.";
+    return { success: false, error: mensaje };
   }
 }
 
@@ -623,8 +639,9 @@ export async function bloquearPeriodoAperturaServer(payload: {
     }
 
     return { success: true, mensaje: `¡Período bloqueado/cerrado con éxito!` };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al bloquear periodo.";
+    return { success: false, error: mensaje };
   }
 }
 
@@ -695,23 +712,28 @@ export async function desbloquearPeriodoAperturaServer(payload: {
     }
 
     return { success: true, mensaje: `¡Período desbloqueado con éxito!` };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al desbloquear periodo.";
+    return { success: false, error: mensaje };
   }
 }
 
-export async function obtenerCuentasAuxiliaresPorElemento(empresaId: number, elemento: string) {
+export async function obtenerCuentasAuxiliaresPorElemento(empresaId?: number | string | null, elemento?: string) {
   try {
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa || !elemento) return { success: true, data: [] };
+
     const { data, error } = await supabase
       .from("conceptos_auxiliares")
       .select("id, codigo_auxiliar, nombre, elemento")
-      .eq("empresa_id", empresaId)
+      .eq("empresa_id", idEmpresa)
       .eq("elemento", elemento)
       .order("codigo_auxiliar", { ascending: true });
 
     if (error) throw error;
     return { success: true, data: data || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error al obtener cuentas auxiliares.";
+    return { success: false, error: mensaje, data: [] };
   }
 }

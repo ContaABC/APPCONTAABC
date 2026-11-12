@@ -1,6 +1,7 @@
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 import NotaEmitidaForm from "./nota-form";
-import { validarPeriodoContable } from "@/lib/accounting-validations"; // <--- Importar validación centralizada
+import { validarPeriodoContable } from "@/lib/accounting-validations";
 
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -13,19 +14,20 @@ function getSupabaseAdmin() {
   });
 }
 
-export default async function NuevaNotaEmitidaPage({
-  searchParams,
-}: {
+interface PageProps {
   searchParams: Promise<{ empresaId?: string; sucursalId?: string }>;
-}) {
+}
+
+export default async function NuevaNotaEmitidaPage({ searchParams }: PageProps) {
   const resolvedSearchParams = await searchParams;
+  const cookieStore = await cookies();
   const supabase = getSupabaseAdmin();
 
-  const empresaIdInicial = resolvedSearchParams.empresaId || "";
+  const empresaCookie = cookieStore.get("empresa_activa")?.value;
+  const empresaIdInicial = resolvedSearchParams.empresaId || empresaCookie || "";
   const sucursalIdInicial = resolvedSearchParams.sucursalId || "";
   const fechaHoy = new Date().toISOString().split("T")[0];
 
-  // Validación inicial de servidor por si los parámetros ya vienen definidos en la URL
   let errorPeriodoInicial: string | null = null;
   if (empresaIdInicial && sucursalIdInicial) {
     const resPeriodo = await validarPeriodoContable(empresaIdInicial, sucursalIdInicial, fechaHoy);
@@ -34,7 +36,6 @@ export default async function NuevaNotaEmitidaPage({
     }
   }
 
-  // Consultas idénticas al módulo de emisión de facturas
   const [
     { data: empresas },
     { data: sucursales },

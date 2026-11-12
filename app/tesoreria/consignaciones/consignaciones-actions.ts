@@ -2,6 +2,53 @@
 
 import { createClient } from "@supabase/supabase-js";
 
+// ==========================================
+// INTERFACES Y TIPOS
+// ==========================================
+export interface BancoGiradorInfo {
+  nombre_banco: string;
+}
+
+export interface TerceroGiradorInfo {
+  razon_social: string;
+  numero_documento?: string;
+}
+
+export interface ChequeEnCaja {
+  id: number;
+  empresa_id: number;
+  sucursal_id: number;
+  tipo_titulo: string;
+  estado: string;
+  banco_girador_id?: number | null;
+  tercero_girador_id?: number | null;
+  banco_girador: BancoGiradorInfo;
+  tercero_girador: TerceroGiradorInfo;
+  [key: string]: any; // Para admitir otras columnas dinámicas de la tabla
+}
+
+export interface DatosBaseConsignacionResultado {
+  success: boolean;
+  error?: string;
+  cuentasBancos?: any[];
+  conceptosAuxiliares?: any[];
+  clasesDocumento?: any[];
+  chequesEnCaja?: ChequeEnCaja[];
+}
+
+export interface ConsignacionPayload {
+  empresa_id: number;
+  sucursal_id: number;
+  clase_documento_id: number;
+  cuenta_financiera_id: number;
+  fecha_contable: string;
+  tipo_consignacion: "EFECTIVO" | "CHEQUES";
+  concepto_auxiliar_id?: number | null;
+  valor_efectivo?: number;
+  cheques_ids?: number[];
+  glosa: string;
+}
+
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -15,7 +62,10 @@ function getSupabaseAdmin() {
   });
 }
 
-export async function obtenerDatosBaseConsignacion(empresaId: number, sucursalId: number) {
+export async function obtenerDatosBaseConsignacion(
+  empresaId: number,
+  sucursalId: number
+): Promise<DatosBaseConsignacionResultado> {
   if (!empresaId || !sucursalId) {
     return { success: false, error: "Empresa y Sucursal son obligatorios." };
   }
@@ -59,14 +109,18 @@ export async function obtenerDatosBaseConsignacion(empresaId: number, sucursalId
     }
 
     const chequesList = chequesRaw || [];
-    let chequesEnCaja = [];
+    let chequesEnCaja: ChequeEnCaja[] = [];
 
     // 5. Enriquecimiento seguro usando los nombres reales de las columnas de tus tablas
     if (chequesList.length > 0) {
-      const bancoIds = Array.from(new Set(chequesList.map((c: any) => c.banco_girador_id).filter((v: any) => v != null)));
-      const terceroIds = Array.from(new Set(chequesList.map((c: any) => c.tercero_girador_id).filter((v: any) => v != null)));
+      const bancoIds = Array.from(
+        new Set(chequesList.map((c: any) => c.banco_girador_id).filter((v: any) => v != null))
+      );
+      const terceroIds = Array.from(
+        new Set(chequesList.map((c: any) => c.tercero_girador_id).filter((v: any) => v != null))
+      );
 
-      let bancosMap = new Map();
+      let bancosMap = new Map<string, BancoGiradorInfo>();
       if (bancoIds.length > 0) {
         const { data: bancosData } = await supabase
           .from("bancos_nacionales")
@@ -80,7 +134,7 @@ export async function obtenerDatosBaseConsignacion(empresaId: number, sucursalId
         }
       }
 
-      let tercerosMap = new Map();
+      let tercerosMap = new Map<string, TerceroGiradorInfo>();
       if (terceroIds.length > 0) {
         const { data: tercerosData } = await supabase
           .from("terceros")
@@ -89,7 +143,6 @@ export async function obtenerDatosBaseConsignacion(empresaId: number, sucursalId
         
         if (tercerosData) {
           tercerosData.forEach((t: any) => {
-            // Resolver nombre de forma robusta según tu schema
             let nombreTercero = t.razon_social;
             if (!nombreTercero && (t.primer_nombre || t.primer_apellido)) {
               nombreTercero = `${t.primer_nombre || ""} ${t.primer_apellido || ""}`.trim();
@@ -126,18 +179,7 @@ export async function obtenerDatosBaseConsignacion(empresaId: number, sucursalId
   }
 }
 
-export async function ejecutarConsignacionBancaria(data: {
-  empresa_id: number;
-  sucursal_id: number;
-  clase_documento_id: number;
-  cuenta_financiera_id: number;
-  fecha_contable: string;
-  tipo_consignacion: "EFECTIVO" | "CHEQUES";
-  concepto_auxiliar_id?: number | null;
-  valor_efectivo?: number;
-  cheques_ids?: number[];
-  glosa: string;
-}) {
+export async function ejecutarConsignacionBancaria(data: ConsignacionPayload) {
   if (!data.empresa_id || !data.sucursal_id) {
     return { success: false, error: "Empresa y Sucursal son obligatorios para ejecutar la consignación." };
   }

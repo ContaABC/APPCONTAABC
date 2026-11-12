@@ -5,15 +5,34 @@ import {
   obtenerEmpresas,
   obtenerSucursales,
 } from "@/app/consultas/movimientos/movimientos-actions";
-import { obtenerCertificadosRetencion } from "./certificados-actions";
+import { 
+  obtenerCertificadosRetencion, 
+  CertificadosRetencionResult, 
+  CertificadoItem, 
+  DiferenciaItem, 
+  EmpresaInfo, 
+  SucursalInfo 
+} from "./certificados-actions";
 import { Printer, Search, X, FileDown, Mail, AlertTriangle } from "lucide-react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nombre?: string;
+}
+
+interface Sucursal {
+  id: number | string;
+  nombre?: string;
+}
+
 export default function CertificadosRetencionPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   
   const [empresaId, setEmpresaId] = useState<string>("");
   const [sucursalId, setSucursalId] = useState<string>("0");
@@ -24,9 +43,9 @@ export default function CertificadosRetencionPage() {
   const [fechaFin, setFechaFin] = useState<string>(`${anioActual}-12-31`);
 
   const [loading, setLoading] = useState<boolean>(false);
-  const [datosCertificados, setDatosCertificados] = useState<any>(null);
-  const [diferenciasError, setDiferenciasError] = useState<any[]>([]);
-  const [certificadoModal, setCertificadoModal] = useState<any>(null);
+  const [datosCertificados, setDatosCertificados] = useState<CertificadosRetencionResult | null>(null);
+  const [diferenciasError, setDiferenciasError] = useState<DiferenciaItem[]>([]);
+  const [certificadoModal, setCertificadoModal] = useState<CertificadoItem | null>(null);
   const [enviandoCorreo, setEnviandoCorreo] = useState<boolean>(false);
   const [generandoPdf, setGenerandoPdf] = useState<boolean>(false);
 
@@ -41,7 +60,14 @@ export default function CertificadosRetencionPage() {
       const res = await obtenerEmpresas();
       if (res.success && res.data && res.data.length > 0) {
         setEmpresas(res.data);
-        setEmpresaId(String(res.data[0].id));
+        
+        // Leer cookie corporativa empresa_activa
+        const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'));
+        if (match && res.data.some((e: Empresa) => String(e.id) === match[2])) {
+          setEmpresaId(match[2]);
+        } else {
+          setEmpresaId(String(res.data[0].id));
+        }
       }
     }
     init();
@@ -57,6 +83,10 @@ export default function CertificadosRetencionPage() {
       }
     }
     cargarSucursalesEmpresa();
+
+    // Actualizar cookie y localStorage al cambiar empresa
+    localStorage.setItem("empresa_activa", empresaId);
+    document.cookie = `empresa_activa=${empresaId}; path=/; max-age=86400; SameSite=Lax`;
   }, [empresaId]);
 
   const handleCambioTipoImpuesto = (nuevoTipo: "RENTA" | "IVA" | "ICA") => {
@@ -205,15 +235,15 @@ export default function CertificadosRetencionPage() {
             onChange={(e) => setEmpresaId(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 font-semibold text-sm outline-none truncate"
           >
-            {empresas.map((emp: any) => (
-              <option key={emp.id} value={emp.id}>{emp.razon_social || emp.nombre_comercial}</option>
+            {empresas.map((emp) => (
+              <option key={emp.id} value={emp.id}>{emp.razon_social || emp.nombre_comercial || emp.nombre}</option>
             ))}
           </select>
         </div>
 
         <div className="md:col-span-3">
           <label className="block font-bold text-slate-700 uppercase mb-1.5 text-xs tracking-wide">
-            Sucursal {tipoRetencion === 'ICA' && <span className="text-red-600">* Obligatoria para ICA</span>}
+            Sucursal {tipoRetencion === 'ICA' && <span className="text-red-600">Obligatoria para ICA</span>}
           </label>
           <select
             value={sucursalId}
@@ -221,7 +251,7 @@ export default function CertificadosRetencionPage() {
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 font-semibold text-sm outline-none"
           >
             <option value="0">-- Todas las Sucursales (Consolidado) --</option>
-            {sucursales.map((suc: any) => (
+            {sucursales.map((suc) => (
               <option key={suc.id} value={suc.id}>{suc.nombre}</option>
             ))}
           </select>
@@ -231,7 +261,7 @@ export default function CertificadosRetencionPage() {
           <label className="block font-bold text-slate-700 uppercase mb-1.5 text-xs tracking-wide">Tipo de Impuesto</label>
           <select
             value={tipoRetencion}
-            onChange={(e) => handleCambioTipoImpuesto(e.target.value as any)}
+            onChange={(e) => handleCambioTipoImpuesto(e.target.value as "RENTA" | "IVA" | "ICA")}
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 font-semibold text-sm outline-none"
           >
             <option value="RENTA">Renta</option>
@@ -272,7 +302,6 @@ export default function CertificadosRetencionPage() {
         </div>
       </form>
 
-      {/* SECCIÓN DE ALERTA Y TABLA DE DIFERENCIAS CONTABLES */}
       {diferenciasError.length > 0 && (
         <div className="bg-red-50 border-2 border-red-300 rounded-xl p-6 space-y-4 shadow-sm">
           <div className="flex items-center gap-3 text-red-800">
@@ -297,7 +326,7 @@ export default function CertificadosRetencionPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-red-100">
-                {diferenciasError.map((dif: any, idx: number) => (
+                {diferenciasError.map((dif, idx) => (
                   <tr key={idx} className="hover:bg-red-50/50">
                     <td className="p-3 font-mono font-bold text-slate-800">{dif.nit}</td>
                     <td className="p-3 font-semibold text-slate-900">{dif.nombre}</td>
@@ -315,7 +344,6 @@ export default function CertificadosRetencionPage() {
         </div>
       )}
 
-      {/* RESULTADOS */}
       {loading ? (
         <div className="p-12 text-center text-slate-500 font-semibold text-base print:hidden">Procesando y cruzando saldos contables...</div>
       ) : !datosCertificados && diferenciasError.length === 0 ? (
@@ -341,7 +369,7 @@ export default function CertificadosRetencionPage() {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {datosCertificados.certificados.map((cert: any, idx: number) => (
+              {datosCertificados.certificados.map((cert, idx) => (
                 <tr key={idx} className="hover:bg-slate-50">
                   <td className="p-3.5 font-mono font-bold text-slate-900">{cert.tercero.nit}{cert.tercero.dv}</td>
                   <td className="p-3.5 font-semibold text-slate-900">{cert.tercero.nombre}</td>
@@ -364,10 +392,9 @@ export default function CertificadosRetencionPage() {
         </div>
       ) : null}
 
-      {/* CONTENEDOR OCULTO PARA PDF MASIVO */}
       {datosCertificados && datosCertificados.certificados.length > 0 && (
         <div style={{ position: "fixed", left: "-9999px", top: 0 }} aria-hidden="true" ref={pdfMasivoRef}>
-          {datosCertificados.certificados.map((cert: any, idx: number) => (
+          {datosCertificados.certificados.map((cert, idx) => (
             <div 
               key={idx} 
               className="certificado-masivo-item"
@@ -389,7 +416,7 @@ export default function CertificadosRetencionPage() {
                 <div style={{ textAlign: "center", borderBottom: "1px solid #d1d5db", paddingBottom: "16px" }}>
                   <h2 style={{ fontSize: "16px", fontWeight: "bold", textTransform: "uppercase", margin: "0 0 6px 0" }}>{datosCertificados.empresa?.razon_social}</h2>
                   <p style={{ fontFamily: "monospace", fontWeight: "bold", fontSize: "12px", margin: "0 0 4px 0" }}>
-                    Nit: {datosCertificados.empresa?.nit_identificacion || datosCertificados.empresa?.nit}
+                    Nit: {datosCertificados.empresa?.nit_identificacion}
                     {datosCertificados.empresa?.dv ? `-${datosCertificados.empresa.dv}` : ''}
                   </p>
                   <p style={{ fontSize: "11px", color: "#4b5563", margin: "0 0 4px 0" }}>
@@ -397,7 +424,7 @@ export default function CertificadosRetencionPage() {
                   </p>
                   {datosCertificados.sucursal && (
                     <p style={{ fontSize: "11px", fontWeight: "bold", color: "#4f46e5", margin: "0 0 4px 0" }}>
-                      Sucursal: {datosCertificados.sucursal.nombre} - Dirección: {datosCertificados.sucursal.direccion} ({datosCertificados.sucursal.ciudad})
+                      Sucursal: {datosCertificados.sucursal.nombre} | Dirección: {datosCertificados.sucursal.direccion} ({datosCertificados.sucursal.ciudad})
                     </p>
                   )}
                   <h3 style={{ fontSize: "11px", fontWeight: "bold", textTransform: "uppercase", marginTop: "12px", backgroundColor: "#f3f4f6", padding: "8px 0", borderTop: "1px solid #d1d5db", borderBottom: "1px solid #d1d5db" }}>
@@ -433,7 +460,7 @@ export default function CertificadosRetencionPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {cert.detalles.map((det: any, i: number) => (
+                    {cert.detalles.map((det, i) => (
                       <tr key={i}>
                         <td style={{ border: "1px solid #d1d5db", padding: "8px", fontWeight: "500" }}>{det.concepto}</td>
                         <td style={{ border: "1px solid #d1d5db", padding: "8px", textAlign: "right", fontFamily: "monospace" }}>{fmt(det.base)}</td>
@@ -472,8 +499,7 @@ export default function CertificadosRetencionPage() {
         </div>
       )}
 
-      {/* MODAL DE VISTA PREVIA E IMPRESIÓN INDIVIDUAL */}
-      {certificadoModal && (
+      {certificadoModal && datosCertificados && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl shadow-2xl border max-w-3xl w-full p-10 space-y-8 relative certificado-print-item font-sans text-slate-900 text-sm max-h-[92vh] overflow-y-auto">
             <button
@@ -487,7 +513,7 @@ export default function CertificadosRetencionPage() {
               <div className="text-center space-y-2 border-b pb-6 pt-2">
                 <h2 className="text-base font-bold uppercase tracking-wider">{datosCertificados.empresa?.razon_social}</h2>
                 <p className="font-mono font-bold text-xs">
-                  Nit: {datosCertificados.empresa?.nit_identificacion || datosCertificados.empresa?.nit}
+                  Nit: {datosCertificados.empresa?.nit_identificacion}
                   {datosCertificados.empresa?.dv ? `-${datosCertificados.empresa.dv}` : ''}
                 </p>
                 <p className="text-xs text-slate-600 font-medium">
@@ -495,7 +521,7 @@ export default function CertificadosRetencionPage() {
                 </p>
                 {datosCertificados.sucursal && (
                   <p className="text-xs font-semibold text-indigo-700">
-                    Sucursal: {datosCertificados.sucursal.nombre} - Dirección: {datosCertificados.sucursal.direccion} ({datosCertificados.sucursal.ciudad})
+                    Sucursal: {datosCertificados.sucursal.nombre} | Dirección: {datosCertificados.sucursal.direccion} ({datosCertificados.sucursal.ciudad})
                   </p>
                 )}
 
@@ -533,7 +559,7 @@ export default function CertificadosRetencionPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {certificadoModal.detalles.map((det: any, i: number) => (
+                  {certificadoModal.detalles.map((det, i) => (
                     <tr key={i} className="hover:bg-slate-50">
                       <td className="border border-slate-300 p-3 font-medium">{det.concepto}</td>
                       <td className="border border-slate-300 p-3 text-right font-mono">{fmt(det.base)}</td>
@@ -591,7 +617,6 @@ export default function CertificadosRetencionPage() {
         </div>
       )}
 
-      {/* ESTILOS CSS ESTRICTOS PARA IMPRESIÓN */}
       <style jsx global>{`
         @media print {
           @page {

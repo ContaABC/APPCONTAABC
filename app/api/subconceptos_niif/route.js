@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // ==========================================
@@ -6,8 +7,11 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 // ==========================================
 export async function GET(req) {
   try {
+    const cookieStore = cookies()
     const { searchParams } = new URL(req.url)
-    const empresa_id = searchParams.get('empresa_id')
+    
+    // Captura automática de empresa_id: desde los parámetros o leyendo la cookie activa
+    const empresa_id = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
     const concepto_niif_id = searchParams.get('concepto_niif_id')
     const accion = searchParams.get('accion')
 
@@ -73,7 +77,7 @@ export async function GET(req) {
     // Consulta general de subconceptos NIIF por empresa
     if (!empresa_id) {
       return NextResponse.json(
-        { exito: false, mensaje: 'El id de la empresa es requerido.' },
+        { exito: false, mensaje: 'El id de la empresa es requerido o no hay sesión activa.' },
         { status: 400 }
       )
     }
@@ -124,6 +128,7 @@ export async function GET(req) {
 // ==========================================
 export async function POST(req) {
   try {
+    const cookieStore = cookies()
     const body = await req.json()
 
     // Operación: Copiar / Clonar catálogo de subconceptos
@@ -259,14 +264,16 @@ export async function POST(req) {
     }
 
     // Operación: Crear un único subconcepto NIIF
-    const { empresa_id, concepto_niif_id, codigo, nombre, descripcion, elemento } = body
+    // Captura automática de empresa_id: desde el body o leyendo la cookie activa
+    const empresa_id = body.empresa_id || cookieStore.get('empresa_activa')?.value
+    const { concepto_niif_id, codigo, nombre, descripcion, elemento } = body
 
     const empIdParsed = parseInt(empresa_id, 10)
     const conceptoIdParsed = parseInt(concepto_niif_id, 10)
 
     if (isNaN(empIdParsed) || isNaN(conceptoIdParsed) || !nombre?.trim()) {
       return NextResponse.json(
-        { exito: false, mensaje: 'Empresa, Concepto NIIF padre y Nombre son campos obligatorios.' },
+        { exito: false, mensaje: 'Empresa (o sesión activa), Concepto NIIF padre y Nombre son campos obligatorios.' },
         { status: 400 }
       )
     }

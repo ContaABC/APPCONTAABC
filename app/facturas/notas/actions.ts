@@ -1,45 +1,74 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  "";
+function getSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("Faltan las variables de entorno de Supabase.");
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
+}
 
 export interface DatosXmlNota {
   tipoNota: "CREDITO" | "DEBITO";
   numeroNota: string;
-  cude: string;
+  cude?: string;
   fechaEmision: string;
   subtotal: number;
   impuestos: number;
   montoTotal: number;
-  motivo: string;
-  numeroFacturaReferencia: string;
-  cufeFacturaReferencia: string;
+  motivo?: string;
+  numeroFacturaReferencia?: string;
+  cufeFacturaReferencia?: string;
 }
 
-export async function registrarNotaDesdeXml(
-  datosXml: DatosXmlNota,
-  empresaId: number,
-  sucursalId: number | null,
-  fechaContable: string // Formato YYYY-MM-DD
+export type DatosXmlNotaEmitida = DatosXmlNota;
+
+export async function registrarNotaEmitidaDesdeXml(
+  datosXml: DatosXmlNotaEmitida,
+  empresaId?: number | string | null,
+  sucursalId?: number | string | null,
+  fechaContable?: string // Formato YYYY-MM-DD
 ) {
+  const supabase = getSupabaseAdmin();
+
   try {
-    // 1. Buscar la factura original por número de factura o CUFE dentro de la empresa
+    const empIdNum = await resolverEmpresaId(empresaId);
+    const sucIdNum = sucursalId ? Number(sucursalId) : null;
+    const fechaContableFinal = fechaContable || datosXml.fechaEmision;
+
+    if (!empIdNum) {
+      return { success: false, error: "Debe especificar una empresa válida." };
+    }
+
+    // 1. Buscar la factura emitida original por número de factura o CUFE dentro de la empresa
     let query = supabase
-      .from("facturas_recibidas")
-      .select("id, subtotal, impuestos, total_factura, empresa_id")
-      .eq("empresa_id", empresaId);
+      .from("facturas_emitidas")
+      .select("id, subtotal, iva, total_factura, empresa_id, cliente_id, cliente_nit, cliente_nombre")
+      .eq("empresa_id", empIdNum);
 
     if (datosXml.numeroFacturaReferencia) {
       query = query.eq("numero_factura", datosXml.numeroFacturaReferencia);
     } else if (datosXml.cufeFacturaReferencia) {
-      query = query.eq("cufe_cude", datosXml.cufeFacturaReferencia);
+      query = query.eq("cufe", datosXml.cufeFacturaReferencia);
+    } else {
+      return { success: false, error: "Debe proporcionar el número de factura o el CUFE de referencia." };
     }
 
     const { data: facturas, error: errorBusqueda } = await query;
@@ -47,24 +76,24 @@ export async function registrarNotaDesdeXml(
     if (errorBusqueda || !facturas || facturas.length === 0) {
       return {
         success: false,
-        error: `No se encontró en la empresa seleccionada la factura de referencia (N° ${datosXml.numeroFacturaReferencia || "S/N"}). Cargue primero la factura original.`,
+        error: `No se encontró en la empresa seleccionada la factura de venta de referencia (N° ${datosXml.numeroFacturaReferencia || "S/N"}). Cargue primero la factura original.`,
       };
     }
 
     const facturaOriginal = facturas[0];
 
-    // 2. Insertar en notas_recibidas asociando Sucursal y Fecha Contable
+    // 2. Insertar en la tabla de notas emitidas
     const { data: notaRegistrada, error: errorNota } = await supabase
-      .from("notas_recibidas")
+      .from("notas_emitidas")
       .insert({
-        empresa_id: empresaId,
-        sucursal_id: sucursalId,
-        factura_recibida_id: facturaOriginal.id,
+        empresa_id: empIdNum,
+        sucursal_id: sucIdNum,
+        factura_emitida_id: facturaOriginal.id,
         tipo_nota: datosXml.tipoNota,
         numero_nota: datosXml.numeroNota,
-        cude: datosXml.cude,
+        cude: datosXml.cude || null,
         fecha_emision: datosXml.fechaEmision,
-        fecha_contable: fechaContable,
+        fecha_contable: fechaContableFinal,
         subtotal: datosXml.subtotal,
         impuestos: datosXml.impuestos,
         monto_total: datosXml.montoTotal,
@@ -74,10 +103,10 @@ export async function registrarNotaDesdeXml(
       .single();
 
     if (errorNota) {
-      return { success: false, error: `Error al registrar nota: ${errorNota.message}` };
+      return { success: false, error: `Error al registrar la nota emitida: ${errorNota.message}` };
     }
 
-    // 3. Reorganizar saldos de la factura original
+    // 3. Reorganizar / actualizar saldos de la factura emitida original
     const esCredito = datosXml.tipoNota === "CREDITO";
 
     const nuevoSubtotal = esCredito
@@ -85,23 +114,23 @@ export async function registrarNotaDesdeXml(
       : Number(facturaOriginal.subtotal) + datosXml.subtotal;
 
     const nuevosImpuestos = esCredito
-      ? Number(facturaOriginal.impuestos) - datosXml.impuestos
-      : Number(facturaOriginal.impuestos) + datosXml.impuestos;
+      ? Number(facturaOriginal.iva) - datosXml.impuestos
+      : Number(facturaOriginal.iva) + datosXml.impuestos;
 
     const nuevoTotal = esCredito
       ? Number(facturaOriginal.total_factura) - datosXml.montoTotal
       : Number(facturaOriginal.total_factura) + datosXml.montoTotal;
 
     await supabase
-      .from("facturas_recibidas")
+      .from("facturas_emitidas")
       .update({
         subtotal: Math.max(0, nuevoSubtotal),
-        impuestos: Math.max(0, nuevosImpuestos),
+        iva: Math.max(0, nuevosImpuestos),
         total_factura: Math.max(0, nuevoTotal),
       })
       .eq("id", facturaOriginal.id);
 
-    // 4. Invertir / Incrementar Transacción Contable usando la FECHA CONTABLE
+    // 4. Invertir / Incrementar Transacción Contable usando la transacción origen de la factura
     const { data: transaccionOrig } = await supabase
       .from("transacciones")
       .select("id")
@@ -115,23 +144,23 @@ export async function registrarNotaDesdeXml(
         .eq("transaccion_id", transaccionOrig.id);
 
       if (detallesOrig && detallesOrig.length > 0) {
-        const { data: transaccionNota } = await supabase
+        const { data: transaccionNota, error: errTxNota } = await supabase
           .from("transacciones")
           .insert({
-            empresa_id: empresaId,
-            sucursal_id: sucursalId,
+            empresa_id: empIdNum,
+            sucursal_id: sucIdNum,
             numero_documento: datosXml.numeroNota,
             fecha_emision: datosXml.fechaEmision,
-            fecha_vencimiento: fechaContable, // Asignamos la fecha contable al movimiento contable
-            glosa_concepto: `Causación Nota ${datosXml.tipoNota} N° ${datosXml.numeroNota}`,
-            modulo_origen: "NOTAS_RECIBIDAS",
+            fecha_vencimiento: fechaContableFinal,
+            glosa_concepto: `Causación Nota ${datosXml.tipoNota} Emitida N° ${datosXml.numeroNota} (Ref: ${datosXml.numeroFacturaReferencia || "S/N"})`,
+            modulo_origen: "NOTAS_EMITIDAS",
             referencia_origen_id: notaRegistrada.id,
             estado: "Registrado",
           })
           .select("id")
           .single();
 
-        if (transaccionNota) {
+        if (transaccionNota && !errTxNota) {
           const proporcion =
             Number(facturaOriginal.subtotal) > 0
               ? datosXml.subtotal / Number(facturaOriginal.subtotal)
@@ -141,6 +170,7 @@ export async function registrarNotaDesdeXml(
             const debitoOrig = Number(d.debito) || 0;
             const creditoOrig = Number(d.credito) || 0;
 
+            // Para notas crédito de ventas, invertimos débitos y créditos contables
             return {
               transaccion_id: transaccionNota.id,
               concepto_auxiliar_id: d.concepto_auxiliar_id,
@@ -159,8 +189,10 @@ export async function registrarNotaDesdeXml(
       }
     }
 
-    return { success: true, notaId: notaRegistrada.id };
-  } catch (err: any) {
-    return { success: false, error: err.message || String(err) };
+    return { success: true, notaId: notaRegistrada.id, numeroNota: datosXml.numeroNota };
+  } catch (err: unknown) {
+    const mensajeError = err instanceof Error ? err.message : String(err);
+    return { success: false, error: mensajeError };
   }
 }
+export const registrarNotaDesdeXml = registrarNotaEmitidaDesdeXml;

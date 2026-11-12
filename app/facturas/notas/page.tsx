@@ -1,49 +1,44 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import NotaXmlUploader from "@/components/nota-xml-uploader";
+import NotaEmitidaXmlUploader from "../../../components/nota-emitida-xml-uploader";
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-interface Nota {
+interface NotaEmitida {
   id: string;
   tipo_nota: "CREDITO" | "DEBITO";
   numero_nota: string;
-  cude: string;
+  cude: string | null;
   fecha_emision: string;
   fecha_contable: string;
   subtotal: number;
   impuestos: number;
   monto_total: number;
   motivo: string | null;
-  facturas_recibidas?: {
+  facturas_emitidas?: {
     numero_factura: string;
   } | null;
 }
 
-export default function NotasPage() {
-  // Flag para evitar desincronización de hidratación entre Servidor y Cliente
+export default function NotasEmitidasPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
 
-  // Selectores de Empresa y Sucursal
   const [empresas, setEmpresas] = useState<any[]>([]);
   const [sucursales, setSucursales] = useState<any[]>([]);
   const [empresaId, setEmpresaId] = useState<string>("");
   const [sucursalId, setSucursalId] = useState<string>("");
 
-  // Estado de Notas
-  const [notas, setNotas] = useState<Nota[]>([]);
+  const [notas, setNotas] = useState<NotaEmitida[]>([]);
   const [loadingNotas, setLoadingNotas] = useState<boolean>(false);
 
-  // 1. Indicar que el componente ya está montado en el cliente
   useEffect(() => {
     setIsMounted(true);
   }, []);
 
-  // 2. Cargar Empresas al montar desde Supabase
   useEffect(() => {
     if (!isMounted) return;
 
@@ -61,7 +56,6 @@ export default function NotasPage() {
     cargarEmpresas();
   }, [isMounted]);
 
-  // 3. Cargar Sucursales cuando cambia Empresa desde Supabase
   useEffect(() => {
     if (!isMounted || !empresaId) return;
 
@@ -80,13 +74,12 @@ export default function NotasPage() {
     cargarSucursales();
   }, [empresaId, isMounted]);
 
-  // 4. Cargar Historial de Notas de la Empresa/Sucursal seleccionada
   const cargarNotas = async () => {
     if (!empresaId) return;
     setLoadingNotas(true);
 
     let query = supabase
-      .from("notas_recibidas")
+      .from("notas_emitidas")
       .select(`
         id,
         tipo_nota,
@@ -98,7 +91,7 @@ export default function NotasPage() {
         impuestos,
         monto_total,
         motivo,
-        facturas_recibidas (
+        facturas_emitidas (
           numero_factura
         )
       `)
@@ -112,7 +105,7 @@ export default function NotasPage() {
     const { data, error } = await query;
 
     if (!error && data) {
-      setNotas(data as unknown as Nota[]);
+      setNotas(data as unknown as NotaEmitida[]);
     }
     setLoadingNotas(false);
   };
@@ -123,7 +116,6 @@ export default function NotasPage() {
     }
   }, [empresaId, sucursalId, isMounted]);
 
-  // Si no se ha montado en el cliente, evitamos renderizar contenido que dependa del navegador
   if (!isMounted) {
     return (
       <div className="p-6 max-w-7xl mx-auto space-y-6">
@@ -142,19 +134,17 @@ export default function NotasPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
-      {/* Encabezado */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">
-            Notas Crédito y Débito
+            Notas Crédito y Débito Emitidas (Ventas)
           </h1>
           <p className="text-sm text-slate-500">
-            Registro y causación contable de notas de ajuste UBL 2.1.
+            Registro y causación contable de notas de ajuste UBL 2.1 sobre facturas de venta.
           </p>
         </div>
       </div>
 
-      {/* Selectores Contextuales: Empresa y Sucursal */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
         <div>
           <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
@@ -168,7 +158,7 @@ export default function NotasPage() {
             {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>
                 {emp.razon_social || emp.nombre_comercial || emp.nombre} (
-                {emp.nit || emp.numero_identificacion || ""})
+                {emp.nit_identificacion || emp.nit || ""})
               </option>
             ))}
           </select>
@@ -186,29 +176,26 @@ export default function NotasPage() {
             <option value="">Todas las sucursales</option>
             {sucursales.map((suc) => (
               <option key={suc.id} value={suc.id}>
-                {suc.nombre} {suc.codigo ? `(${suc.codigo})` : ""}
+                {suc.nombre} {suc.codigo_sucursal ? `(${suc.codigo_sucursal})` : ""}
               </option>
             ))}
           </select>
         </div>
       </div>
 
-      {/* Grid Principal */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Columna Izquierda: Uploader */}
         <div className="lg:col-span-1 space-y-4">
-          <NotaXmlUploader
+          <NotaEmitidaXmlUploader
             selectedCompanyId={empresaId}
             selectedBranchId={sucursalId}
             onNotaProcesada={cargarNotas}
           />
         </div>
 
-        {/* Columna Derecha: Tabla de Notas */}
         <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-4">
           <div className="flex items-center justify-between border-b pb-3">
             <h2 className="text-sm font-bold text-slate-800">
-              Notas Registradas ({notas.length})
+              Notas Emitidas Registradas ({notas.length})
             </h2>
             <button
               onClick={cargarNotas}
@@ -220,11 +207,11 @@ export default function NotasPage() {
 
           {loadingNotas ? (
             <div className="p-12 text-center text-slate-500 text-sm">
-              Cargando notas...
+              Cargando notas emitidas...
             </div>
           ) : notas.length === 0 ? (
             <div className="p-12 text-center text-slate-500 text-sm">
-              No hay notas registradas para la selección actual.
+              No hay notas emitidas registradas para la selección actual.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -232,8 +219,8 @@ export default function NotasPage() {
                 <thead>
                   <tr className="bg-slate-50 border-b text-slate-500 font-semibold uppercase tracking-wider">
                     <th className="p-3">Tipo</th>
-                    <th className="p-3">Número</th>
-                    <th className="p-3">Factura Ref.</th>
+                    <th className="p-3">N° Nota</th>
+                    <th className="p-3">Factura Venta Ref.</th>
                     <th className="p-3">F. Emisión</th>
                     <th className="p-3">F. Contable</th>
                     <th className="p-3 text-right">Total</th>
@@ -260,7 +247,7 @@ export default function NotasPage() {
                         {nota.numero_nota}
                       </td>
                       <td className="p-3 font-mono text-slate-600">
-                        {nota.facturas_recibidas?.numero_factura || "—"}
+                        {nota.facturas_emitidas?.numero_factura || "—"}
                       </td>
                       <td className="p-3 text-slate-600">
                         {nota.fecha_emision}

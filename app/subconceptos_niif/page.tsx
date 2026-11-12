@@ -20,38 +20,42 @@ import {
 } from 'lucide-react'
 
 export default function SubconceptosNiifPage() {
-  const [isMounted, setIsMounted] = useState(false)
+  const [isMounted, setIsMounted] = useState<boolean>(false)
 
   // Estados principales
-  const [empresas, setEmpresas] = useState([])
-  const [empresaSeleccionada, setEmpresaSeleccionada] = useState('')
-  const [conceptosPadre, setConceptosPadre] = useState([])
-  const [subconceptos, setSubconceptos] = useState([])
+  const [empresas, setEmpresas] = useState<any[]>([])
+  const [empresaSeleccionada, setEmpresaSeleccionada] = useState<string>('')
+  const [conceptosPadre, setConceptosPadre] = useState<any[]>([])
+  const [subconceptos, setSubconceptos] = useState<any[]>([])
 
   // Estados de carga e interfaz
-  const [loadingEmpresas, setLoadingEmpresas] = useState(true)
-  const [loadingPadres, setLoadingPadres] = useState(false)
-  const [loadingTabla, setLoadingTabla] = useState(false)
-  const [guardando, setGuardando] = useState(false)
-  const [eliminandoId, setEliminatingId] = useState(null)
-  const [cambiandoEstadoId, setCambiandoEstadoId] = useState(null)
+  const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(true)
+  const [loadingPadres, setLoadingPadres] = useState<boolean>(false)
+  const [loadingTabla, setLoadingTabla] = useState<boolean>(false)
+  const [guardando, setGuardando] = useState<boolean>(false)
+  const [eliminandoId, setEliminatingId] = useState<string | number | null>(null)
+  const [cambiandoEstadoId, setCambiandoEstadoId] = useState<string | number | null>(null)
 
   // Filtros
-  const [filtroBusqueda, setFiltroBusqueda] = useState('')
-  const [filtroPadre, setFiltroPadre] = useState('')
-  const [filtroEstado, setFiltroEstado] = useState('todos')
+  const [filtroBusqueda, setFiltroBusqueda] = useState<string>('')
+  const [filtroPadre, setFiltroPadre] = useState<string>('')
+  const [filtroEstado, setFiltroEstado] = useState<string>('todos')
 
   // Modales
-  const [modalAbierto, setModalAbierto] = useState(false)
-  const [modoEdicion, setModoEdicion] = useState(false)
-  const [subconceptoEditarId, setSubconceptoEditarId] = useState(null)
+  const [modalAbierto, setModalAbierto] = useState<boolean>(false)
+  const [modoEdicion, setModoEdicion] = useState<boolean>(false)
+  const [subconceptoEditarId, setSubconceptoEditarId] = useState<string | number | null>(null)
 
-  const [modalCopiaAbierto, setModalCopiaAbierto] = useState(false)
-  const [empresasDestino, setEmpresasDestino] = useState([])
-  const [copiando, setCopiando] = useState(false)
+  const [modalCopiaAbierto, setModalCopiaAbierto] = useState<boolean>(false)
+  const [empresasDestino, setEmpresasDestino] = useState<string[]>([])
+  const [copiando, setCopiando] = useState<boolean>(false)
 
   // Notificaciones
-  const [notificacion, setNotificacion] = useState({
+  const [notificacion, setNotificacion] = useState<{
+    visible: boolean;
+    tipo: 'exito' | 'error' | 'info';
+    mensaje: string;
+  }>({
     visible: false,
     tipo: 'exito',
     mensaje: ''
@@ -67,9 +71,9 @@ export default function SubconceptosNiifPage() {
     activo: true
   })
 
-  const [erroresForm, setErroresForm] = useState({})
+  const [erroresForm, setErroresForm] = useState<Record<string, string | null>>({})
 
-  const mostrarNotificacion = useCallback((tipo, mensaje) => {
+  const mostrarNotificacion = useCallback((tipo: 'exito' | 'error' | 'info', mensaje: string) => {
     setNotificacion({ visible: true, tipo, mensaje })
   }, [])
 
@@ -97,7 +101,12 @@ export default function SubconceptosNiifPage() {
         const listaEmpresas = json.datos || []
         setEmpresas(listaEmpresas)
         if (listaEmpresas.length > 0) {
-          setEmpresaSeleccionada(String(listaEmpresas[0].id))
+          const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'))
+          if (match && listaEmpresas.some((e: any) => String(e.id) === match[2])) {
+            setEmpresaSeleccionada(match[2])
+          } else {
+            setEmpresaSeleccionada(String(listaEmpresas[0].id))
+          }
         }
       } else {
         mostrarNotificacion('error', json.mensaje || 'Error al obtener empresas')
@@ -110,7 +119,7 @@ export default function SubconceptosNiifPage() {
     }
   }, [mostrarNotificacion])
 
-  const cargarConceptosPadre = useCallback(async (empId) => {
+  const cargarConceptosPadre = useCallback(async (empId: string) => {
     if (!empId) return
     setLoadingPadres(true)
     try {
@@ -133,7 +142,7 @@ export default function SubconceptosNiifPage() {
     }
   }, [mostrarNotificacion])
 
-  const cargarSubconceptos = useCallback(async (empId) => {
+  const cargarSubconceptos = useCallback(async (empId: string) => {
     if (!empId) return
     setLoadingTabla(true)
     try {
@@ -162,13 +171,16 @@ export default function SubconceptosNiifPage() {
     if (empresaSeleccionada) {
       cargarConceptosPadre(empresaSeleccionada)
       cargarSubconceptos(empresaSeleccionada)
+
+      localStorage.setItem("empresa_activa", empresaSeleccionada);
+      document.cookie = `empresa_activa=${empresaSeleccionada}; path=/; max-age=86400; SameSite=Lax`;
     } else {
       setConceptosPadre([])
       setSubconceptos([])
     }
   }, [empresaSeleccionada, cargarConceptosPadre, cargarSubconceptos])
 
-  const obtenerSiguienteCodigo = async (conceptoPadreId) => {
+  const obtenerSiguienteCodigo = async (conceptoPadreId: string) => {
     if (!conceptoPadreId) return
     try {
       const res = await fetch(
@@ -188,7 +200,7 @@ export default function SubconceptosNiifPage() {
     }
   }
 
-  const handleCambiarEstado = async (item, nuevoEstado) => {
+  const handleCambiarEstado = async (item: any, nuevoEstado: boolean) => {
     if (Boolean(item.activo) === nuevoEstado) return
 
     setCambiandoEstadoId(item.id)
@@ -225,7 +237,7 @@ export default function SubconceptosNiifPage() {
     }
   }
 
-  const handleEliminarSubconcepto = async (item) => {
+  const handleEliminarSubconcepto = async (item: any) => {
     const confirmacion = window.confirm(
       `¿Está seguro de eliminar el subconcepto "${item.nombre}" (${item.codigo})?`
     )
@@ -252,7 +264,7 @@ export default function SubconceptosNiifPage() {
     }
   }
 
-  const obtenerElementoTexto = (c) => {
+  const obtenerElementoTexto = (c: any) => {
     return (
       c.elemento ||
       c.clasificacion_elemento ||
@@ -264,7 +276,7 @@ export default function SubconceptosNiifPage() {
     )
   }
 
-  const handleConceptoPadreChange = (conceptoId) => {
+  const handleConceptoPadreChange = (conceptoId: string) => {
     const padreSeleccionado = conceptosPadre.find((c) => String(c.id) === String(conceptoId))
     const elementoPadre = padreSeleccionado ? obtenerElementoTexto(padreSeleccionado) : ''
 
@@ -305,7 +317,7 @@ export default function SubconceptosNiifPage() {
     setModalAbierto(true)
   }
 
-  const abrirModalEditar = (item) => {
+  const abrirModalEditar = (item: any) => {
     setModoEdicion(true)
     setSubconceptoEditarId(item.id)
     setErroresForm({})
@@ -323,7 +335,7 @@ export default function SubconceptosNiifPage() {
   }
 
   const validarFormulario = () => {
-    const nuevosErrores = {}
+    const nuevosErrores: Record<string, string> = {}
 
     if (!formData.concepto_niif_id) {
       nuevosErrores.concepto_niif_id = 'Seleccione un concepto NIIF padre'
@@ -343,7 +355,7 @@ export default function SubconceptosNiifPage() {
     return Object.keys(nuevosErrores).length === 0
   }
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
     if (!validarFormulario()) return
@@ -415,7 +427,7 @@ export default function SubconceptosNiifPage() {
     setModalCopiaAbierto(true)
   }
 
-  const toggleEmpresaDestino = (idStr) => {
+  const toggleEmpresaDestino = (idStr: string) => {
     setEmpresasDestino((prev) =>
       prev.includes(idStr) ? prev.filter((item) => item !== idStr) : [...prev, idStr]
     )
@@ -480,10 +492,17 @@ export default function SubconceptosNiifPage() {
     })
   }, [subconceptos, filtroBusqueda, filtroPadre, filtroEstado])
 
+  interface GrupoSubconceptos {
+    padreId: string;
+    padreCodigo: string;
+    padreNombre: string;
+    items: any[];
+  }
+
   const subconceptosAgrupadosPorPadre = useMemo(() => {
-    const grupos = {}
+    const grupos: Record<string, GrupoSubconceptos> = {}
     subconceptosFiltrados.forEach((item) => {
-      const padreId = item.concepto_niif_id || 'sin_padre'
+      const padreId = item.concepto_niif_id ? String(item.concepto_niif_id) : 'sin_padre'
       const padreNombre = item.conceptos_niif?.nombre || 'Concepto no especificado'
       const padreCodigo = item.conceptos_niif?.codigo_concepto || ''
 
@@ -501,7 +520,7 @@ export default function SubconceptosNiifPage() {
   }, [subconceptosFiltrados])
 
   const conceptosPadreAgrupadosPorElemento = useMemo(() => {
-    const grupos = {}
+    const grupos: Record<string, any[]> = {}
     conceptosPadre.forEach((c) => {
       const elemento = obtenerElementoTexto(c) || 'GENERAL / OTROS'
       if (!grupos[elemento]) {
@@ -712,7 +731,7 @@ export default function SubconceptosNiifPage() {
                   <div className="col-span-1 text-right">Acciones</div>
                 </div>
 
-                {grupo.items.map((item) => {
+                {grupo.items.map((item: any) => {
                   const estaActivo = Boolean(item.activo)
                   return (
                     <div key={item.id} className="grid grid-cols-12 items-center px-4 py-2 hover:bg-slate-50/80 transition">
@@ -834,7 +853,7 @@ export default function SubconceptosNiifPage() {
                     <option value="">Seleccione un concepto...</option>
                     {Object.entries(conceptosPadreAgrupadosPorElemento).map(([elementoGrupo, listaPadres]) => (
                       <optgroup key={elementoGrupo} label={`── ${elementoGrupo.toUpperCase()} ──`}>
-                        {listaPadres.map((c) => {
+                        {listaPadres.map((c: any) => {
                           const elem = obtenerElementoTexto(c)
                           return (
                             <option key={c.id} value={String(c.id)}>

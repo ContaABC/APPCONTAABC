@@ -1,20 +1,28 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error(
-      "Faltan variables de entorno de Supabase (NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY)."
+      "Faltan variables de entorno de Supabase (NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY)."
     );
   }
 
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
+
+async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+  if (empresaId) return Number(empresaId);
+  const cookieStore = await cookies();
+  const idCookie = cookieStore.get("empresa_activa")?.value;
+  return Number(idCookie || 0);
 }
 
 export async function obtenerEmpresas() {
@@ -27,38 +35,43 @@ export async function obtenerEmpresas() {
 
     if (error) return { success: false, data: [], error: error.message };
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener empresas.";
+    return { success: false, data: [], error: mensaje };
   }
 }
 
-export async function obtenerSucursales(empresaId: number | string) {
+export async function obtenerSucursales(empresaId?: number | string | null) {
   try {
-    const parsedEmpresaId = Number(empresaId);
-    if (!parsedEmpresaId) return { success: true, data: [], error: null };
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa) return { success: true, data: [], error: null };
 
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from("sucursales")
       .select("id, nombre, codigo_sucursal")
-      .eq("empresa_id", parsedEmpresaId)
+      .eq("empresa_id", idEmpresa)
       .order("id", { ascending: true });
 
     if (error) return { success: false, data: [], error: error.message };
     return { success: true, data: data || [], error: null };
-  } catch (err: any) {
-    return { success: false, data: [], error: err.message };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener sucursales.";
+    return { success: false, data: [], error: mensaje };
   }
 }
 
-export async function obtenerCatalogosPorNivel(empresaId: number, nivel: 1 | 2 | 3) {
+export async function obtenerCatalogosPorNivel(empresaId?: number | string | null, nivel?: 1 | 2 | 3) {
   const supabase = getSupabaseAdmin();
   try {
+    const idEmpresa = await resolverEmpresaId(empresaId);
+    if (!idEmpresa) throw new Error("Debe especificar o tener activa una empresa válida.");
+
     if (nivel === 1) {
       const { data, error } = await supabase
         .from("conceptos_niif")
         .select("id, codigo_concepto, nombre")
-        .eq("empresa_id", empresaId);
+        .eq("empresa_id", idEmpresa);
       if (error) throw error;
       return { success: true, data: (data || []).map((x: any) => ({ id: x.id, codigo: x.codigo_concepto, nombre: x.nombre })) };
     } 
@@ -66,7 +79,7 @@ export async function obtenerCatalogosPorNivel(empresaId: number, nivel: 1 | 2 |
       const { data, error } = await supabase
         .from("subconceptos_niif")
         .select("id, codigo, nombre")
-        .eq("empresa_id", empresaId);
+        .eq("empresa_id", idEmpresa);
       if (error) throw error;
       return { success: true, data: (data || []).map((x: any) => ({ id: x.id, codigo: x.codigo, nombre: x.nombre })) };
     } 
@@ -74,40 +87,43 @@ export async function obtenerCatalogosPorNivel(empresaId: number, nivel: 1 | 2 |
       const { data, error } = await supabase
         .from("conceptos_auxiliares")
         .select("id, codigo_auxiliar, nombre")
-        .eq("empresa_id", empresaId);
+        .eq("empresa_id", idEmpresa);
       if (error) throw error;
       return { success: true, data: (data || []).map((x: any) => ({ id: x.id, codigo: x.codigo_auxiliar, nombre: x.nombre })) };
     }
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener catálogos.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
 export async function obtenerBalanceDePrueba(
-  empresaId: number | string, 
+  empresaId?: number | string | null, 
   sucursalId?: number | string | null, 
   anio?: number | string | null, 
   mes?: number | string | null, 
   nivel?: 'CONCEPTOS' | 'SUBCONCEPTOS' | 'AUXILIARES'
 ) {
   const supabase = getSupabaseAdmin();
-  const parsedEmpresaId = Number(empresaId);
+  const idEmpresa = await resolverEmpresaId(empresaId);
   const parsedSucursalId = sucursalId ? Number(sucursalId) : null;
   const parsedAnio = anio ? Number(anio) : null;
   const parsedMes = mes ? Number(mes) : null;
 
   try {
+    if (!idEmpresa) throw new Error("Debe especificar o tener activa una empresa válida.");
+
     if (nivel === 'AUXILIARES') {
       const { data: catAux, error: errCat } = await supabase
         .from("conceptos_auxiliares")
         .select("id, codigo_auxiliar, nombre")
-        .eq("empresa_id", parsedEmpresaId);
+        .eq("empresa_id", idEmpresa);
       if (errCat) throw errCat;
 
       let qAct = supabase
         .from("saldos_acumulados_auxiliares")
         .select("concepto_auxiliar_id, total_debito, total_credito")
-        .eq("empresa_id", parsedEmpresaId)
+        .eq("empresa_id", idEmpresa)
         .eq("anio", parsedAnio)
         .eq("mes", parsedMes);
 
@@ -117,7 +133,7 @@ export async function obtenerBalanceDePrueba(
       let qHist = supabase
         .from("saldos_acumulados_auxiliares")
         .select("concepto_auxiliar_id, total_debito, total_credito")
-        .eq("empresa_id", parsedEmpresaId)
+        .eq("empresa_id", idEmpresa)
         .eq("anio", parsedAnio)
         .lt("mes", parsedMes);
 
@@ -169,13 +185,13 @@ export async function obtenerBalanceDePrueba(
       const { data: catSub, error: errCat } = await supabase
         .from("subconceptos_niif")
         .select("id, codigo, nombre")
-        .eq("empresa_id", parsedEmpresaId);
+        .eq("empresa_id", idEmpresa);
       if (errCat) throw errCat;
 
       let qAct = supabase
         .from("saldos_acumulados_subconceptos")
         .select("subconcepto_niif_id, total_debito, total_credito")
-        .eq("empresa_id", parsedEmpresaId)
+        .eq("empresa_id", idEmpresa)
         .eq("anio", parsedAnio)
         .eq("mes", parsedMes);
 
@@ -185,7 +201,7 @@ export async function obtenerBalanceDePrueba(
       let qHist = supabase
         .from("saldos_acumulados_subconceptos")
         .select("subconcepto_niif_id, total_debito, total_credito")
-        .eq("empresa_id", parsedEmpresaId)
+        .eq("empresa_id", idEmpresa)
         .eq("anio", parsedAnio)
         .lt("mes", parsedMes);
 
@@ -237,13 +253,13 @@ export async function obtenerBalanceDePrueba(
       const { data: catConc, error: errCat } = await supabase
         .from("conceptos_niif")
         .select("id, codigo_concepto, nombre")
-        .eq("empresa_id", parsedEmpresaId);
+        .eq("empresa_id", idEmpresa);
       if (errCat) throw errCat;
 
       let qAct = supabase
         .from("saldos_acumulados_conceptos")
         .select("concepto_niif_id, total_debito, total_credito")
-        .eq("empresa_id", parsedEmpresaId)
+        .eq("empresa_id", idEmpresa)
         .eq("anio", parsedAnio)
         .eq("mes", parsedMes);
 
@@ -253,7 +269,7 @@ export async function obtenerBalanceDePrueba(
       let qHist = supabase
         .from("saldos_acumulados_conceptos")
         .select("concepto_niif_id, total_debito, total_credito")
-        .eq("empresa_id", parsedEmpresaId)
+        .eq("empresa_id", idEmpresa)
         .eq("anio", parsedAnio)
         .lt("mes", parsedMes);
 
@@ -301,25 +317,31 @@ export async function obtenerBalanceDePrueba(
       resultado.sort((a: any, b: any) => String(a.codigo_orden).localeCompare(String(b.codigo_orden)));
       return { success: true, data: resultado };
     }
-  } catch (err: any) {
-    console.error("Error en obtenerBalanceDePrueba:", err);
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener el balance de prueba.";
+    console.error("Error en obtenerBalanceDePrueba:", mensaje);
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
 export async function obtenerLibroMayorPorNivel(
-  empresaId: number | string,
-  sucursalId: number | string | null,
-  nivel: 1 | 2 | 3,
-  itemId: number | string,
-  fechaInicio: string,
-  fechaFin: string
+  empresaId?: number | string | null,
+  sucursalId?: number | string | null,
+  nivel?: 1 | 2 | 3,
+  itemId?: number | string,
+  fechaInicio?: string,
+  fechaFin?: string
 ) {
   const supabase = getSupabaseAdmin();
-  const parsedEmpresaId = Number(empresaId);
+  const idEmpresa = await resolverEmpresaId(empresaId);
   const parsedSucursalId = sucursalId ? Number(sucursalId) : null;
 
   try {
+    if (!idEmpresa) throw new Error("Debe especificar o tener activa una empresa válida.");
+    if (!itemId || !nivel || !fechaInicio || !fechaFin) {
+      return { success: true, data: [] };
+    }
+
     let auxiliaresIds: number[] = [];
 
     if (nivel === 3) {
@@ -383,39 +405,40 @@ export async function obtenerLibroMayorPorNivel(
     if (error) throw error;
 
     const filtrados = (data || []).filter((item: any) => 
-      item.transaccion?.empresa_id === parsedEmpresaId && 
+      item.transaccion?.empresa_id === idEmpresa && 
       (parsedSucursalId ? item.transaccion?.sucursal_id === parsedSucursalId : true)
     );
 
     return { success: true, data: filtrados };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener el libro mayor.";
+    return { success: false, error: mensaje, data: [] };
   }
 }
 
-// LIBRO DIARIO AUDITADO Y VERIFICADO CON COLUMNAS REALES
 export async function obtenerLibroDiario(
-  empresaId: number | string,
-  sucursalId: number | string | null,
-  anio: number | string,
-  mes: number | string
+  empresaId?: number | string | null,
+  sucursalId?: number | string | null,
+  anio?: number | string,
+  mes?: number | string
 ) {
   const supabase = getSupabaseAdmin();
-  const parsedEmpresaId = Number(empresaId);
+  const idEmpresa = await resolverEmpresaId(empresaId);
   const parsedSucursalId = sucursalId ? Number(sucursalId) : null;
   const parsedAnio = Number(anio);
   const parsedMes = Number(mes);
 
   try {
+    if (!idEmpresa) throw new Error("Debe especificar o tener activa una empresa válida.");
+
     const fechaInicio = `${parsedAnio}-${String(parsedMes).padStart(2, '0')}-01`;
     const ultimoDia = new Date(parsedAnio, parsedMes, 0).getDate();
     const fechaFin = `${parsedAnio}-${String(parsedMes).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
 
-    // 1. Filtrar transacciones por empresa, sucursal opcional y fecha_contable
     let qTrans = supabase
       .from('transacciones')
       .select('id')
-      .eq('empresa_id', parsedEmpresaId)
+      .eq('empresa_id', idEmpresa)
       .gte('fecha_contable', fechaInicio)
       .lte('fecha_contable', fechaFin);
 
@@ -431,7 +454,6 @@ export async function obtenerLibroDiario(
       return { success: true, data: [] };
     }
 
-    // 2. Consultar detalle_transacciones con los nombres exactos de las columnas y llaves foráneas
     const { data, error } = await supabase
       .from('detalle_transacciones')
       .select(`
@@ -464,7 +486,6 @@ export async function obtenerLibroDiario(
 
     if (error) throw error;
 
-    // 3. Ordenamiento estricto: Fecha Contable -> Clase de Documento -> Consecutivo
     const sortedData = (data || []).sort((a: any, b: any) => {
       const fechaA = a.transaccion?.fecha_contable || a.fecha_contable || "";
       const fechaB = b.transaccion?.fecha_contable || b.fecha_contable || "";
@@ -480,7 +501,8 @@ export async function obtenerLibroDiario(
     });
 
     return { success: true, data: sortedData };
-  } catch (err: any) {
-    return { success: false, error: err.message, data: [] };
+  } catch (err: unknown) {
+    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener el libro diario.";
+    return { success: false, error: mensaje, data: [] };
   }
 }

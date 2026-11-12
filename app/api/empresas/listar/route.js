@@ -1,21 +1,60 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { createServerClient } from '@supabase/ssr'
 
 export async function GET(request) {
   try {
-    // PREPARADO PARA EL FUTURO:
-    // const { searchParams } = new URL(request.url)
-    // const usuario_id = searchParams.get('usuario_id')
+    const cookieStore = cookies()
+
+    // 1. Crear cliente de Supabase SSR para leer la sesión actual del usuario de forma segura
+    const supabaseClient = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      {
+        cookies: {
+          get(name) {
+            return cookieStore.get(name)?.value
+          },
+        },
+      }
+    )
+
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser()
 
     let query = supabaseAdmin
       .from('empresas')
       .select('id, razon_social, nit_identificacion, dv')
-      .order('razon_social', { ascending: true }) // Orden alfabético A-Z
+      .order('razon_social', { ascending: true })
 
-    // FUTURO: Filtrar solo las empresas asignadas al usuario en la tabla 'usuarios_empresas'
-    // if (usuario_id) {
-    //   query = query.in('id', arrayDeEmpresasDelUsuario)
-    // }
+    // 2. Si hay un usuario autenticado, verificamos su rol y restricciones
+    if (user && !authError) {
+      const { data: perfil } = await supabaseAdmin
+        .from('usuarios_perfiles')
+        .select('tipo_usuario')
+        .eq('id', user.id)
+        .single()
+
+      const esAdmin = perfil?.tipo_usuario?.toLowerCase() === 'administrador'
+
+      // Si NO es administrador, filtramos estrictamente solo las empresas asignadas en la tabla de relación
+      if (!esAdmin) {
+        const { data: asignaciones, error: errAsig } = await supabaseAdmin
+          .from('usuarios_empresas')
+          .select('empresa_id')
+          .eq('usuario_id', user.id)
+
+        if (errAsig) throw errAsig
+
+        const idsEmpresasPermitidas = (asignaciones || []).map((item) => item.empresa_id)
+
+        if (idsEmpresasPermitidas.length === 0) {
+          return NextResponse.json({ exito: true, empresas: [] })
+        }
+
+        query = query.in('id', idsEmpresasPermitidas)
+      }
+    }
 
     const { data, error } = await query
 
