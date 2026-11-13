@@ -3,31 +3,11 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { createServerClient } from '@supabase/ssr'
 
- 
-    // 1. Crear cliente de Supabexport async function GET(req) {
+export async function GET(request) {
   try {
-    const cookieStore = await cookies() // <-- EL AWAIT ES OBLIGATORIO AQUÍ
-    const { searchParams } = new URL(req.url)
-    const accion = searchParams.get('accion')
-    const empresa_id = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
-    const concepto_niif_id = searchParams.get('concepto_niif_id')
+    const cookieStore = await cookies()
 
-    // 1. Listar empresas para los dropdowns
-    if (accion === 'listar_empresas') {
-      const { data, error } = await supabaseAdmin
-        .from('empresas')
-        .select('id, razon_social, nombre_comercial')
-        .order('razon_social', { ascending: true })
-
-      if (error) {
-        console.error('Error al listar empresas:', error)
-        return NextResponse.json({ exito: false, mensaje: error.message }, { status: 500 })
-      }
-
-      return NextResponse.json({ exito: true, datos: data || [] })
-    }
-
-    // ... resto de tu código GET ...ase SSR para leer la sesión actual del usuario de forma segura
+    // 1. Crear cliente de Supabase SSR para leer la sesión actual del usuario de forma segura
     const supabaseClient = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -44,7 +24,7 @@ import { createServerClient } from '@supabase/ssr'
 
     let query = supabaseAdmin
       .from('empresas')
-      .select('id, razon_social, nit_identificacion, dv')
+      .select('id, razon_social, nombre_comercial, nit_identificacion, dv')
       .order('razon_social', { ascending: true })
 
     // 2. Si hay un usuario autenticado, verificamos su rol y restricciones
@@ -57,7 +37,7 @@ import { createServerClient } from '@supabase/ssr'
 
       const esAdmin = perfil?.tipo_usuario?.toLowerCase() === 'administrador'
 
-      // Si NO es administrador, filtramos estrictamente solo las empresas asignadas en la tabla de relación
+      // Si NO es administrador, filtramos estrictamente solo las empresas asignadas
       if (!esAdmin) {
         const { data: asignaciones, error: errAsig } = await supabaseAdmin
           .from('usuarios_empresas')
@@ -88,3 +68,4 @@ import { createServerClient } from '@supabase/ssr'
     console.error('Error Servidor:', error)
     return NextResponse.json({ exito: false, mensaje: error.message }, { status: 500 })
   }
+}
