@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback } from 'react'
 // ==========================================
 interface Empresa {
   id: string | number;
-  empresa_id?: string | number; // <--- Añadimos esta línea
+  empresa_id?: string | number;
   razon_social?: string;
   nombre_comercial?: string;
   nombre?: string;
@@ -22,6 +22,14 @@ interface ActividadABC {
   codigo: string;
   nombre: string;
   descripcion?: string;
+}
+
+interface ActividadFormData {
+  id?: string | number;
+  empresa_id: string;
+  codigo: string;
+  nombre: string;
+  descripcion: string;
 }
 
 interface ModalClonarProps {
@@ -124,7 +132,7 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
 
       <form onSubmit={handleSubmitClonar} className="space-y-4">
         <div>
-          <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">1. Empresa Origen</label>
+          <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">Empresa Origen</label>
           <select
             value={empresaOrigenId}
             onChange={handleOrigenChange}
@@ -199,7 +207,7 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
 // ==========================================
 function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEditar, onClose, onSave }: SubformularioProps) {
   const [guardando, setGuardando] = useState<boolean>(false)
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<ActividadFormData>({
     empresa_id: empresaIdSeleccionada || '',
     codigo: '',
     nombre: '',
