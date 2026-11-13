@@ -3,11 +3,31 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { createServerClient } from '@supabase/ssr'
 
-export async function GET(request) {
+ 
+    // 1. Crear cliente de Supabexport async function GET(req) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- EL AWAIT ES OBLIGATORIO AQUÍ
+    const { searchParams } = new URL(req.url)
+    const accion = searchParams.get('accion')
+    const empresa_id = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
+    const concepto_niif_id = searchParams.get('concepto_niif_id')
 
-    // 1. Crear cliente de Supabase SSR para leer la sesión actual del usuario de forma segura
+    // 1. Listar empresas para los dropdowns
+    if (accion === 'listar_empresas') {
+      const { data, error } = await supabaseAdmin
+        .from('empresas')
+        .select('id, razon_social, nombre_comercial')
+        .order('razon_social', { ascending: true })
+
+      if (error) {
+        console.error('Error al listar empresas:', error)
+        return NextResponse.json({ exito: false, mensaje: error.message }, { status: 500 })
+      }
+
+      return NextResponse.json({ exito: true, datos: data || [] })
+    }
+
+    // ... resto de tu código GET ...ase SSR para leer la sesión actual del usuario de forma segura
     const supabaseClient = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,

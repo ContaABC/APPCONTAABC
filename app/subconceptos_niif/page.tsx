@@ -100,12 +100,24 @@ export default function SubconceptosNiifPage() {
       if (json.exito) {
         const listaEmpresas = json.datos || []
         setEmpresas(listaEmpresas)
+
         if (listaEmpresas.length > 0) {
-          const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'))
-          if (match && listaEmpresas.some((e: any) => String(e.id) === match[2])) {
-            setEmpresaSeleccionada(match[2])
+          // 1. Obtener la empresa activa corporativa guardada en localStorage o cookies
+          const empresaGuardada = 
+            (typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id') : '') ||
+            (document.cookie.match(/(^| )empresa_activa=([^;]+)/)?.[2] ?? '');
+
+          // 2. Si la empresa guardada existe en la lista, la seleccionamos automáticamente al entrar
+          if (empresaGuardada && listaEmpresas.some((e: any) => String(e.id) === String(empresaGuardada))) {
+            setEmpresaSeleccionada(String(empresaGuardada))
           } else {
-            setEmpresaSeleccionada(String(listaEmpresas[0].id))
+            // 3. Si no hay una guardada, tomamos la primera disponible y la fijamos
+            const primeraEmpresa = String(listaEmpresas[0].id)
+            setEmpresaSeleccionada(primeraEmpresa)
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('empresa_activa', primeraEmpresa)
+            }
+            document.cookie = `empresa_activa=${primeraEmpresa}; path=/; max-age=86400; SameSite=Lax`
           }
         }
       } else {
@@ -172,14 +184,17 @@ export default function SubconceptosNiifPage() {
       cargarConceptosPadre(empresaSeleccionada)
       cargarSubconceptos(empresaSeleccionada)
 
-      localStorage.setItem("empresa_activa", empresaSeleccionada);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem("empresa_activa", empresaSeleccionada);
+        localStorage.setItem("empresa_id", empresaSeleccionada);
+      }
       document.cookie = `empresa_activa=${empresaSeleccionada}; path=/; max-age=86400; SameSite=Lax`;
     } else {
       setConceptosPadre([])
       setSubconceptos([])
     }
   }, [empresaSeleccionada, cargarConceptosPadre, cargarSubconceptos])
-
+  
   const obtenerSiguienteCodigo = async (conceptoPadreId: string) => {
     if (!conceptoPadreId) return
     try {
