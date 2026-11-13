@@ -1,27 +1,59 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useEmpresaContext } from '@/app/context/EmpresaContext'
+
+// ==========================================
+// INTERFACES Y TIPOS
+// ==========================================
+interface Empresa {
+  id: number | string;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nombre?: string;
+}
+
+interface ActividadABC {
+  id: number | string;
+  empresa_id: number | string;
+  codigo: string;
+  nombre: string;
+  descripcion?: string;
+}
+
+interface ModalClonarProps {
+  empresas: Empresa[];
+  empresaOrigenInicial: string;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+interface SubformularioProps {
+  empresas: Empresa[];
+  empresaIdSeleccionada: string;
+  actividadEditar: ActividadABC | null;
+  onClose: () => void;
+  onSave: () => void;
+}
 
 // ==========================================
 // MODAL CLONAR ACTIVIDADES ABC
 // ==========================================
-function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuccess }) {
-  const [empresaOrigenId, setEmpresaOrigenId] = useState(empresaOrigenInicial || '')
-  const [empresasDestinoIds, setEmpresasDestinoIds] = useState([])
-  const [copiando, setCopiando] = useState(false)
+function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuccess }: ModalClonarProps) {
+  const [empresaOrigenId, setEmpresaOrigenId] = useState<string>(empresaOrigenInicial || '')
+  const [empresasDestinoIds, setEmpresasDestinoIds] = useState<string[]>([])
+  const [copiando, setCopiando] = useState<boolean>(false)
 
   const empresasDestinoPosibles = empresas.filter(
     (emp) => String(emp.id || emp.empresa_id) !== String(empresaOrigenId)
   )
 
-  const handleOrigenChange = (e) => {
+  const handleOrigenChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const nuevoOrigenId = e.target.value
     setEmpresaOrigenId(nuevoOrigenId)
     setEmpresasDestinoIds((prev) => prev.filter((id) => String(id) !== String(nuevoOrigenId)))
   }
 
-  const handleToggleEmpresaDestino = (id) => {
+  const handleToggleEmpresaDestino = (id: number | string) => {
     const stringId = String(id)
     setEmpresasDestinoIds((prev) =>
       prev.includes(stringId) ? prev.filter((item) => item !== stringId) : [...prev, stringId]
@@ -36,7 +68,7 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
     }
   }
 
-  const handleSubmitClonar = async (e) => {
+  const handleSubmitClonar = async (e: React.FormEvent) => {
     e.preventDefault()
 
     if (!empresaOrigenId || empresasDestinoIds.length === 0) {
@@ -81,7 +113,7 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
           <h3 className="text-base font-bold text-gray-800">Copiar Actividades ABC</h3>
           <p className="text-xs text-gray-500">Duplica el catálogo de actividades a otras empresas.</p>
         </div>
-        <button onClick={onClose} type="button" className="text-gray-400 hover:text-gray-600 p-1 rounded-full text-sm">
+        <button onClick={onClose} type="button" className="text-gray-400 hover:text-gray-600 p-1 rounded-full text-sm cursor-pointer">
           ✕
         </button>
       </div>
@@ -92,7 +124,7 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
           <select
             value={empresaOrigenId}
             onChange={handleOrigenChange}
-            className="w-full text-sm border border-gray-300 px-2.5 py-1.5 rounded-md bg-white outline-none"
+            className="w-full text-sm border border-gray-300 px-2.5 py-1.5 rounded-md bg-white outline-none cursor-pointer"
           >
             <option value="">-- Seleccionar Empresa --</option>
             {empresas.map((emp) => {
@@ -111,7 +143,7 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
           <div className="flex justify-between items-center mb-1.5">
             <label className="block text-xs font-semibold text-gray-700 uppercase">2. Empresas Destino</label>
             {empresasDestinoPosibles.length > 0 && (
-              <button type="button" onClick={handleSelectAll} className="text-xs text-blue-600 font-medium hover:underline">
+              <button type="button" onClick={handleSelectAll} className="text-xs text-blue-600 font-medium hover:underline cursor-pointer">
                 {empresasDestinoIds.length === empresasDestinoPosibles.length ? 'Desmarcar todas' : 'Seleccionar todas'}
               </button>
             )}
@@ -131,7 +163,7 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
                       type="checkbox"
                       checked={isChecked}
                       onChange={() => handleToggleEmpresaDestino(id)}
-                      className="rounded border-gray-300 text-blue-600 h-4 w-4"
+                      className="rounded border-gray-300 text-blue-600 h-4 w-4 cursor-pointer"
                     />
                     <span className="font-medium">{nombre}</span>
                   </label>
@@ -142,13 +174,13 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
         </div>
 
         <div className="flex justify-end space-x-2 pt-3 border-t border-gray-100">
-          <button type="button" onClick={onClose} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700">
+          <button type="button" onClick={onClose} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 cursor-pointer">
             Cancelar
           </button>
           <button
             type="submit"
             disabled={copiando || !empresaOrigenId || empresasDestinoIds.length === 0}
-            className="px-3.5 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-md text-sm font-medium disabled:opacity-50"
+            className="px-3.5 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-md text-sm font-medium disabled:opacity-50 cursor-pointer"
           >
             {copiando ? 'Copiando...' : '📋 Copiar Actividades'}
           </button>
@@ -161,8 +193,8 @@ function ModalClonarActividades({ empresas, empresaOrigenInicial, onClose, onSuc
 // ==========================================
 // SUBFORMULARIO ACTIVIDAD ABC
 // ==========================================
-function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEditar, onClose, onSave }) {
-  const [guardando, setGuardando] = useState(false)
+function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEditar, onClose, onSave }: SubformularioProps) {
+  const [guardando, setGuardando] = useState<boolean>(false)
   const [formData, setFormData] = useState({
     empresa_id: empresaIdSeleccionada || '',
     codigo: '',
@@ -170,7 +202,7 @@ function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEdit
     descripcion: ''
   })
 
-  const obtenerCodigoAuto = async (empId) => {
+  const obtenerCodigoAuto = async (empId: string) => {
     if (!empId) return
     try {
       const res = await fetch(`/api/actividades_abc?empresa_id=${empId}&accion=siguiente_codigo`)
@@ -187,18 +219,18 @@ function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEdit
     if (actividadEditar) {
       setFormData({
         id: actividadEditar.id,
-        empresa_id: actividadEditar.empresa_id || empresaIdSeleccionada || '',
+        empresa_id: String(actividadEditar.empresa_id || empresaIdSeleccionada || ''),
         codigo: actividadEditar.codigo || '',
         nombre: actividadEditar.nombre || '',
         descripcion: actividadEditar.descripcion || ''
       })
     } else {
-      setFormData((prev) => ({ ...prev, empresa_id: empresaIdSeleccionada || '' }))
+      setFormData((prev) => ({ ...prev, empresa_id: String(empresaIdSeleccionada || '') }))
       if (empresaIdSeleccionada) obtenerCodigoAuto(empresaIdSeleccionada)
     }
   }, [actividadEditar, empresaIdSeleccionada])
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.empresa_id || !formData.nombre.trim()) {
       alert('Empresa y Nombre son requeridos.')
@@ -235,7 +267,7 @@ function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEdit
         <h3 className="text-base font-bold text-gray-800">
           {actividadEditar ? 'Editar Actividad ABC' : 'Nueva Actividad ABC (Padre)'}
         </h3>
-        <button onClick={onClose} type="button" className="text-gray-400 hover:text-gray-600 p-1 text-sm">
+        <button onClick={onClose} type="button" className="text-gray-400 hover:text-gray-600 p-1 text-sm cursor-pointer">
           ✕
         </button>
       </div>
@@ -286,10 +318,10 @@ function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEdit
         </div>
 
         <div className="flex justify-end space-x-2 pt-3 border-t border-gray-100">
-          <button type="button" onClick={onClose} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700">
+          <button type="button" onClick={onClose} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 cursor-pointer">
             Cancelar
           </button>
-          <button type="submit" disabled={guardando} className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium disabled:opacity-50">
+          <button type="submit" disabled={guardando} className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium disabled:opacity-50 cursor-pointer">
             {guardando ? 'Guardando...' : 'Guardar Actividad'}
           </button>
         </div>
@@ -302,28 +334,21 @@ function SubformularioActividad({ empresas, empresaIdSeleccionada, actividadEdit
 // PÁGINA PRINCIPAL ACTIVIDADES ABC
 // ==========================================
 export default function ActividadesABCPage() {
-  const {
-    empresasPermitidas,
-    empresaActiva,
-    setEmpresaActiva,
-    bloquearSelectores,
-    cargandoContexto
-  } = useEmpresaContext()
+  const [empresas, setEmpresas] = useState<Empresa[]>([])
+  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState<string>('')
+  const [actividades, setActividades] = useState<ActividadABC[]>([])
+  const [cargando, setCargando] = useState<boolean>(true)
 
-  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState('')
-  const [actividades, setActividades] = useState([])
-  const [cargando, setCargando] = useState(true)
-
-  const [modalFormAbierto, setModalFormAbierto] = useState(false)
-  const [modalClonarAbierto, setModalClonarAbierto] = useState(false)
-  const [actividadSeleccionada, setActividadSeleccionada] = useState(null)
-  const [isMounted, setIsMounted] = useState(false)
+  const [modalFormAbierto, setModalFormAbierto] = useState<boolean>(false)
+  const [modalClonarAbierto, setModalClonarAbierto] = useState<boolean>(false)
+  const [actividadSeleccionada, setActividadSeleccionada] = useState<ActividadABC | null>(null)
+  const [isMounted, setIsMounted] = useState<boolean>(false)
 
   useEffect(() => {
     setIsMounted(true)
   }, [])
 
-  const cargarActividades = useCallback(async (empId) => {
+  const cargarActividades = useCallback(async (empId: string) => {
     if (!empId) return
     setCargando(true)
     try {
@@ -338,28 +363,71 @@ export default function ActividadesABCPage() {
     }
   }, [])
 
-  // Sincronizar con el contexto global
+  // Cargar empresas mediante el endpoint centralizado unificado (/api/empresas/listar)
   useEffect(() => {
-    if (empresaActiva) {
-      setEmpresaIdSeleccionada(empresaActiva)
-      cargarActividades(empresaActiva)
-    } else if (empresasPermitidas.length > 0 && !empresaIdSeleccionada) {
-      const primeraId = String(empresasPermitidas[0].id || empresasPermitidas[0].empresa_id)
-      setEmpresaIdSeleccionada(primeraId)
-      cargarActividades(primeraId)
-    } else if (!cargandoContexto) {
-      setCargando(false)
-    }
-  }, [empresaActiva, empresasPermitidas, cargandoContexto, cargarActividades])
+    async function cargarEmpresasIniciales() {
+      try {
+        const res = await fetch('/api/empresas/listar')
+        
+        if (!res.ok) throw new Error(`HTTP Error: ${res.status}`)
 
-  const handleEmpresaChange = (e) => {
+        const textData = await res.text()
+        if (!textData) throw new Error('Respuesta vacía')
+
+        const data = JSON.parse(textData)
+        const listaEmpresas = data.empresas || data.datos || (Array.isArray(data) ? data : [])
+
+        if (listaEmpresas.length > 0) {
+          const empresasOrdenadas = [...listaEmpresas].sort((a: Empresa, b: Empresa) => {
+            const nombreA = a.razon_social || a.nombre_comercial || a.nombre || ''
+            const nombreB = b.razon_social || b.nombre_comercial || b.nombre || ''
+            return nombreA.localeCompare(nombreB, 'es', { sensitivity: 'base' })
+          })
+
+          setEmpresas(empresasOrdenadas)
+
+          // Sincronizar con cookies y localStorage corporativo
+          const cookieEmpresa = document.cookie
+            .split('; ')
+            .find((row) => row.startsWith('empresa_activa='))
+          const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null
+          const empresaGuardadaLocal = typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') : null
+
+          const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal
+          const existeEmpresa = empresasOrdenadas.some((emp) => String(emp.id || emp.empresa_id) === String(empresaIdParaSeleccionar))
+
+          const primeraEmpresaId = existeEmpresa && empresaIdParaSeleccionar
+            ? String(empresaIdParaSeleccionar)
+            : String(empresasOrdenadas[0].id || empresasOrdenadas[0].empresa_id)
+
+          setEmpresaIdSeleccionada(primeraEmpresaId)
+          cargarActividades(primeraEmpresaId)
+        } else {
+          setCargando(false)
+        }
+      } catch (error) {
+        console.error('Error al cargar empresas:', error)
+        setCargando(false)
+      }
+    }
+    cargarEmpresasIniciales()
+  }, [cargarActividades])
+
+  // Persistir cambios de empresaIdSeleccionada en cookies y localStorage
+  useEffect(() => {
+    if (empresaIdSeleccionada && typeof window !== 'undefined') {
+      localStorage.setItem('empresa_activa', String(empresaIdSeleccionada))
+      document.cookie = `empresa_activa=${empresaIdSeleccionada}; path=/; max-age=86400; SameSite=Lax`
+    }
+  }, [empresaIdSeleccionada])
+
+  const handleEmpresaChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value
     setEmpresaIdSeleccionada(id)
-    setEmpresaActiva(id) // Actualiza contexto global y cookie de sesión
     cargarActividades(id)
   }
 
-  const handleEliminar = async (actividad) => {
+  const handleEliminar = async (actividad: ActividadABC) => {
     if (!confirm(`¿Eliminar la actividad "${actividad.nombre}"?`)) return
     try {
       const res = await fetch(`/api/actividades_abc?id=${actividad.id}&empresa_id=${empresaIdSeleccionada}`, { method: 'DELETE' })
@@ -371,7 +439,7 @@ export default function ActividadesABCPage() {
     }
   }
 
-  if (!isMounted || cargandoContexto) {
+  if (!isMounted) {
     return <div className="p-12 text-center text-sm text-gray-500">Cargando entorno seguro...</div>
   }
 
@@ -388,13 +456,13 @@ export default function ActividadesABCPage() {
           <select
             value={empresaIdSeleccionada}
             onChange={handleEmpresaChange}
-            disabled={bloquearSelectores || empresasPermitidas.length === 0}
-            className="border border-gray-300 px-3 py-1.5 rounded-md bg-white text-xs md:text-sm font-semibold text-gray-700 shadow-sm outline-none min-w-[200px] disabled:opacity-60"
+            disabled={empresas.length === 0}
+            className="border border-gray-300 px-3 py-1.5 rounded-md bg-white text-xs md:text-sm font-semibold text-gray-700 shadow-sm outline-none min-w-[200px] disabled:opacity-60 cursor-pointer"
           >
-            {empresasPermitidas.length === 0 ? (
-              <option value="">Sin empresas asignadas</option>
+            {empresas.length === 0 ? (
+              <option value="">Cargando empresas...</option>
             ) : (
-              empresasPermitidas.map((emp) => {
+              empresas.map((emp) => {
                 const id = String(emp.id || emp.empresa_id)
                 const nombre = emp.razon_social || emp.nombre_comercial || emp.nombre
                 return (
@@ -409,9 +477,9 @@ export default function ActividadesABCPage() {
           <button
             type="button"
             onClick={() => setModalClonarAbierto(true)}
-            disabled={!isMounted || !empresaIdSeleccionada || empresasPermitidas.length <= 1}
+            disabled={!isMounted || !empresaIdSeleccionada || empresas.length <= 1}
             suppressHydrationWarning
-            className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-3 py-1.5 rounded-md shadow-sm text-xs md:text-sm disabled:opacity-50 flex items-center gap-1.5"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-3 py-1.5 rounded-md shadow-sm text-xs md:text-sm disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
           >
             📋 Copiar a otras
           </button>
@@ -422,27 +490,21 @@ export default function ActividadesABCPage() {
               setActividadSeleccionada(null)
               setModalFormAbierto(true)
             }}
-            disabled={!isMounted || !empresaIdSeleccionada || empresasPermitidas.length === 0}
+            disabled={!isMounted || !empresaIdSeleccionada || empresas.length === 0}
             suppressHydrationWarning
-            className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-3.5 py-1.5 rounded-md shadow-sm text-xs md:text-sm disabled:opacity-50"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-3.5 py-1.5 rounded-md shadow-sm text-xs md:text-sm disabled:opacity-50 cursor-pointer"
           >
             + Nueva Actividad
           </button>
         </div>
       </div>
 
-      {bloquearSelectores && (
-        <div className="text-xs text-amber-600 font-medium bg-amber-50 border border-amber-200 p-3 rounded-md">
-          🔒 El selector de empresa se encuentra bloqueado automáticamente por contar con una única asignación autorizada.
-        </div>
-      )}
-
       {/* Tabla */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         {cargando ? (
           <div className="p-6 text-center text-gray-500 text-sm">Cargando actividades ABC...</div>
         ) : actividades.length === 0 ? (
-          <div className="p-6 text-center text-gray-500 text-sm">No hay actividades registradas.</div>
+          <div className="p-6 text-center text-gray-500 text-sm">No hay actividades registradas para esta empresa.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs md:text-sm">
@@ -467,12 +529,12 @@ export default function ActividadesABCPage() {
                             setActividadSeleccionada(act)
                             setModalFormAbierto(true)
                           }}
-                          className="p-1 text-blue-600 hover:bg-blue-50 rounded"
+                          className="p-1 text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
                           title="Editar"
                         >
                           ✏️
                         </button>
-                        <button onClick={() => handleEliminar(act)} className="p-1 text-red-600 hover:bg-red-50 rounded" title="Eliminar">
+                        <button onClick={() => handleEliminar(act)} className="p-1 text-red-600 hover:bg-red-50 rounded cursor-pointer" title="Eliminar">
                           🗑️
                         </button>
                       </div>
@@ -490,7 +552,7 @@ export default function ActividadesABCPage() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-gray-100">
             <SubformularioActividad
-              empresas={empresasPermitidas}
+              empresas={empresas}
               empresaIdSeleccionada={empresaIdSeleccionada}
               actividadEditar={actividadSeleccionada}
               onClose={() => setModalFormAbierto(false)}
@@ -507,7 +569,7 @@ export default function ActividadesABCPage() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-gray-100">
             <ModalClonarActividades
-              empresas={empresasPermitidas}
+              empresas={empresas}
               empresaOrigenInicial={empresaIdSeleccionada}
               onClose={() => setModalClonarAbierto(false)}
               onSuccess={() => {

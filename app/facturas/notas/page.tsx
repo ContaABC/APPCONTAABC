@@ -39,6 +39,7 @@ export default function NotasEmitidasPage() {
     setIsMounted(true);
   }, []);
 
+  // Cargar empresas y detectar empresa activa de la sesión (Cookies / LocalStorage)
   useEffect(() => {
     if (!isMounted) return;
 
@@ -50,11 +51,34 @@ export default function NotasEmitidasPage() {
 
       if (!error && data && data.length > 0) {
         setEmpresas(data);
-        setEmpresaId(String(data[0].id));
+
+        // Leer la empresa activa de cookies o localStorage corporativo
+        const cookieEmpresa = document.cookie
+          .split('; ')
+          .find((row) => row.startsWith('empresa_activa='));
+        const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null;
+        const empresaGuardadaLocal = typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') : null;
+
+        const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal;
+        const existeEmpresa = data.some((emp: any) => String(emp.id) === String(empresaIdParaSeleccionar));
+
+        if (existeEmpresa && empresaIdParaSeleccionar) {
+          setEmpresaId(String(empresaIdParaSeleccionar));
+        } else {
+          setEmpresaId(String(data[0].id));
+        }
       }
     }
     cargarEmpresas();
   }, [isMounted]);
+
+  // Persistir cambios de empresaId en cookies y localStorage
+  useEffect(() => {
+    if (empresaId && typeof window !== 'undefined') {
+      localStorage.setItem('empresa_activa', String(empresaId));
+      document.cookie = `empresa_activa=${empresaId}; path=/; max-age=86400; SameSite=Lax`;
+    }
+  }, [empresaId]);
 
   useEffect(() => {
     if (!isMounted || !empresaId) return;
@@ -148,7 +172,7 @@ export default function NotasEmitidasPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
         <div>
           <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-            Empresa
+            Empresa Activa
           </label>
           <select
             value={empresaId}

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, ChangeEvent, FormEvent } from "react";
+import React, { useState, useEffect, ChangeEvent, FormEvent, useCallback } from "react";
 
 // ==========================================
 // INTERFACES Y TIPOS
@@ -9,6 +9,7 @@ interface Empresa {
   id: number | string;
   razon_social?: string;
   nombre_comercial?: string;
+  nombre?: string;
 }
 
 interface ClaseDocumento {
@@ -56,30 +57,73 @@ export default function ClaseDocumentoConceptosPage() {
     setMounted(true);
   }, []);
 
-  // 2. Cargar Empresas desde la API
+  // 2. Cargar Empresas desde la API unificada del ERP (/api/empresas/listar)
+  const cargarEmpresas = useCallback(async () => {
+    setLoadingEmpresas(true);
+    try {
+      const res = await fetch("/api/empresas/listar");
+      
+      if (!res.ok) {
+        throw new Error(`HTTP Error: ${res.status}`);
+      }
+
+      const textData = await res.text();
+      if (!textData) {
+        throw new Error("Respuesta vacía del servidor");
+      }
+
+      const data = JSON.parse(textData);
+
+      if (data.exito && Array.isArray(data.empresas)) {
+        const listaEmpresas = data.empresas;
+        setEmpresas(listaEmpresas);
+
+        if (listaEmpresas.length > 0) {
+          const empresaGuardada = 
+            (typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id') : '') ||
+            (document.cookie.match(/(^| )empresa_activa=([^;]+)/)?.[2] ?? '');
+
+          if (empresaGuardada && listaEmpresas.some((e: Empresa) => String(e.id) === String(empresaGuardada))) {
+            setSelectedEmpresaId(String(empresaGuardada));
+          } else {
+            const primeraEmpresa = String(listaEmpresas[0].id);
+            setSelectedEmpresaId(primeraEmpresa);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('empresa_activa', primeraEmpresa);
+              localStorage.setItem('empresa_id', primeraEmpresa);
+            }
+            document.cookie = `empresa_activa=${primeraEmpresa}; path=/; max-age=86400; SameSite=Lax`;
+          }
+        }
+      } else {
+        console.error("Error al obtener empresas:", data.mensaje || "Estructura no válida");
+      }
+    } catch (err) {
+      console.error("Error al cargar empresas:", err);
+    } finally {
+      setLoadingEmpresas(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!mounted) return;
-
-    const cargarEmpresas = async () => {
-      setLoadingEmpresas(true);
-      try {
-        const res = await fetch("/api/clase-documento-conceptos?empresas=true");
-        const data = await res.json();
-
-        if (res.ok && Array.isArray(data)) {
-          setEmpresas(data);
-        } else {
-          console.error("Error al obtener empresas:", data.error);
-        }
-      } catch (err) {
-        console.error("Error de red al cargar empresas:", err);
-      } finally {
-        setLoadingEmpresas(false);
-      }
-    };
-
     cargarEmpresas();
-  }, [mounted]);
+  }, [mounted, cargarEmpresas]);
+
+  // Manejador centralizado para cambio manual de empresa
+  const handleCambioEmpresa = (nuevaEmpresaId: string) => {
+    setSelectedEmpresaId(nuevaEmpresaId);
+    setSelectedClaseId("");
+    setSelectedConceptoDebitoId("");
+    setSelectedConceptoCreditoId("");
+    setSelectedConceptoIvaId("");
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('empresa_activa', nuevaEmpresaId);
+      localStorage.setItem('empresa_id', nuevaEmpresaId);
+    }
+    document.cookie = `empresa_activa=${nuevaEmpresaId}; path=/; max-age=86400; SameSite=Lax`;
+  };
 
   // 3. Cargar Clases de Documento y Conceptos Auxiliares según la empresa seleccionada
   useEffect(() => {
@@ -97,7 +141,17 @@ export default function ClaseDocumentoConceptosPage() {
       setLoadingFiltrados(true);
       try {
         const res = await fetch(`/api/clase-documento-conceptos?empresaId=${selectedEmpresaId}`);
-        const data = await res.json();
+        
+        if (!res.ok) {
+          throw new Error(`HTTP Error: ${res.status}`);
+        }
+
+        const textData = await res.text();
+        if (!textData) {
+          throw new Error("Respuesta vacía del servidor para catálogos");
+        }
+
+        const data = JSON.parse(textData);
 
         if (res.ok) {
           setClasesDocumento(data.clases || []);
@@ -108,7 +162,9 @@ export default function ClaseDocumentoConceptosPage() {
           setConceptosAuxiliares([]);
         }
       } catch (err) {
-        console.error("Error de red al cargar catálogos:", err);
+        console.error("Error al obtener catálogos de la empresa:", err);
+        setClasesDocumento([]);
+        setConceptosAuxiliares([]);
       } finally {
         setLoadingFiltrados(false);
       }
@@ -234,13 +290,7 @@ export default function ClaseDocumentoConceptosPage() {
           </label>
           <select
             value={selectedEmpresaId}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-              setSelectedEmpresaId(e.target.value);
-              setSelectedClaseId("");
-              setSelectedConceptoDebitoId("");
-              setSelectedConceptoCreditoId("");
-              setSelectedConceptoIvaId("");
-            }}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => handleCambioEmpresa(e.target.value)}
             disabled={loadingEmpresas}
             className="w-full border border-gray-300 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 cursor-pointer"
           >
@@ -249,7 +299,7 @@ export default function ClaseDocumentoConceptosPage() {
             </option>
             {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>
-                {emp.razon_social || emp.nombre_comercial}
+                {emp.razon_social || emp.nombre_comercial || emp.nombre}
               </option>
             ))}
           </select>

@@ -7,7 +7,7 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 // ==========================================
 export async function GET(req) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
     const { searchParams } = new URL(req.url)
     const accion = searchParams.get('accion')
     
@@ -104,7 +104,7 @@ export async function GET(req) {
 // ==========================================
 export async function POST(req) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
     const body = await req.json()
 
     // ==========================================
@@ -209,7 +209,6 @@ export async function POST(req) {
     // ==========================================
     // CASO 2: CREAR UN SOLO CONCEPTO NIIF
     // ==========================================
-    // Captura automática: si el body no trae empresa_id, se inyecta desde la cookie activa
     const empresa_id = body.empresa_id || cookieStore.get('empresa_activa')?.value
     const { codigo_concepto, nombre, elemento, clasificacion_balance } = body
 

@@ -23,6 +23,7 @@ interface Empresa {
   id: number | string;
   razon_social?: string;
   nombre_comercial?: string;
+  nombre?: string;
 }
 
 interface SubconceptoNiif {
@@ -146,35 +147,45 @@ export default function ConceptosAuxiliaresPage() {
     }
   }, [notificacion.visible])
 
+  // Carga centralizada de empresas unificada con el estándar del ERP (/api/empresas/listar)
   const cargarEmpresas = useCallback(async () => {
     setLoadingEmpresas(true)
     try {
-      const res = await fetch('/api/conceptos_auxiliares?accion=listar_empresas')
+      const res = await fetch('/api/empresas/listar')
       if (!res.ok) throw new Error(`HTTP Error: ${res.status}`)
 
-      const json = await res.json()
-      if (json.exito) {
-        const listaEmpresas: Empresa[] = json.datos || []
-        setEmpresas(listaEmpresas)
-        if (listaEmpresas.length > 0) {
-          // Leer la empresa activa de cookies o localStorage corporativo
-          const cookieEmpresa = document.cookie
-            .split('; ')
-            .find((row) => row.startsWith('empresa_activa='))
-          const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null
-          const empresaGuardadaLocal = localStorage.getItem('empresa_activa')
-          
-          const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal
-          const existeEmpresa = listaEmpresas.some((emp) => String(emp.id) === String(empresaIdParaSeleccionar))
+      const textData = await res.text()
+      if (!textData) throw new Error('Respuesta vacía del servidor')
 
-          if (existeEmpresa && empresaIdParaSeleccionar) {
-            setEmpresaSeleccionada(String(empresaIdParaSeleccionar))
-          } else {
-            setEmpresaSeleccionada(String(listaEmpresas[0].id))
-          }
+      const json = JSON.parse(textData)
+      const listaEmpresas: Empresa[] = json.empresas || json.datos || (Array.isArray(json) ? json : [])
+
+      if (listaEmpresas.length > 0) {
+        const empresasOrdenadas = [...listaEmpresas].sort((a, b) => {
+          const nombreA = a.razon_social || a.nombre_comercial || a.nombre || ''
+          const nombreB = b.razon_social || b.nombre_comercial || b.nombre || ''
+          return nombreA.localeCompare(nombreB, 'es', { sensitivity: 'base' })
+        })
+
+        setEmpresas(empresasOrdenadas)
+
+        // Leer la empresa activa de cookies o localStorage corporativo
+        const cookieEmpresa = document.cookie
+          .split('; ')
+          .find((row) => row.startsWith('empresa_activa='))
+        const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null
+        const empresaGuardadaLocal = localStorage.getItem('empresa_activa')
+        
+        const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal
+        const existeEmpresa = empresasOrdenadas.some((emp) => String(emp.id) === String(empresaIdParaSeleccionar))
+
+        if (existeEmpresa && empresaIdParaSeleccionar) {
+          setEmpresaSeleccionada(String(empresaIdParaSeleccionar))
+        } else {
+          setEmpresaSeleccionada(String(empresasOrdenadas[0].id))
         }
       } else {
-        mostrarNotificacion('error', json.mensaje || 'Error al obtener empresas')
+        mostrarNotificacion('error', 'No se encontraron empresas registradas')
       }
     } catch (error) {
       console.error('Error al cargar empresas:', error)
@@ -590,7 +601,7 @@ export default function ConceptosAuxiliaresPage() {
               ) : (
                 empresas.map((emp) => (
                   <option key={emp.id} value={String(emp.id)}>
-                    {emp.razon_social || emp.nombre_comercial}
+                    {emp.razon_social || emp.nombre_comercial || emp.nombre}
                   </option>
                 ))
               )}

@@ -25,7 +25,7 @@ const TIPOS_ENTIDAD_VALIDOS = [
 // ==========================================
 export async function GET(request) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- Corregido con await
     const { searchParams } = new URL(request.url)
     const accion = searchParams.get('accion')
     
@@ -37,12 +37,11 @@ export async function GET(request) {
       const { data: empresas, error } = await supabaseAdmin
         .from('empresas')
         .select('id, razon_social, nombre_comercial')
-        .eq('estado', 'Activa')
         .order('razon_social', { ascending: true })
 
       if (error) throw error
 
-      return NextResponse.json({ exito: true, datos: empresas })
+      return NextResponse.json({ exito: true, datos: empresas || [] })
     }
 
     // 2. CASO: Listar Subconceptos NIIF por empresa
@@ -62,7 +61,7 @@ export async function GET(request) {
 
       if (error) throw error
 
-      return NextResponse.json({ exito: true, datos: subconceptos })
+      return NextResponse.json({ exito: true, datos: subconceptos || [] })
     }
 
     // 3. CASO POR DEFECTO: Listar Conceptos Auxiliares
@@ -87,7 +86,7 @@ export async function GET(request) {
 
     if (error) throw error
 
-    const conceptosFormateados = conceptos.map((item) => ({
+    const conceptosFormateados = (conceptos || []).map((item) => ({
       ...item,
       codigo_niif_padre: item.subconceptos_niif?.codigo || null,
       nombre_niif_padre: item.subconceptos_niif?.nombre || null
@@ -109,7 +108,7 @@ export async function GET(request) {
 // ==========================================
 export async function POST(request) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- Corregido con await
     const body = await request.json()
 
     // Captura automática de empresa_id desde el body o la cookie activa
@@ -134,14 +133,12 @@ export async function POST(request) {
       )
     }
 
-    // Validación estricta para evitar CHECK constraint failure
     const tipoEntidadSanitizado = TIPOS_ENTIDAD_VALIDOS.includes(tipo_entidad)
       ? tipo_entidad
       : 'Auxiliar_General'
 
     const esActividadABC = tipoEntidadSanitizado === 'Actividad_ABC'
 
-    // Validación Backend: Si es Actividad ABC, exige obligatoriamente los 3 campos de inductor
     if (esActividadABC) {
       if (
         !nombre_inductor || !String(nombre_inductor).trim() ||
@@ -201,10 +198,9 @@ export async function POST(request) {
 // ==========================================
 export async function PUT(request) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- Corregido con await
     const body = await request.json()
 
-    // Captura automática de empresa_id si viene en el body o por cookie
     const empresa_id = body.empresa_id || body.empresaId || cookieStore.get('empresa_activa')?.value
 
     const {
@@ -233,7 +229,6 @@ export async function PUT(request) {
 
     const esActividadABC = tipoEntidadSanitizado === 'Actividad_ABC'
 
-    // Validación Backend: Si es Actividad ABC, exige obligatoriamente los 3 campos de inductor
     if (esActividadABC) {
       if (
         !nombre_inductor || !String(nombre_inductor).trim() ||

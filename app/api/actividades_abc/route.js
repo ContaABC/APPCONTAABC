@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 // GET: Listar actividades ABC por empresa o generar consecutivo
 export async function GET(req) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
     const { searchParams } = new URL(req.url)
     const accion = searchParams.get('accion')
     
@@ -79,7 +79,7 @@ export async function GET(req) {
 // POST: Crear actividad ABC o Clonar masivamente
 export async function POST(req) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
     const body = await req.json()
 
     // CASO 1: ACCIÓN CLONAR / COPIAR A OTRAS EMPRESAS
@@ -155,7 +155,6 @@ export async function POST(req) {
     }
 
     // CASO 2: CREAR UNA SOLA ACTIVIDAD ABC
-    // Inyección automática desde la cookie si falta en el body
     const empresa_id = body.empresa_id || cookieStore.get('empresa_activa')?.value
     const { codigo, nombre, descripcion } = body
 

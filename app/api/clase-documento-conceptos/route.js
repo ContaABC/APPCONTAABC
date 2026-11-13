@@ -13,15 +13,15 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
 })
 
 export async function GET(request) {
-  const cookieStore = cookies()
-  const { searchParams } = new URL(request.url)
-  
-  // Captura automática de empresaId: si no viene en la URL, se lee de la cookie activa
-  const empresaId = searchParams.get('empresaId') || cookieStore.get('empresa_activa')?.value
-  const claseDocumentoId = searchParams.get('claseDocumentoId')
-  const fetchEmpresas = searchParams.get('empresas')
-
   try {
+    const cookieStore = await cookies() // <-- ¡AWAIT OBLIGATORIO AQUÍ!
+    const { searchParams } = new URL(request.url)
+    
+    // Captura automática de empresaId: si no viene en la URL, se lee de la cookie activa
+    const empresaId = searchParams.get('empresaId') || cookieStore.get('empresa_activa')?.value
+    const claseDocumentoId = searchParams.get('claseDocumentoId')
+    const fetchEmpresas = searchParams.get('empresas')
+
     // 1. Obtener listado de empresas
     if (fetchEmpresas === 'true') {
       const { data, error } = await supabaseAdmin
@@ -34,7 +34,7 @@ export async function GET(request) {
         return NextResponse.json({ error: error.message }, { status: 500 })
       }
 
-      return NextResponse.json(data)
+      return NextResponse.json(data || [])
     }
 
     // 2. Obtener los conceptos Débito, Crédito e IVA asignados a una clase de documento específica
@@ -77,8 +77,8 @@ export async function GET(request) {
       if (conceptosRes.error) throw conceptosRes.error
 
       return NextResponse.json({
-        clases: clasesRes.data,
-        conceptos: conceptosRes.data,
+        clases: clasesRes.data || [],
+        conceptos: conceptosRes.data || [],
       })
     }
 
@@ -91,7 +91,7 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- ¡AWAIT OBLIGATORIO AQUÍ!
     const body = await request.json()
     let { empresaId, claseDocumentoId, conceptoDebitoId, conceptoCreditoId, conceptoIvaId } = body
 
@@ -105,7 +105,6 @@ export async function POST(request) {
       )
     }
 
-    // Validación correcta usando las variables del servidor
     if (conceptoDebitoId === conceptoCreditoId) {
       return NextResponse.json(
         { error: 'El concepto Débito y el concepto Crédito no pueden ser el mismo.' },
@@ -113,7 +112,6 @@ export async function POST(request) {
       )
     }
 
-    // Consultar si ya existe una parametrización registrada para esa clase de documento
     const { data: existente, error: errFetch } = await supabaseAdmin
       .from('clase_documento_conceptos')
       .select('id')
@@ -125,7 +123,6 @@ export async function POST(request) {
     let resultado
 
     if (existente?.id) {
-      // Actualizar registro existente (incluyendo el IVA)
       const { data, error } = await supabaseAdmin
         .from('clase_documento_conceptos')
         .update({
@@ -139,7 +136,6 @@ export async function POST(request) {
       if (error) throw error
       resultado = data
     } else {
-      // Insertar nuevo registro de parametrización (incluyendo el IVA)
       const payload = {
         clase_documento_id: claseDocumentoId,
         concepto_auxiliar_debito: conceptoDebitoId,

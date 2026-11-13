@@ -33,7 +33,7 @@ const TIPOS_AUXILIAR_VALIDOS = [
 // ==========================================
 export async function GET(request) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
     const { searchParams } = new URL(request.url)
     const accion = searchParams.get('accion')
     
@@ -51,7 +51,7 @@ export async function GET(request) {
 
       if (error) throw error
 
-      return NextResponse.json({ exito: true, datos: empresas })
+      return NextResponse.json({ exito: true, datos: empresas || [] })
     }
 
     // 2. Listar Subconceptos NIIF por empresa
@@ -83,7 +83,7 @@ export async function GET(request) {
 
       if (error) throw error
 
-      return NextResponse.json({ exito: true, datos: subconceptos })
+      return NextResponse.json({ exito: true, datos: subconceptos || [] })
     }
 
     // 3. Generar nuevo Código Auxiliar autogenerado secuencial
@@ -154,7 +154,7 @@ export async function GET(request) {
 
     if (error) throw error
 
-    const conceptosFormateados = conceptos.map((item) => ({
+    const conceptosFormateados = (conceptos || []).map((item) => ({
       ...item,
       codigo_subconcepto_niif: item.subconceptos_niif?.codigo || null,
       nombre_subconcepto_niif: item.subconceptos_niif?.nombre || null,
@@ -179,7 +179,7 @@ export async function GET(request) {
 // ==========================================
 export async function POST(request) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
     const body = await request.json()
 
     // Captura automática de empresa_id: desde el body o la cookie de sesión activa
@@ -311,7 +311,7 @@ export async function POST(request) {
 // ==========================================
 export async function PUT(request) {
   try {
-    const cookieStore = cookies()
+    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
     const body = await request.json()
 
     // Captura automática opcional de empresa_id si viene en el body o cookie

@@ -103,17 +103,41 @@ export default function ConsultarFacturasPage() {
   const [asiento, setAsiento] = useState<AsientoData | null>(null);
   const [loadingAsiento, setLoadingAsiento] = useState<boolean>(false);
 
-  // 1. Cargar Empresas al montar
+  // 1. Cargar Empresas al montar y detectar la empresa activa de sesión (Cookies / LocalStorage)
   useEffect(() => {
     async function cargarEmpresas() {
       const res = await obtenerEmpresas();
       if (res.success && res.data.length > 0) {
-        setEmpresas(res.data);
-        setEmpresaId(String(res.data[0].id));
+        const listaEmpresas = res.data;
+        setEmpresas(listaEmpresas);
+
+        // Leer la empresa activa de cookies o localStorage corporativo
+        const cookieEmpresa = document.cookie
+          .split('; ')
+          .find((row) => row.startsWith('empresa_activa='));
+        const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null;
+        const empresaGuardadaLocal = typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') : null;
+
+        const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal;
+        const existeEmpresa = listaEmpresas.some((emp: Empresa) => String(emp.id) === String(empresaIdParaSeleccionar));
+
+        if (existeEmpresa && empresaIdParaSeleccionar) {
+          setEmpresaId(String(empresaIdParaSeleccionar));
+        } else {
+          setEmpresaId(String(listaEmpresas[0].id));
+        }
       }
     }
     cargarEmpresas();
   }, []);
+
+  // Persistir cambios de empresaId en cookies y localStorage
+  useEffect(() => {
+    if (empresaId && typeof window !== 'undefined') {
+      localStorage.setItem('empresa_activa', String(empresaId));
+      document.cookie = `empresa_activa=${empresaId}; path=/; max-age=86400; SameSite=Lax`;
+    }
+  }, [empresaId]);
 
   // 2. Cargar Sucursales cuando cambia Empresa
   useEffect(() => {
@@ -337,26 +361,27 @@ export default function ConsultarFacturasPage() {
   };
 
   return (
-    <div className="p-2 max-w-[99%] mx-auto space-y-1.5 text-[11px]">
+    <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-5 text-sm bg-slate-50/50 min-h-screen">
       {/* Encabezado */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-1 border-b border-slate-200 pb-1">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
         <div>
-          <h1 className="text-xs font-bold text-slate-800 tracking-tight">Facturas Recibidas — Vista de Tarjetas Plegables</h1>
+          <h1 className="text-xl font-bold text-slate-800 tracking-tight">Facturas Recibidas — Vista de Tarjetas Plegables</h1>
+          <p className="text-xs md:text-sm text-slate-500 mt-0.5">Gestión y control de facturas de proveedores por empresa y sucursal.</p>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           {facturas.length > 0 && (
             <>
               <button
                 type="button"
                 onClick={() => expandirTodo(true)}
-                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-medium rounded cursor-pointer"
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs md:text-sm transition cursor-pointer"
               >
                 📂 Expandir Todo
               </button>
               <button
                 type="button"
                 onClick={() => expandirTodo(false)}
-                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-medium rounded cursor-pointer"
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs md:text-sm transition cursor-pointer"
               >
                 📁 Contraer Todo
               </button>
@@ -367,7 +392,7 @@ export default function ConsultarFacturasPage() {
               type="button"
               onClick={cargarFacturas}
               disabled={loading}
-              className="px-2.5 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-medium rounded shadow-2xs transition cursor-pointer"
+              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-xs md:text-sm shadow-md transition cursor-pointer disabled:opacity-50"
             >
               {loading ? "Cargando..." : "📥 Cargar Facturas"}
             </button>
@@ -376,7 +401,7 @@ export default function ConsultarFacturasPage() {
               type="button"
               onClick={exportarAExcel}
               disabled={facturasFiltradas.length === 0}
-              className="px-2.5 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-medium rounded shadow-2xs transition flex items-center gap-1 cursor-pointer"
+              className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs md:text-sm shadow-md transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
             >
               📊 Exportar Excel
             </button>
@@ -385,7 +410,7 @@ export default function ConsultarFacturasPage() {
             type="button"
             onClick={cargarFacturas}
             disabled={loading}
-            className="px-2 py-0.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-[10px] font-medium rounded transition cursor-pointer"
+            className="px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-xs md:text-sm transition cursor-pointer shadow-sm"
           >
             🔄 Recargar
           </button>
@@ -393,13 +418,13 @@ export default function ConsultarFacturasPage() {
       </div>
 
       {/* Selectores Contextuales */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 bg-slate-50 p-1.5 rounded border border-slate-200">
-        <div className="flex items-center gap-2">
-          <label className="text-[9px] font-bold text-slate-500 uppercase whitespace-nowrap">Empresa:</label>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white p-4.5 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Empresa Activa:</label>
           <select
             value={empresaId}
             onChange={(e) => setEmpresaId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-0.5 text-[11px] text-slate-800 font-medium outline-none focus:ring-1 focus:ring-indigo-500 h-6"
+            className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-semibold outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition cursor-pointer"
           >
             {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>
@@ -409,12 +434,12 @@ export default function ConsultarFacturasPage() {
           </select>
         </div>
 
-        <div className="flex items-center gap-2">
-          <label className="text-[9px] font-bold text-slate-500 uppercase whitespace-nowrap">Sucursal:</label>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Sucursal:</label>
           <select
             value={sucursalId}
             onChange={(e) => setSucursalId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-0.5 text-[11px] text-slate-800 font-medium outline-none focus:ring-1 focus:ring-indigo-500 h-6"
+            className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-semibold outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition cursor-pointer"
           >
             <option value="">Todas las sucursales</option>
             {sucursales.map((suc) => (
@@ -427,25 +452,25 @@ export default function ConsultarFacturasPage() {
       </div>
 
       {/* Búsqueda, Filtro y Subtotales */}
-      <div className="flex flex-col lg:flex-row items-center gap-2 bg-white p-1 rounded border border-slate-200 shadow-2xs">
-        <div className="flex items-center gap-1.5 w-full flex-1 px-1">
-          <span className="text-slate-400 text-xs">🔍</span>
+      <div className="flex flex-col lg:flex-row items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="flex items-center gap-3 w-full flex-1 px-3.5 bg-slate-50 border border-slate-200 rounded-xl py-2">
+          <span className="text-slate-400 text-base">🔍</span>
           <input
             type="text"
             placeholder="Buscar por Proveedor, NIT, N° Factura..."
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            className="w-full text-[11px] outline-none bg-transparent text-slate-700 h-5"
+            className="w-full text-sm outline-none bg-transparent text-slate-800 placeholder:text-slate-400 font-medium"
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto border-t lg:border-t-0 pt-1 lg:pt-0 border-slate-100">
-          <div className="flex items-center gap-1">
-            <span className="text-[9px] font-bold text-slate-500 uppercase">Estado:</span>
+        <div className="flex flex-wrap items-center gap-4 w-full lg:w-auto">
+          <div className="flex items-center gap-2.5 bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-xl">
+            <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Estado:</span>
             <select
               value={estadoPago}
               onChange={(e) => setEstadoPago(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 text-[10px] text-slate-700 font-medium outline-none h-6"
+              className="bg-transparent text-sm text-slate-800 font-semibold outline-none cursor-pointer"
             >
               <option value="todos">Todos</option>
               <option value="pendiente">Pendiente por Pagar</option>
@@ -454,41 +479,41 @@ export default function ConsultarFacturasPage() {
             </select>
           </div>
 
-          <label className="flex items-center gap-1 text-[10px] font-medium text-slate-700 cursor-pointer select-none bg-slate-50 hover:bg-slate-100 px-2 py-0.5 rounded border border-slate-200 transition h-6">
+          <label className="flex items-center gap-2.5 text-xs md:text-sm font-semibold text-slate-700 cursor-pointer select-none bg-slate-50 hover:bg-slate-100 px-4 py-2.5 rounded-xl border border-slate-200 transition">
             <input
               type="checkbox"
               checked={mostrarSubtotales}
               onChange={(e) => setMostrarSubtotales(e.target.checked)}
-              className="rounded text-indigo-600 focus:ring-indigo-500 h-3 w-3"
+              className="rounded text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
             />
-            <span>Subtotales</span>
+            <span>Ver Subtotales</span>
           </label>
         </div>
       </div>
 
       {errorMsg && (
-        <div className="p-2 bg-red-50 border border-red-200 text-red-700 rounded text-[10px]">
+        <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium">
           {errorMsg}
         </div>
       )}
 
       {/* Contenedor de Tarjetas / Acordeones por Proveedor */}
-      <div className="space-y-1.5 max-h-[73vh] overflow-y-auto pr-1">
+      <div className="space-y-4 max-h-[62vh] overflow-y-auto pr-1">
         {loading ? (
-          <div className="p-8 text-center text-slate-500 text-[11px]">Cargando facturas...</div>
+          <div className="p-16 text-center text-slate-500 text-base font-medium bg-white rounded-2xl border border-slate-200 shadow-sm">Cargando facturas...</div>
         ) : facturas.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 text-[11px] space-y-1">
-            <p>Haz clic en el botón de carga para listar las facturas.</p>
+          <div className="p-16 text-center text-slate-500 text-sm md:text-base bg-white rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <p className="font-medium text-slate-600">Haz clic en el botón de carga para listar las facturas de la empresa activa.</p>
             <button
               type="button"
               onClick={cargarFacturas}
-              className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded text-[10px] cursor-pointer"
+              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm cursor-pointer shadow-md transition"
             >
               Cargar Facturas Ahora
             </button>
           </div>
         ) : gruposPorProveedor.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 text-[11px]">
+          <div className="p-16 text-center text-slate-500 text-sm bg-white rounded-2xl border border-slate-200 shadow-sm">
             No se encontraron facturas con los filtros aplicados.
           </div>
         ) : (
@@ -496,47 +521,47 @@ export default function ConsultarFacturasPage() {
             const isExpanded = !!proveedoresExpandidos[grupo.proveedor];
 
             return (
-              <div key={grupo.proveedor} className="border border-slate-200 rounded bg-white shadow-2xs overflow-hidden">
+              <div key={grupo.proveedor} className="border border-slate-200 rounded-2xl bg-white shadow-sm overflow-hidden">
                 {/* Cabecera Tarjeta / Acordeón */}
                 <div
                   onClick={() => toggleProveedor(grupo.proveedor)}
-                  className="bg-slate-100 hover:bg-slate-100/80 px-2.5 py-1.5 flex items-center justify-between cursor-pointer select-none transition border-b border-slate-200"
+                  className="bg-slate-100 hover:bg-slate-100/80 px-5 py-3.5 flex items-center justify-between cursor-pointer select-none transition border-b border-slate-200"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-500 font-bold text-[10px]">{isExpanded ? "▼" : "▶"}</span>
-                    <span className="font-bold text-slate-900 text-[11px]">
+                  <div className="flex items-center gap-3">
+                    <span className="text-slate-500 font-bold text-sm">{isExpanded ? "▼" : "▶"}</span>
+                    <span className="font-bold text-slate-900 text-sm md:text-base">
                       🏢 {grupo.proveedor}
                     </span>
                     {grupo.nit && (
-                      <span className="text-slate-500 text-[10px]">({grupo.nit})</span>
+                      <span className="text-slate-500 text-xs md:text-sm font-mono">({grupo.nit})</span>
                     )}
-                    <span className="ml-1 px-1.5 py-0.1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full text-[9px] font-semibold">
+                    <span className="ml-2 px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full text-xs font-bold">
                       {grupo.items.length} {grupo.items.length === 1 ? "factura" : "facturas"}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-3 font-mono text-[10px]">
-                    <span className="text-slate-500">Subtotal: <strong className="text-slate-800">${grupo.subtotalBase.toLocaleString("es-CO")}</strong></span>
-                    <span className="text-slate-500">Total: <strong className="text-emerald-700 font-bold">${grupo.subtotalTotal.toLocaleString("es-CO")}</strong></span>
+                  <div className="flex items-center gap-5 font-mono text-xs md:text-sm">
+                    <span className="text-slate-500 hidden sm:inline">Subtotal: <strong className="text-slate-800">${grupo.subtotalBase.toLocaleString("es-CO")}</strong></span>
+                    <span className="text-slate-600">Total: <strong className="text-emerald-700 font-bold text-base">${grupo.subtotalTotal.toLocaleString("es-CO")}</strong></span>
                   </div>
                 </div>
 
                 {/* Contenido / Tabla interna colapsable */}
                 {isExpanded && (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left text-[10px] text-slate-700 border-collapse whitespace-nowrap">
-                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[9px]">
+                    <table className="w-full text-left text-xs md:text-sm text-slate-700 border-collapse whitespace-nowrap">
+                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-xs">
                         <tr>
-                          <th className="py-1 px-3">N° Factura</th>
-                          <th className="py-1 px-3">Emisión</th>
-                          <th className="py-1 px-3 text-right">Subtotal</th>
-                          <th className="py-1 px-3 text-right">IVA</th>
-                          <th className="py-1 px-3 text-right">Ret. Renta</th>
-                          <th className="py-1 px-3 text-right">Ret. IVA</th>
-                          <th className="py-1 px-3 text-right">Ret. ICA</th>
-                          <th className="py-1 px-3 text-right">Total</th>
-                          <th className="py-1 px-3 text-center">Estado</th>
-                          <th className="py-1 px-3 text-center">Acción</th>
+                          <th className="py-3.5 px-5">N° Factura</th>
+                          <th className="py-3.5 px-5">Emisión</th>
+                          <th className="py-3.5 px-5 text-right">Subtotal</th>
+                          <th className="py-3.5 px-5 text-right">IVA</th>
+                          <th className="py-3.5 px-5 text-right">Ret. Renta</th>
+                          <th className="py-3.5 px-5 text-right">Ret. IVA</th>
+                          <th className="py-3.5 px-5 text-right">Ret. ICA</th>
+                          <th className="py-3.5 px-5 text-right">Total</th>
+                          <th className="py-3.5 px-5 text-center">Estado</th>
+                          <th className="py-3.5 px-5 text-center">Acción</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -547,23 +572,23 @@ export default function ConsultarFacturasPage() {
 
                           return (
                             <tr key={f.id} className="hover:bg-slate-50/80 transition">
-                              <td className="py-1 px-3 font-mono font-semibold text-slate-800">{f.numero_factura}</td>
-                              <td className="py-1 px-3 font-mono text-slate-500">{f.fecha_emision}</td>
-                              <td className="py-1 px-3 text-right font-mono text-slate-700">${Number(f.subtotal || 0).toLocaleString("es-CO")}</td>
-                              <td className="py-1 px-3 text-right font-mono text-slate-700">${Number(f.impuestos || 0).toLocaleString("es-CO")}</td>
-                              <td className={`py-1 px-3 text-right font-mono ${rentaVal > 0 ? "text-slate-700" : "text-slate-300"}`}>
+                              <td className="py-3.5 px-5 font-mono font-semibold text-slate-900">{f.numero_factura}</td>
+                              <td className="py-3.5 px-5 font-mono text-slate-500">{f.fecha_emision}</td>
+                              <td className="py-3.5 px-5 text-right font-mono text-slate-800">${Number(f.subtotal || 0).toLocaleString("es-CO")}</td>
+                              <td className="py-3.5 px-5 text-right font-mono text-slate-800">${Number(f.impuestos || 0).toLocaleString("es-CO")}</td>
+                              <td className={`py-3.5 px-5 text-right font-mono ${rentaVal > 0 ? "text-slate-800" : "text-slate-300"}`}>
                                 ${rentaVal.toLocaleString("es-CO")}
                               </td>
-                              <td className={`py-1 px-3 text-right font-mono ${ivaRetVal > 0 ? "text-slate-700" : "text-slate-300"}`}>
+                              <td className={`py-3.5 px-5 text-right font-mono ${ivaRetVal > 0 ? "text-slate-800" : "text-slate-300"}`}>
                                 ${ivaRetVal.toLocaleString("es-CO")}
                               </td>
-                              <td className={`py-1 px-3 text-right font-mono ${icaVal > 0 ? "text-slate-700" : "text-slate-300"}`}>
+                              <td className={`py-3.5 px-5 text-right font-mono ${icaVal > 0 ? "text-slate-800" : "text-slate-300"}`}>
                                 ${icaVal.toLocaleString("es-CO")}
                               </td>
-                              <td className="py-1 px-3 text-right font-mono font-medium text-slate-900">${Number(f.total_factura || 0).toLocaleString("es-CO")}</td>
-                              <td className="py-1 px-3 text-center">
+                              <td className="py-3.5 px-5 text-right font-mono font-bold text-slate-900">${Number(f.total_factura || 0).toLocaleString("es-CO")}</td>
+                              <td className="py-3.5 px-5 text-center">
                                 <span
-                                  className={`px-1.5 py-0.2 text-[8px] font-semibold rounded border ${
+                                  className={`px-2.5 py-1 text-xs font-semibold rounded-full border ${
                                     (f.estado_pago || "").toLowerCase().includes("pagado") || (f.estado_pago || "").toLowerCase() === "pagada"
                                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                                       : (f.estado_pago || "").toLowerCase().includes("parcial")
@@ -574,11 +599,11 @@ export default function ConsultarFacturasPage() {
                                   {(f.estado_pago || "Pendiente").toUpperCase()}
                                 </span>
                               </td>
-                              <td className="py-1 px-3 text-center">
+                              <td className="py-3.5 px-5 text-center">
                                 <button
                                   type="button"
                                   onClick={() => abrirAsiento(f)}
-                                  className="px-1.5 py-0.2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded text-[9px] transition border border-slate-300 cursor-pointer"
+                                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded-xl text-xs transition border border-slate-300 cursor-pointer shadow-2xs"
                                 >
                                   📖 Asiento
                                 </button>
@@ -596,18 +621,18 @@ export default function ConsultarFacturasPage() {
         )}
       </div>
 
-      {/* Barra Inferior Fija Ultra Compacta */}
+      {/* Barra Inferior Fija */}
       {gruposPorProveedor.length > 0 && (
-        <div className="bg-slate-900 text-white px-3 py-1.5 rounded flex flex-wrap items-center justify-between gap-2 shadow-md">
-          <span className="uppercase tracking-wider text-[9px] font-bold text-slate-400">Total General:</span>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px]">
-            <span>Base: <strong className="text-slate-200">${totalesGenerales.base.toLocaleString("es-CO")}</strong></span>
-            <span>IVA: <strong className="text-slate-200">${totalesGenerales.iva.toLocaleString("es-CO")}</strong></span>
-            <span>Renta: <strong className="text-slate-300">${totalesGenerales.renta.toLocaleString("es-CO")}</strong></span>
-            <span>Ret.IVA: <strong className="text-slate-300">${totalesGenerales.ivaRet.toLocaleString("es-CO")}</strong></span>
-            <span>ICA: <strong className="text-slate-300">${totalesGenerales.ica.toLocaleString("es-CO")}</strong></span>
-            <span className="bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
-              Total: <strong className="text-emerald-400 text-xs">${totalesGenerales.total.toLocaleString("es-CO")}</strong>
+        <div className="bg-slate-900 text-white px-5 py-4 rounded-2xl flex flex-wrap items-center justify-between gap-4 shadow-xl">
+          <span className="uppercase tracking-wider text-xs md:text-sm font-bold text-slate-300">Total General:</span>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-xs md:text-sm">
+            <span>Base: <strong className="text-slate-100">${totalesGenerales.base.toLocaleString("es-CO")}</strong></span>
+            <span>IVA: <strong className="text-slate-100">${totalesGenerales.iva.toLocaleString("es-CO")}</strong></span>
+            <span>Renta: <strong className="text-slate-200">${totalesGenerales.renta.toLocaleString("es-CO")}</strong></span>
+            <span>Ret.IVA: <strong className="text-slate-200">${totalesGenerales.ivaRet.toLocaleString("es-CO")}</strong></span>
+            <span>ICA: <strong className="text-slate-200">${totalesGenerales.ica.toLocaleString("es-CO")}</strong></span>
+            <span className="bg-slate-800 px-4 py-1.5 rounded-xl border border-slate-700 shadow-inner">
+              Total: <strong className="text-emerald-400 text-base">${totalesGenerales.total.toLocaleString("es-CO")}</strong>
             </span>
           </div>
         </div>
@@ -615,51 +640,51 @@ export default function ConsultarFacturasPage() {
 
       {/* Modal de Asiento Contable */}
       {facturaSeleccionada && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-2 z-50">
-          <div className="bg-white border border-slate-200 rounded shadow-xl max-w-md w-full p-3 space-y-2 text-[11px]">
-            <div className="flex items-center justify-between border-b pb-1">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-xl w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
-                <h3 className="font-bold text-slate-800 text-xs">
+                <h3 className="font-bold text-slate-900 text-base md:text-lg">
                   Asiento Contable — Factura N° {facturaSeleccionada.numero_factura}
                 </h3>
-                <p className="text-[9px] text-slate-500">
+                <p className="text-xs md:text-sm text-slate-500 mt-0.5">
                   Proveedor: {facturaSeleccionada.tercero_nombre} (NIT: {facturaSeleccionada.tercero_nit})
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setFacturaSeleccionada(null)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 text-lg font-bold cursor-pointer p-1"
               >
                 ✕
               </button>
             </div>
 
             {loadingAsiento ? (
-              <div className="py-6 text-center text-slate-500 text-[10px]">Cargando partida doble...</div>
+              <div className="py-10 text-center text-slate-500 text-sm font-medium">Cargando partida doble...</div>
             ) : asiento ? (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2 rounded border border-slate-200 text-[10px]">
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs md:text-sm">
                   <div>
-                    <span className="text-slate-400 block text-[8px]">Documento Interno:</span>
-                    <strong className="text-indigo-600">{asiento.transaccion.numero_documento}</strong>
+                    <span className="text-slate-400 block text-[11px] uppercase font-semibold">Documento Interno:</span>
+                    <strong className="text-indigo-600 text-sm">{asiento.transaccion.numero_documento}</strong>
                   </div>
                   <div>
-                    <span className="text-slate-400 block text-[8px]">Fecha Contable:</span>
-                    <strong className="text-slate-700">{asiento.transaccion.fecha_contable || asiento.transaccion.fecha_emision}</strong>
+                    <span className="text-slate-400 block text-[11px] uppercase font-semibold">Fecha Contable:</span>
+                    <strong className="text-slate-800 text-sm">{asiento.transaccion.fecha_contable || asiento.transaccion.fecha_emision}</strong>
                   </div>
                   <div className="col-span-2">
-                    <span className="text-slate-400 block text-[8px]">Glosa / Concepto:</span>
-                    <span className="text-slate-700 italic">{asiento.transaccion.glosa_concepto}</span>
+                    <span className="text-slate-400 block text-[11px] uppercase font-semibold">Glosa / Concepto:</span>
+                    <span className="text-slate-800 italic">{asiento.transaccion.glosa_concepto}</span>
                   </div>
                 </div>
 
-                <table className="w-full text-left text-[10px] border-collapse border border-slate-200">
-                  <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200">
+                <table className="w-full text-left text-xs md:text-sm border-collapse border border-slate-200 rounded-xl overflow-hidden">
+                  <thead className="bg-slate-100 text-slate-800 font-bold border-b border-slate-200">
                     <tr>
-                      <th className="p-1 border-r border-slate-200">Cuenta Auxiliar</th>
-                      <th className="p-1 text-right border-r border-slate-200 w-20">Débito</th>
-                      <th className="p-1 text-right w-20">Crédito</th>
+                      <th className="p-3 border-r border-slate-200">Cuenta Auxiliar</th>
+                      <th className="p-3 text-right border-r border-slate-200 w-32">Débito</th>
+                      <th className="p-3 text-right w-32">Crédito</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
@@ -670,16 +695,16 @@ export default function ConsultarFacturasPage() {
 
                       return (
                         <tr key={d.id}>
-                          <td className="p-1 border-r border-slate-200">
-                            <span className="font-mono text-slate-500 mr-1">
+                          <td className="p-3 border-r border-slate-200">
+                            <span className="font-mono text-slate-600 font-semibold mr-2">
                               {conceptoAux?.codigo_auxiliar || `#${d.concepto_auxiliar_id}`}
                             </span>
-                            <span className="font-medium text-slate-800">
+                            <span className="font-medium text-slate-900">
                               {conceptoAux?.nombre || "Concepto Auxiliar"}
                             </span>
                           </td>
-                          <td className="p-1 text-right font-mono border-r border-slate-200">{d.debito > 0 ? `$${d.debito.toLocaleString("es-CO")}` : "-"}</td>
-                          <td className="p-1 text-right font-mono">{d.credito > 0 ? `$${d.credito.toLocaleString("es-CO")}` : "-"}</td>
+                          <td className="p-3 text-right font-mono border-r border-slate-200 font-medium">{d.debito > 0 ? `$${d.debito.toLocaleString("es-CO")}` : "-"}</td>
+                          <td className="p-3 text-right font-mono font-medium">{d.credito > 0 ? `$${d.credito.toLocaleString("es-CO")}` : "-"}</td>
                         </tr>
                       );
                     })}
@@ -687,14 +712,14 @@ export default function ConsultarFacturasPage() {
                 </table>
               </div>
             ) : (
-              <div className="py-4 text-center text-slate-400 text-[10px]">No se encontró asiento contable.</div>
+              <div className="py-8 text-center text-slate-400 text-sm">No se encontró asiento contable.</div>
             )}
 
-            <div className="flex justify-end pt-1">
+            <div className="flex justify-end pt-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setFacturaSeleccionada(null)}
-                className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] font-medium hover:bg-slate-700 cursor-pointer"
+                className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-xs md:text-sm font-semibold hover:bg-slate-800 cursor-pointer shadow-md transition"
               >
                 Cerrar
               </button>

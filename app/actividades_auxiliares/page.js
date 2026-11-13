@@ -22,17 +22,20 @@ import {
 export default function ActividadesAuxiliaresPage() {
   const [isMounted, setIsMounted] = useState(false)
 
-  // Consumimos el contexto global de empresas, sucursales y bloqueos automáticos
+  // Consumimos el contexto global
   const {
-    empresasPermitidas,
     empresaActiva,
     setEmpresaActiva,
     bloquearSelectores,
     cargandoContexto
   } = useEmpresaContext()
 
-  // Estados principales
+  // Estados locales para manejo unificado de empresas
+  const [empresas, setEmpresas] = useState([])
+  const [loadingEmpresas, setLoadingEmpresas] = useState(false)
   const [empresaSeleccionada, setEmpresaSeleccionada] = useState('')
+
+  // Estados principales de datos
   const [actividades, setActividades] = useState([])
   const [actividadesAbc, setActividadesAbc] = useState([])
 
@@ -56,7 +59,7 @@ export default function ActividadesAuxiliaresPage() {
     mensaje: ''
   })
 
-  // Formulario (incluye estado)
+  // Formulario
   const [formData, setFormData] = useState({
     actividad_padre_id: '',
     codigo: '',
@@ -85,22 +88,64 @@ export default function ActividadesAuxiliaresPage() {
     }
   }, [notificacion.visible])
 
-  // Sincronizar la empresa activa del contexto con la local de la página
-  useEffect(() => {
-    if (empresaActiva) {
-      setEmpresaSeleccionada(empresaActiva)
-    } else if (empresasPermitidas.length > 0 && !empresaSeleccionada) {
-      const primerId = String(empresasPermitidas[0].id || empresasPermitidas[0].empresa_id)
-      setEmpresaSeleccionada(primerId)
+  // Cargar empresas de forma centralizada y unificada desde el endpoint seguro
+  const cargarEmpresas = useCallback(async () => {
+    setLoadingEmpresas(true)
+    try {
+      const res = await fetch('/api/empresas/listar')
+      const json = await res.json()
+
+      if (json.exito) {
+        const listaEmpresas = json.empresas || []
+        setEmpresas(listaEmpresas)
+
+        if (listaEmpresas.length > 0) {
+          // 1. Obtener cookie o localStorage de la empresa activa
+          const empresaGuardada = 
+            (typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id') : '') ||
+            (document.cookie.match(/(^| )empresa_activa=([^;]+)/)?.[2] ?? '') ||
+            (empresaActiva ? String(empresaActiva) : '')
+
+          // 2. Seleccionar la empresa guardada si existe en la lista permitida
+          if (empresaGuardada && listaEmpresas.some((e) => String(e.id) === String(empresaGuardada))) {
+            setEmpresaSeleccionada(String(empresaGuardada))
+          } else {
+            // 3. Caso contrario, tomar la primera disponible
+            const primeraEmpresa = String(listaEmpresas[0].id)
+            setEmpresaSeleccionada(primeraEmpresa)
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('empresa_activa', primeraEmpresa)
+              localStorage.setItem('empresa_id', primeraEmpresa)
+            }
+            document.cookie = `empresa_activa=${primeraEmpresa}; path=/; max-age=86400; SameSite=Lax`
+          }
+        }
+      } else {
+        mostrarNotificacion('error', json.mensaje || 'Error al obtener empresas')
+      }
+    } catch (error) {
+      console.error('Error al cargar empresas:', error)
+      mostrarNotificacion('error', 'Error de red al cargar empresas')
+    } finally {
+      setLoadingEmpresas(false)
     }
-  }, [empresaActiva, empresasPermitidas])
+  }, [empresaActiva, mostrarNotificacion])
+
+  useEffect(() => {
+    cargarEmpresas()
+  }, [cargarEmpresas])
 
   const handleCambioEmpresa = (nuevaEmpresaId) => {
     setEmpresaSeleccionada(nuevaEmpresaId)
-    setEmpresaActiva(nuevaEmpresaId) // Actualiza el contexto global y la cookie de sesión
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('empresa_activa', nuevaEmpresaId)
+      localStorage.setItem('empresa_id', nuevaEmpresaId)
+    }
+    document.cookie = `empresa_activa=${nuevaEmpresaId}; path=/; max-age=86400; SameSite=Lax`
+    if (setEmpresaActiva) setEmpresaActiva(nuevaEmpresaId)
   }
 
-  // Cargar Actividades Auxiliares y Actividades ABC de la empresa
+  // Cargar Actividades Auxiliares y Actividades ABC de la empresa seleccionada
   const cargarDatosEmpresa = useCallback(async (empId) => {
     if (!empId) return
     setLoadingTabla(true)
@@ -177,7 +222,6 @@ export default function ActividadesAuxiliaresPage() {
     setErroresForm((prev) => ({ ...prev, codigo: null }))
   }
 
-  // Cambiar estado directamente desde la tabla con un clic
   const handleToggleEstado = async (item) => {
     const nuevoEstado = !(item.estado !== false)
     try {
@@ -379,15 +423,17 @@ export default function ActividadesAuxiliaresPage() {
             <select
               value={empresaSeleccionada}
               onChange={(e) => handleCambioEmpresa(e.target.value)}
-              disabled={bloquearSelectores || empresasPermitidas.length === 0}
+              disabled={loadingEmpresas || empresas.length === 0}
               className="bg-transparent text-sm font-semibold text-slate-700 outline-none cursor-pointer pr-2 disabled:opacity-60"
             >
-              {empresasPermitidas.length === 0 ? (
+              {loadingEmpresas ? (
+                <option value="">Cargando empresas...</option>
+              ) : empresas.length === 0 ? (
                 <option value="">Sin empresas asignadas</option>
               ) : (
-                empresasPermitidas.map((emp) => {
-                  const id = String(emp.id || emp.empresa_id)
-                  const nombre = emp.razon_social || emp.nombre_comercial || emp.nombre
+                empresas.map((emp) => {
+                  const id = String(emp.id)
+                  const nombre = emp.razon_social || emp.nombre_comercial
                   return (
                     <option key={id} value={id}>
                       {nombre}
@@ -410,7 +456,7 @@ export default function ActividadesAuxiliaresPage() {
 
           <button
             onClick={abrirModalCrear}
-            disabled={!empresaSeleccionada || empresasPermitidas.length === 0}
+            disabled={!empresaSeleccionada || empresas.length === 0}
             className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition"
           >
             <Plus className="w-4 h-4" />

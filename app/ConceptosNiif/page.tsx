@@ -234,6 +234,7 @@ function ModalClonarConceptos({ empresas, empresaOrigenInicial, onClose, onSucce
           <span className="text-[11px] text-gray-400 mt-1 block">
             Seleccionadas: {empresasDestinoIds.length} empresa(s)
           </span>
+
         </div>
 
         <div className="flex justify-end space-x-2 pt-3 border-t border-gray-100">
@@ -508,10 +509,14 @@ export default function ConceptosNiifPage() {
   useEffect(() => {
     async function cargarEmpresasIniciales() {
       try {
-        const res = await fetch('/api/conceptos_niif?accion=listar_empresas')
+        // Usamos el endpoint unificado corporativo /api/empresas/listar
+        const res = await fetch('/api/empresas/listar')
         const data = await res.json()
-        if (data.exito && data.datos.length > 0) {
-          const empresasOrdenadas = [...data.datos].sort((a: Empresa, b: Empresa) => {
+        
+        const listaEmpresas = data.empresas || data.datos || (Array.isArray(data) ? data : [])
+
+        if (listaEmpresas.length > 0) {
+          const empresasOrdenadas = [...listaEmpresas].sort((a: Empresa, b: Empresa) => {
             const nombreA = a.razon_social || a.nombre_comercial || ''
             const nombreB = b.razon_social || b.nombre_comercial || ''
             return nombreA.localeCompare(nombreB, 'es', { sensitivity: 'base' })

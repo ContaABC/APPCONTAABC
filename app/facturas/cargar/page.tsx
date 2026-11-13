@@ -148,7 +148,21 @@ export default function CargarFacturasPage() {
       setCompanies(empresasList);
 
       if (empresasList.length > 0) {
-        setSelectedCompanyId(String(empresasList[0].id));
+        // Leer la empresa activa de cookies o localStorage corporativo
+        const cookieEmpresa = document.cookie
+          .split('; ')
+          .find((row) => row.startsWith('empresa_activa='));
+        const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null;
+        const empresaGuardadaLocal = typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') : null;
+
+        const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal;
+        const existeEmpresa = empresasList.some((emp: Company) => String(emp.id) === String(empresaIdParaSeleccionar));
+
+        if (existeEmpresa && empresaIdParaSeleccionar) {
+          setSelectedCompanyId(String(empresaIdParaSeleccionar));
+        } else {
+          setSelectedCompanyId(String(empresasList[0].id));
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error al cargar datos iniciales.";
@@ -162,6 +176,14 @@ export default function CargarFacturasPage() {
     setMounted(true);
     fetchInitialData();
   }, [fetchInitialData]);
+
+  // Persistir cambios de selectedCompanyId en cookies y localStorage
+  useEffect(() => {
+    if (selectedCompanyId && typeof window !== 'undefined') {
+      localStorage.setItem('empresa_activa', String(selectedCompanyId));
+      document.cookie = `empresa_activa=${selectedCompanyId}; path=/; max-age=86400; SameSite=Lax`;
+    }
+  }, [selectedCompanyId]);
 
   useEffect(() => {
     if (!mounted || !selectedCompanyId) return;
