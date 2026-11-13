@@ -6,10 +6,14 @@ import { useState, useEffect, useCallback } from 'react'
 // INTERFACES Y TIPOS
 // ==========================================
 interface Empresa {
-  id: number | string;
+  id: string | number;
+  empresa_id?: string | number; // <--- Añadimos esta línea
   razon_social?: string;
   nombre_comercial?: string;
   nombre?: string;
+  nit?: string;
+  nit_identificacion?: string;
+  numero_identificacion?: string;
 }
 
 interface ActividadABC {
