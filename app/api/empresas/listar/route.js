@@ -88,4 +88,3 @@ import { createServerClient } from '@supabase/ssr'
     console.error('Error Servidor:', error)
     return NextResponse.json({ exito: false, mensaje: error.message }, { status: 500 })
   }
-}
