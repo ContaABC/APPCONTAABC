@@ -197,93 +197,110 @@ export default function ClasesDocumentoPage() {
   if (!isMounted) return null;
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-4">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
+    <div className="p-6 max-w-7xl mx-auto space-y-5 text-xs bg-slate-50/50 min-h-screen">
+      {/* Encabezado elegante unificado */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
             <Link
               href="/modulos/contabilidad/configuracion"
-              className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
+              className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold transition"
             >
-              ← Regresar a Configuración
+              ← Configuración
             </Link>
+            <span className="text-slate-300">/</span>
+            <span className="text-[11px] font-semibold text-indigo-600 uppercase tracking-wider">Parámetros Contables</span>
           </div>
-          <h1 className="text-2xl font-bold text-slate-800">Clases de Documento</h1>
-          <p className="text-sm text-slate-500">Administra los tipos, códigos y configuración contable de documentos por empresa.</p>
+          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Clases de Documento</h1>
+          <p className="text-slate-500 text-xs">Administra los tipos, códigos y configuración contable de documentos por empresa.</p>
         </div>
-        <button
-          onClick={abrirModalNuevo}
-          disabled={!empresaId}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm shadow-md transition cursor-pointer disabled:opacity-50"
-        >
-          + Nueva Clase de Documento
-        </button>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl shadow-2xs">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Empresa:</span>
+            <select
+              value={empresaId}
+              onChange={(e) => setEmpresaId(e.target.value)}
+              className="bg-transparent border-none text-xs text-slate-800 font-bold outline-none cursor-pointer max-w-[280px]"
+            >
+              {empresas.map((emp) => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.razon_social || emp.nombre_comercial || emp.nombre} ({emp.nit || emp.nit_identificacion || ""})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            onClick={abrirModalNuevo}
+            disabled={!empresaId}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-xs shadow-sm shadow-indigo-200 transition cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center gap-1.5"
+          >
+            <span className="text-sm leading-none">+</span> Nueva Clase
+          </button>
+        </div>
       </div>
 
-      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Empresa Activa</label>
-        <select
-          value={empresaId}
-          onChange={(e) => setEmpresaId(e.target.value)}
-          className="w-full md:w-1/2 bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 font-medium outline-none focus:ring-2 focus:ring-indigo-500"
-        >
-          {empresas.map((emp) => (
-            <option key={emp.id} value={emp.id}>
-              {emp.razon_social || emp.nombre_comercial || emp.nombre} ({emp.nit || emp.nit_identificacion || ""})
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+      {/* Tabla con diseño limpio y refinado */}
+      <div className="bg-white border border-slate-200/80 rounded-2xl overflow-hidden shadow-sm">
         {loading ? (
-          <div className="p-12 text-center text-slate-500 text-sm">Cargando clases de documento...</div>
+          <div className="p-12 text-center text-slate-400 text-xs">Cargando clases de documento...</div>
         ) : clases.length === 0 ? (
-          <div className="p-12 text-center text-slate-500 text-sm">No hay clases de documento registradas para esta empresa.</div>
+          <div className="p-12 text-center text-slate-400 text-xs">No hay clases de documento registradas para esta empresa.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs md:text-sm text-slate-600 border-collapse">
+            <table className="w-full text-left text-xs text-slate-600 border-collapse">
               <thead>
-                <tr className="bg-slate-50 border-b text-slate-500 font-semibold uppercase tracking-wider">
-                  <th className="p-3">Código</th>
-                  <th className="p-3">Nombre de la Clase</th>
-                  <th className="p-3">Descripción</th>
-                  <th className="p-3 text-center">Caja/Bancos</th>
-                  <th className="p-3 text-center">Sistema</th>
-                  <th className="p-3 text-center">Estado</th>
-                  <th className="p-3 text-center">Acciones</th>
+                <tr className="bg-slate-50/70 border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                  <th className="py-3 px-4">Código</th>
+                  <th className="py-3 px-4">Nombre de la Clase</th>
+                  <th className="py-3 px-4">Descripción</th>
+                  <th className="py-3 px-4 text-center">Caja/Bancos</th>
+                  <th className="py-3 px-4 text-center">Sistema</th>
+                  <th className="py-3 px-4 text-center">Estado</th>
+                  <th className="py-3 px-4 text-center">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {clases.map((c) => (
-                  <tr key={c.id} className="hover:bg-slate-50/80 transition">
-                    <td className="p-3 font-mono font-bold text-slate-900">{c.codigo_clase}</td>
-                    <td className="p-3 font-medium text-slate-800">{c.nombre_clase}</td>
-                    <td className="p-3 text-slate-500">{c.descripcion || "—"}</td>
-                    <td className="p-3 text-center">
-                      <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${c.afecta_caja_bancos ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                  <tr key={c.id} className="hover:bg-slate-50/60 transition group">
+                    <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{c.codigo_clase}</td>
+                    <td className="py-2.5 px-4 font-semibold text-slate-800">{c.nombre_clase}</td>
+                    <td className="py-2.5 px-4 text-slate-500 max-w-xs truncate">{c.descripcion || "—"}</td>
+                    <td className="py-2.5 px-4 text-center">
+                      <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-bold rounded-md ${c.afecta_caja_bancos ? "bg-emerald-50 text-emerald-700 border border-emerald-200/60" : "bg-slate-100 text-slate-400"}`}>
                         {c.afecta_caja_bancos ? "Sí" : "No"}
                       </span>
                     </td>
-                    <td className="p-3 text-center">
-                      <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${c.es_sistema ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-500"}`}>
+                    <td className="py-2.5 px-4 text-center">
+                      <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-bold rounded-md ${c.es_sistema ? "bg-indigo-50 text-indigo-700 border border-indigo-200/60" : "bg-slate-100 text-slate-400"}`}>
                         {c.es_sistema ? "Sistema" : "Manual"}
                       </span>
                     </td>
-                    <td className="p-3 text-center">
-                      <span className={`px-2.5 py-0.5 text-xs font-semibold rounded-full ${c.estado === "Inactiva" ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                    <td className="py-2.5 px-4 text-center">
+                      <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-bold rounded-md ${c.estado === "Inactiva" ? "bg-rose-50 text-rose-700 border border-rose-200/60" : "bg-emerald-50 text-emerald-700 border border-emerald-200/60"}`}>
                         {c.estado || "Activa"}
                       </span>
                     </td>
-                    <td className="p-3 text-center space-x-2">
-                      <button onClick={() => abrirModalEditar(c)} className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-semibold cursor-pointer">
-                        Editar
-                      </button>
-                      {!c.es_sistema && (
-                        <button onClick={() => eliminarClase(c)} className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded text-xs font-semibold cursor-pointer">
-                          Eliminar
+                    <td className="py-2.5 px-4 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => abrirModalEditar(c)}
+                          title="Editar"
+                          className="p-1.5 hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 rounded-lg transition cursor-pointer"
+                        >
+                          ✏️
                         </button>
-                      )}
+                        {!c.es_sistema && (
+                          <button
+                            onClick={() => eliminarClase(c)}
+                            title="Eliminar"
+                            className="p-1.5 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition cursor-pointer"
+                          >
+                            🗑️
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -294,36 +311,36 @@ export default function ClasesDocumentoPage() {
       </div>
 
       {modalAbierto && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b pb-3">
-              <h3 className="font-bold text-slate-800 text-base">
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-2xs flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-900 text-sm">
                 {claseEditar ? "Editar Clase de Documento" : "Nueva Clase de Documento"}
               </h3>
-              <button onClick={() => setModalAbierto(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">✕</button>
+              <button onClick={() => setModalAbierto(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer text-sm">✕</button>
             </div>
 
-            <form onSubmit={guardarClase} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={guardarClase} className="space-y-3.5">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Código Clase *</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Código Clase *</label>
                   <input
                     type="text"
                     required
                     maxLength={10}
                     value={codigoClase}
                     onChange={(e) => setCodigoClase(e.target.value)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none font-mono"
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none font-mono focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-slate-50/50"
                     placeholder="Ej: 01"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Estado</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Estado</label>
                   <select
                     value={estado}
                     onChange={(e) => setEstado(e.target.value as "Activa" | "Inactiva")}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none bg-white font-medium"
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none bg-slate-50/50 font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                   >
                     <option value="Activa">Activa</option>
                     <option value="Inactiva">Inactiva</option>
@@ -332,30 +349,30 @@ export default function ClasesDocumentoPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Nombre de la Clase *</label>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre de la Clase *</label>
                 <input
                   type="text"
                   required
                   maxLength={100}
                   value={nombreClase}
                   onChange={(e) => setNombreClase(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none"
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-slate-50/50 font-medium text-slate-800"
                   placeholder="Ej: Facturas de Proveedores"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Descripción</label>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Descripción</label>
                 <textarea
                   rows={2}
                   value={descripcion}
                   onChange={(e) => setDescripcion(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none"
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-slate-50/50"
                   placeholder="Detalle o uso de esta clase de documento..."
                 />
               </div>
 
-              <div className="flex items-center gap-2 pt-1">
+              <div className="flex items-center gap-2.5 pt-1 bg-slate-50/80 p-3 rounded-xl border border-slate-100">
                 <input
                   type="checkbox"
                   id="afecta_caja"
@@ -363,14 +380,14 @@ export default function ClasesDocumentoPage() {
                   onChange={(e) => setAfectaCajaBancos(e.target.checked)}
                   className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
                 />
-                <label htmlFor="afecta_caja" className="text-xs font-semibold text-slate-700 cursor-pointer select-none">
+                <label htmlFor="afecta_caja" className="text-[11px] font-semibold text-slate-700 cursor-pointer select-none">
                   Afecta Caja y Bancos (Movimientos de Tesorería)
                 </label>
               </div>
 
-              <div className="flex justify-end space-x-2 pt-3 border-t">
-                <button type="button" onClick={() => setModalAbierto(false)} className="px-4 py-2 border rounded-lg text-xs font-semibold cursor-pointer">Cancelar</button>
-                <button type="submit" disabled={guardando} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50">
+              <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
+                <button type="button" onClick={() => setModalAbierto(false)} className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer transition">Cancelar</button>
+                <button type="submit" disabled={guardando} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm shadow-indigo-200 cursor-pointer transition disabled:opacity-50">
                   {guardando ? "Guardando..." : "Guardar Clase"}
                 </button>
               </div>
