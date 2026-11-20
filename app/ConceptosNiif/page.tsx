@@ -1,6 +1,19 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useMemo, FormEvent } from 'react'
+import Link from 'next/link'
+import { createClient } from '@supabase/supabase-js'
+import { getEmpresasPermitidas } from '@/app/actions/accionesEmpresas'
+import { ArrowLeft, Search, X } from 'lucide-react'
+import {
+  listarConceptosNiifEmpresas,
+  obtenerConceptosNiif,
+  obtenerSiguienteCodigoNiif,
+  crearConceptoNiif,
+  actualizarConceptoNiif,
+  eliminarConceptoNiif,
+  clonarConceptosNiifMasivo
+} from './actions'
 
 // Interfaces corporativas estrictas
 interface Empresa {
@@ -121,17 +134,11 @@ function ModalClonarConceptos({ empresas, empresaOrigenInicial, onClose, onSucce
     setCopiando(true)
 
     try {
-      const res = await fetch('/api/conceptos_niif', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accion: 'clonar_conceptos',
-          empresa_origen_id: empresaOrigenId,
-          empresas_destino_ids: empresasDestinoIds
-        })
+      const data = await clonarConceptosNiifMasivo({
+        empresa_origen_id: empresaOrigenId,
+        empresas_destino_ids: empresasDestinoIds
       })
 
-      const data = await res.json()
       if (data.exito) {
         alert(data.mensaje || '¡Conceptos NIIF copiados exitosamente!')
         onSuccess()
@@ -178,7 +185,7 @@ function ModalClonarConceptos({ empresas, empresaOrigenInicial, onClose, onSucce
           >
             <option value="">-- Seleccionar Empresa Origen --</option>
             {empresas.map((emp) => (
-              <option key={emp.id} value={emp.id}>
+              <option key={emp.id} value={String(emp.id)}>
                 🏢 {emp.razon_social || emp.nombre_comercial}
               </option>
             ))}
@@ -234,7 +241,6 @@ function ModalClonarConceptos({ empresas, empresaOrigenInicial, onClose, onSucce
           <span className="text-[11px] text-gray-400 mt-1 block">
             Seleccionadas: {empresasDestinoIds.length} empresa(s)
           </span>
-
         </div>
 
         <div className="flex justify-end space-x-2 pt-3 border-t border-gray-100">
@@ -279,18 +285,17 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
     clasificacion_balance: ''
   })
 
-  const obtenerCodigoAuto = async (empId: string) => {
+  const obtenerCodigoAuto = useCallback(async (empId: string) => {
     if (!empId) return
     try {
-      const res = await fetch(`/api/conceptos_niif?empresa_id=${empId}&accion=siguiente_codigo`)
-      const data = await res.json()
-      if (data.exito) {
-        setFormData((prev) => ({ ...prev, codigo_concepto: data.siguiente_codigo }))
+      const data = await obtenerSiguienteCodigoNiif(empId)
+      if (data.exito && data.siguiente_codigo) {
+        setFormData((prev) => ({ ...prev, codigo_concepto: data.siguiente_codigo! }))
       }
     } catch (err) {
       console.error('Error al obtener consecutivo:', err)
     }
-  }
+  }, [])
 
   useEffect(() => {
     if (conceptoEditar) {
@@ -305,13 +310,18 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
     } else {
       setFormData((prev) => ({
         ...prev,
+        id: undefined,
+        codigo_concepto: '',
+        nombre: '',
+        elemento: '',
+        clasificacion_balance: '',
         empresa_id: String(empresaIdSeleccionada || '')
       }))
       if (empresaIdSeleccionada) {
         obtenerCodigoAuto(empresaIdSeleccionada)
       }
     }
-  }, [conceptoEditar, empresaIdSeleccionada])
+  }, [conceptoEditar, empresaIdSeleccionada, obtenerCodigoAuto])
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -329,14 +339,22 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
     setGuardando(true)
 
     try {
-      const metodo = conceptoEditar ? 'PUT' : 'POST'
-      const res = await fetch('/api/conceptos_niif', {
-        method: metodo,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
-      })
+      const data = conceptoEditar
+        ? await actualizarConceptoNiif({
+            id: conceptoEditar.id,
+            codigo_concepto: formData.codigo_concepto,
+            nombre: formData.nombre.trim(),
+            elemento: formData.elemento,
+            clasificacion_balance: formData.clasificacion_balance
+          })
+        : await crearConceptoNiif({
+            empresa_id: formData.empresa_id,
+            codigo_concepto: formData.codigo_concepto,
+            nombre: formData.nombre.trim(),
+            elemento: formData.elemento,
+            clasificacion_balance: formData.clasificacion_balance
+          })
 
-      const data = await res.json()
       if (data.exito) {
         onSave()
       } else {
@@ -377,7 +395,7 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
           >
             <option value="">-- Seleccione una Empresa --</option>
             {empresas.map((emp) => (
-              <option key={emp.id} value={emp.id}>
+              <option key={emp.id} value={String(emp.id)}>
                 {emp.razon_social || emp.nombre_comercial}
               </option>
             ))}
@@ -472,27 +490,36 @@ function SubformularioConceptoNiif({ empresas, empresaIdSeleccionada, conceptoEd
 // COMPONENTE PRINCIPAL: PÁGINA CONCEPTOS NIIF
 // ==========================================
 export default function ConceptosNiifPage() {
+  const [isMounted, setIsMounted] = useState<boolean>(false)
   const [empresas, setEmpresas] = useState<Empresa[]>([])
-  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState<string>('')
+  const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(true)
+  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id') || ''
+    }
+    return ''
+  })
   const [conceptos, setConceptos] = useState<ConceptoNiif[]>([])
+  const [busqueda, setBusqueda] = useState<string>('')
   const [cargando, setCargando] = useState<boolean>(true)
 
   const [modalFormAbierto, setModalFormAbierto] = useState<boolean>(false)
   const [modalClonarAbierto, setModalClonarAbierto] = useState<boolean>(false)
-
   const [conceptoSeleccionado, setConceptoSeleccionado] = useState<ConceptoNiif | null>(null)
-  const [isMounted, setIsMounted] = useState<boolean>(false)
 
   useEffect(() => {
     setIsMounted(true)
   }, [])
 
   const cargarConceptos = useCallback(async (empId: string) => {
-    if (!empId) return
+    if (!empId) {
+      setConceptos([])
+      setCargando(false)
+      return
+    }
     setCargando(true)
     try {
-      const res = await fetch(`/api/conceptos_niif?empresa_id=${empId}`)
-      const data = await res.json()
+      const data = await obtenerConceptosNiif(empId)
       if (data.exito) {
         setConceptos(data.datos || [])
       } else {
@@ -507,13 +534,60 @@ export default function ConceptosNiifPage() {
   }, [])
 
   useEffect(() => {
+    if (!isMounted) return
+
     async function cargarEmpresasIniciales() {
+      setLoadingEmpresas(true)
       try {
-        // Usamos el endpoint unificado corporativo /api/empresas/listar
-        const res = await fetch('/api/empresas/listar')
-        const data = await res.json()
-        
-        const listaEmpresas = data.empresas || data.datos || (Array.isArray(data) ? data : [])
+        let listaEmpresas: Empresa[] = []
+
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+        if (supabaseUrl && supabaseAnonKey) {
+          const supabase = createClient(supabaseUrl, supabaseAnonKey)
+          const { data: authData } = await supabase.auth.getSession()
+          const userId = authData?.session?.user?.id
+
+          if (userId) {
+            const { data: permisosTx } = await supabase
+              .from('usuario_permisos_tx')
+              .select('empresa_id')
+              .eq('usuario_id', userId)
+
+            const empresaIds = Array.from(
+              new Set((permisosTx || []).map((p: any) => String(p.empresa_id)).filter(Boolean))
+            )
+
+            if (empresaIds.length > 0) {
+              const { data: empRows } = await supabase
+                .from('empresas')
+                .select('id, razon_social, nombre_comercial')
+                .in('id', empresaIds)
+
+              if (empRows && empRows.length > 0) {
+                listaEmpresas = empRows
+              }
+            }
+          }
+        }
+
+        if (listaEmpresas.length === 0) {
+          const resPermitidas: any = await getEmpresasPermitidas()
+          if (Array.isArray(resPermitidas)) {
+            listaEmpresas = resPermitidas
+          } else if (Array.isArray(resPermitidas?.datos)) {
+            listaEmpresas = resPermitidas.datos
+          } else if (Array.isArray(resPermitidas?.data)) {
+            listaEmpresas = resPermitidas.data
+          }
+        }
+
+        if (listaEmpresas.length === 0) {
+          const resServer = await listarConceptosNiifEmpresas()
+          if (resServer.exito && Array.isArray(resServer.datos)) {
+            listaEmpresas = resServer.datos
+          }
+        }
 
         if (listaEmpresas.length > 0) {
           const empresasOrdenadas = [...listaEmpresas].sort((a: Empresa, b: Empresa) => {
@@ -524,45 +598,101 @@ export default function ConceptosNiifPage() {
 
           setEmpresas(empresasOrdenadas)
 
-          // Sincronizar con cookies y localStorage corporativo
           const cookieEmpresa = document.cookie
             .split('; ')
             .find((row) => row.startsWith('empresa_activa='))
           const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null
-          const empresaGuardadaLocal = localStorage.getItem('empresa_activa')
+          const empresaGuardadaLocal =
+            typeof window !== 'undefined'
+              ? localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id')
+              : null
 
-          const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal
-          const existeEmpresa = empresasOrdenadas.some((emp) => String(emp.id) === String(empresaIdParaSeleccionar))
+          const empresaIdParaSeleccionar = empresaGuardadaLocal || empresaGuardadaCookie
+          const existeEmpresa = empresasOrdenadas.some(
+            (emp) => String(emp.id) === String(empresaIdParaSeleccionar)
+          )
 
-          const primeraEmpresaId = existeEmpresa && empresaIdParaSeleccionar
-            ? String(empresaIdParaSeleccionar)
-            : String(empresasOrdenadas[0].id)
+          const idFinal =
+            existeEmpresa && empresaIdParaSeleccionar
+              ? String(empresaIdParaSeleccionar)
+              : String(empresasOrdenadas[0].id)
 
-          setEmpresaIdSeleccionada(primeraEmpresaId)
-          cargarConceptos(primeraEmpresaId)
+          setEmpresaIdSeleccionada(idFinal)
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('empresa_activa', idFinal)
+            localStorage.setItem('empresa_id', idFinal)
+          }
+          document.cookie = `empresa_activa=${idFinal}; path=/; max-age=86400; SameSite=Lax`
+
+          await cargarConceptos(idFinal)
         } else {
+          setEmpresas([])
           setCargando(false)
         }
       } catch (error) {
         console.error('Error al cargar empresas:', error)
+        setEmpresas([])
         setCargando(false)
+      } finally {
+        setLoadingEmpresas(false)
       }
     }
+
     cargarEmpresasIniciales()
-  }, [cargarConceptos])
+  }, [isMounted, cargarConceptos])
 
-  // Persistir cambios de empresaIdSeleccionada en cookies y localStorage
-  useEffect(() => {
-    if (empresaIdSeleccionada) {
-      localStorage.setItem('empresa_activa', String(empresaIdSeleccionada))
-      document.cookie = `empresa_activa=${empresaIdSeleccionada}; path=/; max-age=86400; SameSite=Lax`
-    }
-  }, [empresaIdSeleccionada])
-
-  const handleEmpresaChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleEmpresaChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const nuevoId = e.target.value
     setEmpresaIdSeleccionada(nuevoId)
-    cargarConceptos(nuevoId)
+    setBusqueda('')
+
+    if (!nuevoId) {
+      setConceptos([])
+      return
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('empresa_activa', String(nuevoId))
+      localStorage.setItem('empresa_id', String(nuevoId))
+    }
+    document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`
+
+    await cargarConceptos(nuevoId)
+
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+      if (supabaseUrl && supabaseAnonKey) {
+        const supabase = createClient(supabaseUrl, supabaseAnonKey)
+        const { data: authData } = await supabase.auth.getSession()
+        const userId = authData?.session?.user?.id
+        if (userId) {
+          const { data: sucursalesEmpresa } = await supabase
+            .from('sucursales')
+            .select('id')
+            .eq('empresa_id', nuevoId)
+            .order('id', { ascending: true })
+            .limit(1)
+
+          const payloadUpdate: Record<string, any> = { empresa_activa: nuevoId }
+          if (sucursalesEmpresa && sucursalesEmpresa.length > 0) {
+            const primeraSucursalId = String(sucursalesEmpresa[0].id)
+            payloadUpdate.sucursal_activa = primeraSucursalId
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('sucursal_activa', primeraSucursalId)
+            }
+            document.cookie = `sucursal_activa=${primeraSucursalId}; path=/; max-age=86400; SameSite=Lax`
+          }
+
+          await supabase
+            .from('usuarios_perfiles')
+            .update(payloadUpdate)
+            .eq('id', userId)
+        }
+      }
+    } catch (err) {
+      console.error('Error al actualizar empresa_activa y sucursal_activa en usuarios_perfiles:', err)
+    }
   }
 
   const handleNuevoConcepto = () => {
@@ -579,10 +709,7 @@ export default function ConceptosNiifPage() {
     if (!confirm(`¿Deseas eliminar el concepto NIIF "${concepto.nombre}"?`)) return
 
     try {
-      const res = await fetch(`/api/conceptos_niif?id=${concepto.id}`, {
-        method: 'DELETE'
-      })
-      const data = await res.json()
+      const data = await eliminarConceptoNiif(concepto.id)
       if (data.exito) {
         cargarConceptos(empresaIdSeleccionada)
       } else {
@@ -593,42 +720,58 @@ export default function ConceptosNiifPage() {
     }
   }
 
-  // Agrupar conceptos por Elemento NIIF manteniendo el orden estándar
-  const conceptosAgrupados = useMemo(() => {
-    const grupos: { [key: string]: ConceptoNiif[] } = {}
-    ELEMENTOS_NIIF.forEach((elem) => {
-      grupos[elem] = []
-    })
-    grupos['Sin asignar'] = []
-
-    conceptos.forEach((conc) => {
-      const elem = conc.elemento && grupos[conc.elemento] ? conc.elemento : 'Sin asignar'
-      grupos[elem].push(conc)
-    })
-
-    return grupos
-  }, [conceptos])
+  const conceptosFiltrados = useMemo(() => {
+    const q = busqueda.trim().toLowerCase()
+    if (!q) return conceptos
+    return conceptos.filter(
+      (c) =>
+        (c.codigo_concepto && c.codigo_concepto.toLowerCase().includes(q)) ||
+        (c.nombre && c.nombre.toLowerCase().includes(q)) ||
+        (c.elemento && c.elemento.toLowerCase().includes(q)) ||
+        (c.clasificacion_balance && c.clasificacion_balance.toLowerCase().includes(q))
+    )
+  }, [conceptos, busqueda])
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
-      {/* Encabezado */}
+      {/* Encabezado con Botón Atrás */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 rounded-lg shadow-sm border border-gray-200 gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-gray-800">Conceptos NIIF</h1>
-          <p className="text-xs md:text-sm text-gray-500">Catálogo de conceptos y clasificación de los estados financieros.</p>
+        <div className="flex items-center gap-3 min-w-0">
+          <Link
+            href="/modulos/contabilidad/configuracion"
+            className="p-2 text-gray-500 hover:text-blue-600 bg-gray-50 hover:bg-blue-50 border border-gray-200 rounded-lg transition flex items-center justify-center shrink-0"
+            title="Volver a Configuración"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold text-gray-800 truncate">Conceptos NIIF</h1>
+            <p className="text-xs md:text-sm text-gray-500 truncate">Catálogo de conceptos y clasificación de los estados financieros.</p>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           <select
             value={empresaIdSeleccionada}
             onChange={handleEmpresaChange}
-            className="border border-gray-300 px-3 py-1.5 rounded-md bg-white text-xs md:text-sm font-semibold text-gray-700 shadow-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none min-w-[200px]"
+            disabled={!isMounted || loadingEmpresas || empresas.length <= 1}
+            suppressHydrationWarning
+            className="border border-gray-300 px-3 py-1.5 rounded-md bg-white text-xs md:text-sm font-semibold text-gray-700 shadow-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none min-w-[200px] disabled:bg-gray-100 disabled:cursor-not-allowed"
           >
-            {empresas.map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                🏢 {emp.razon_social || emp.nombre_comercial}
-              </option>
-            ))}
+            {!isMounted || loadingEmpresas ? (
+              <option value="">Cargando empresas...</option>
+            ) : empresas.length === 0 ? (
+              <option value="">Sin empresas asignadas</option>
+            ) : (
+              <>
+                {empresas.length !== 1 && <option value="">-- Seleccione una Empresa --</option>}
+                {empresas.map((emp) => (
+                  <option key={emp.id} value={String(emp.id)}>
+                    🏢 {emp.razon_social || emp.nombre_comercial}
+                  </option>
+                ))}
+              </>
+            )}
           </select>
 
           <button
@@ -654,13 +797,43 @@ export default function ConceptosNiifPage() {
         </div>
       </div>
 
-      {/* Tabla Principal Agrupada por Elemento NIIF */}
+      {/* Barra de Búsqueda */}
+      <div className="bg-white p-3.5 rounded-lg shadow-sm border border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="Buscar por código, nombre, elemento o clasificación..."
+            className="w-full pl-9 pr-8 py-1.5 text-xs md:text-sm border border-gray-300 rounded-md bg-gray-50/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition"
+          />
+          {busqueda && (
+            <button
+              type="button"
+              onClick={() => setBusqueda('')}
+              title="Limpiar búsqueda"
+              className="text-gray-400 hover:text-gray-600 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+        <span className="text-xs text-gray-500 font-medium">
+          Mostrando <strong className="text-gray-800">{conceptosFiltrados.length}</strong> de{' '}
+          <strong className="text-gray-800">{conceptos.length}</strong> concepto(s)
+        </span>
+      </div>
+
+      {/* Tabla Principal Sin Agrupación por Elemento */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         {cargando ? (
           <div className="p-6 text-center text-gray-500 text-sm">Cargando conceptos NIIF...</div>
-        ) : conceptos.length === 0 ? (
+        ) : conceptosFiltrados.length === 0 ? (
           <div className="p-6 text-center text-gray-500 text-sm">
-            No hay conceptos NIIF registrados para la empresa seleccionada.
+            {busqueda
+              ? 'No se encontraron conceptos NIIF que coincidan con la búsqueda.'
+              : 'No hay conceptos NIIF registrados para la empresa seleccionada.'}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -675,60 +848,41 @@ export default function ConceptosNiifPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {[...ELEMENTOS_NIIF, 'Sin asignar'].map((elemento) => {
-                  const listaConceptos = conceptosAgrupados[elemento] || []
-                  if (listaConceptos.length === 0) return null
-
-                  const badgeColor = ELEMENTO_BADGE_COLORS[elemento] || 'bg-slate-100 text-slate-600 border-slate-200'
+                {conceptosFiltrados.map((conc) => {
+                  const elem = conc.elemento || 'Sin asignar'
+                  const badgeColor = ELEMENTO_BADGE_COLORS[elem] || 'bg-slate-100 text-slate-600 border-slate-200'
 
                   return (
-                    <React.Fragment key={elemento}>
-                      {/* Cabecera de Sección por Elemento */}
-                      <tr className="bg-slate-100/80 border-t border-b border-slate-200">
-                        <td colSpan={5} className="py-2 px-3 font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center justify-between">
-                          <span className="flex items-center gap-2">
-                            📁 Elemento: <span className={`px-2 py-0.5 rounded text-[11px] border font-semibold ${badgeColor}`}>{elemento}</span>
-                          </span>
-                          <span className="text-[11px] font-normal text-slate-500">
-                            {listaConceptos.length} concepto(s)
-                          </span>
-                        </td>
-                      </tr>
-
-                      {/* Filas de Conceptos del Elemento */}
-                      {listaConceptos.map((conc) => (
-                        <tr key={conc.id} className="hover:bg-gray-50/80 transition-colors">
-                          <td className="py-2 px-3 font-mono font-bold text-gray-800">{conc.codigo_concepto || '-'}</td>
-                          <td className="py-2 px-3 font-medium text-gray-900">{conc.nombre || '-'}</td>
-                          <td className="py-2 px-3 text-gray-600">
-                            <span className={`inline-block px-2 py-0.5 rounded text-xs border font-medium ${badgeColor}`}>
-                              {conc.elemento || 'Sin asignar'}
-                            </span>
-                          </td>
-                          <td className="py-2 px-3 text-gray-600">{conc.clasificacion_balance || '-'}</td>
-                          <td className="py-2 px-3 text-center">
-                            <div className="flex items-center justify-center space-x-1.5">
-                              <button
-                                onClick={() => handleEditarConcepto(conc)}
-                                type="button"
-                                className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors cursor-pointer"
-                                title="Editar"
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                onClick={() => handleEliminar(conc)}
-                                type="button"
-                                className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors cursor-pointer"
-                                title="Eliminar"
-                              >
-                                🗑️
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </React.Fragment>
+                    <tr key={conc.id} className="hover:bg-gray-50/80 transition-colors">
+                      <td className="py-2 px-3 font-mono font-bold text-gray-800">{conc.codigo_concepto || '-'}</td>
+                      <td className="py-2 px-3 font-medium text-gray-900">{conc.nombre || '-'}</td>
+                      <td className="py-2 px-3 text-gray-600">
+                        <span className={`inline-block px-2 py-0.5 rounded text-xs border font-medium ${badgeColor}`}>
+                          {elem}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-gray-600">{conc.clasificacion_balance || '-'}</td>
+                      <td className="py-2 px-3 text-center">
+                        <div className="flex items-center justify-center space-x-1.5">
+                          <button
+                            onClick={() => handleEditarConcepto(conc)}
+                            type="button"
+                            className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors cursor-pointer"
+                            title="Editar"
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            onClick={() => handleEliminar(conc)}
+                            type="button"
+                            className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                            title="Eliminar"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
                   )
                 })}
               </tbody>

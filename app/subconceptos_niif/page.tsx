@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import Link from 'next/link'
 import {
   Plus,
   Edit2,
@@ -16,32 +17,51 @@ import {
   X,
   FileText,
   Copy,
-  FolderKanban
+  ArrowLeft
 } from 'lucide-react'
+import { createClient } from '@supabase/supabase-js'
+import {
+  obtenerConceptosNiifPorEmpresaAction,
+  siguienteCodigoSubconceptoAction,
+  obtenerSubconceptosAction,
+  crearSubconceptoAction,
+  clonarSubconceptosAction,
+  actualizarSubconceptoAction,
+  eliminarSubconceptoAction
+} from './actions'
+
+interface Empresa {
+  id: string | number;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nit_identificacion?: string;
+}
 
 export default function SubconceptosNiifPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false)
 
-  // Estados principales
-  const [empresas, setEmpresas] = useState<any[]>([])
-  const [empresaSeleccionada, setEmpresaSeleccionada] = useState<string>('')
+  const [empresas, setEmpresas] = useState<Empresa[]>([])
+  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState<string | number>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("empresa_activa") || localStorage.getItem("empresa_id") || "";
+    }
+    return "";
+  })
+
   const [conceptosPadre, setConceptosPadre] = useState<any[]>([])
   const [subconceptos, setSubconceptos] = useState<any[]>([])
 
-  // Estados de carga e interfaz
   const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(true)
   const [loadingPadres, setLoadingPadres] = useState<boolean>(false)
   const [loadingTabla, setLoadingTabla] = useState<boolean>(false)
   const [guardando, setGuardando] = useState<boolean>(false)
-  const [eliminandoId, setEliminatingId] = useState<string | number | null>(null)
+  const [eliminandoId, setEliminandoId] = useState<string | number | null>(null)
   const [cambiandoEstadoId, setCambiandoEstadoId] = useState<string | number | null>(null)
 
-  // Filtros
   const [filtroBusqueda, setFiltroBusqueda] = useState<string>('')
   const [filtroPadre, setFiltroPadre] = useState<string>('')
   const [filtroEstado, setFiltroEstado] = useState<string>('todos')
 
-  // Modales
   const [modalAbierto, setModalAbierto] = useState<boolean>(false)
   const [modoEdicion, setModoEdicion] = useState<boolean>(false)
   const [subconceptoEditarId, setSubconceptoEditarId] = useState<string | number | null>(null)
@@ -50,7 +70,6 @@ export default function SubconceptosNiifPage() {
   const [empresasDestino, setEmpresasDestino] = useState<string[]>([])
   const [copiando, setCopiando] = useState<boolean>(false)
 
-  // Notificaciones
   const [notificacion, setNotificacion] = useState<{
     visible: boolean;
     tipo: 'exito' | 'error' | 'info';
@@ -61,7 +80,6 @@ export default function SubconceptosNiifPage() {
     mensaje: ''
   })
 
-  // Formulario
   const [formData, setFormData] = useState({
     concepto_niif_id: '',
     codigo: '',
@@ -90,128 +108,193 @@ export default function SubconceptosNiifPage() {
     }
   }, [notificacion.visible])
 
-  const cargarEmpresas = useCallback(async () => {
-    setLoadingEmpresas(true)
-    try {
-      const res = await fetch('/api/subconceptos_niif?accion=listar_empresas')
-      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`)
-
-      const json = await res.json()
-      if (json.exito) {
-        const listaEmpresas = json.datos || []
-        setEmpresas(listaEmpresas)
-
-        if (listaEmpresas.length > 0) {
-          // 1. Obtener la empresa activa corporativa guardada en localStorage o cookies
-          const empresaGuardada = 
-            (typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id') : '') ||
-            (document.cookie.match(/(^| )empresa_activa=([^;]+)/)?.[2] ?? '');
-
-          // 2. Si la empresa guardada existe en la lista, la seleccionamos automáticamente al entrar
-          if (empresaGuardada && listaEmpresas.some((e: any) => String(e.id) === String(empresaGuardada))) {
-            setEmpresaSeleccionada(String(empresaGuardada))
-          } else {
-            // 3. Si no hay una guardada, tomamos la primera disponible y la fijamos
-            const primeraEmpresa = String(listaEmpresas[0].id)
-            setEmpresaSeleccionada(primeraEmpresa)
-            if (typeof window !== 'undefined') {
-              localStorage.setItem('empresa_activa', primeraEmpresa)
-            }
-            document.cookie = `empresa_activa=${primeraEmpresa}; path=/; max-age=86400; SameSite=Lax`
-          }
-        }
-      } else {
-        mostrarNotificacion('error', json.mensaje || 'Error al obtener empresas')
-      }
-    } catch (error) {
-      console.error('Error al cargar empresas:', error)
-      mostrarNotificacion('error', 'Error de conexión al cargar empresas')
-    } finally {
-      setLoadingEmpresas(false)
-    }
-  }, [mostrarNotificacion])
-
-  const cargarConceptosPadre = useCallback(async (empId: string) => {
+  const cargarDatosEmpresa = useCallback(async (empId: string | number) => {
     if (!empId) return
     setLoadingPadres(true)
-    try {
-      const res = await fetch(
-        `/api/subconceptos_niif?accion=conceptos_niif_por_empresa&empresa_id=${empId}`
-      )
-      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`)
+    setLoadingTabla(true)
 
-      const json = await res.json()
-      if (json.exito) {
-        setConceptosPadre(json.datos || [])
+    try {
+      const [resPadres, resSub] = await Promise.all([
+        obtenerConceptosNiifPorEmpresaAction(empId),
+        obtenerSubconceptosAction(empId)
+      ])
+
+      if (resPadres.exito) {
+        setConceptosPadre(resPadres.datos || [])
       } else {
-        mostrarNotificacion('error', json.mensaje || 'Error al consultar conceptos padres')
+        setConceptosPadre([])
+      }
+
+      if (resSub.exito) {
+        setSubconceptos(resSub.datos || [])
+      } else {
+        setSubconceptos([])
       }
     } catch (error) {
-      console.error('Error al cargar conceptos padre:', error)
-      mostrarNotificacion('error', 'Error al consultar conceptos NIIF padres')
+      console.error('Error al cargar datos de empresa:', error)
     } finally {
       setLoadingPadres(false)
-    }
-  }, [mostrarNotificacion])
-
-  const cargarSubconceptos = useCallback(async (empId: string) => {
-    if (!empId) return
-    setLoadingTabla(true)
-    try {
-      const res = await fetch(`/api/subconceptos_niif?empresa_id=${empId}`)
-      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`)
-
-      const json = await res.json()
-      if (json.exito) {
-        setSubconceptos(json.datos || [])
-      } else {
-        mostrarNotificacion('error', json.mensaje || 'Error al cargar subconceptos')
-      }
-    } catch (error) {
-      console.error('Error al cargar subconceptos:', error)
-      mostrarNotificacion('error', 'Error de red al consultar subconceptos')
-    } finally {
       setLoadingTabla(false)
     }
-  }, [mostrarNotificacion])
+  }, [])
 
+  // Sincronización de empresas y sucursal predeterminada al montar
   useEffect(() => {
-    cargarEmpresas()
-  }, [cargarEmpresas])
-
-  useEffect(() => {
-    if (empresaSeleccionada) {
-      cargarConceptosPadre(empresaSeleccionada)
-      cargarSubconceptos(empresaSeleccionada)
-
-      if (typeof window !== 'undefined') {
-        localStorage.setItem("empresa_activa", empresaSeleccionada);
-        localStorage.setItem("empresa_id", empresaSeleccionada);
+    async function sincronizarEmpresasAsignadas() {
+      setLoadingEmpresas(true)
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+      if (!supabaseUrl || !supabaseAnonKey) {
+        setLoadingEmpresas(false)
+        return
       }
-      document.cookie = `empresa_activa=${empresaSeleccionada}; path=/; max-age=86400; SameSite=Lax`;
-    } else {
-      setConceptosPadre([])
-      setSubconceptos([])
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+      try {
+        const { data: authData } = await supabase.auth.getSession()
+        const userId = authData?.session?.user?.id
+        if (!userId) {
+          setLoadingEmpresas(false)
+          return
+        }
+
+        const { data: permisosTx } = await supabase
+          .from("usuario_permisos_tx")
+          .select("empresa_id")
+          .eq("usuario_id", userId)
+
+        if (!permisosTx || permisosTx.length === 0) {
+          setLoadingEmpresas(false)
+          return
+        }
+
+        const empresaIds = Array.from(new Set(permisosTx.map((p: any) => p.empresa_id).filter(Boolean)))
+        if (empresaIds.length === 0) {
+          setLoadingEmpresas(false)
+          return
+        }
+
+        const { data: listaEmpresas, error } = await supabase
+          .from("empresas")
+          .select("id, razon_social, nombre_comercial, nit_identificacion")
+          .in("id", empresaIds)
+          .order("razon_social", { ascending: true })
+
+        if (!error && listaEmpresas && listaEmpresas.length > 0) {
+          setEmpresas(listaEmpresas)
+
+          let empresaAUsar = localStorage.getItem("empresa_activa") || localStorage.getItem("empresa_id")
+
+          if (!empresaAUsar || !listaEmpresas.some(e => String(e.id) === String(empresaAUsar))) {
+            empresaAUsar = String(listaEmpresas[0].id)
+          }
+
+          setEmpresaIdSeleccionada(empresaAUsar)
+          localStorage.setItem("empresa_activa", empresaAUsar)
+          localStorage.setItem("empresa_id", empresaAUsar)
+          document.cookie = `empresa_activa=${empresaAUsar}; path=/; max-age=86400; SameSite=Lax`
+
+          const empresaObj = listaEmpresas.find(e => String(e.id) === String(empresaAUsar))
+          if (empresaObj) {
+            localStorage.setItem("empresa_activa_nombre", empresaObj.razon_social || empresaObj.nombre_comercial || "")
+          }
+
+          // Consultar y asegurar la primera sucursal activa correspondiente a esta empresa
+          const { data: sucursalesEmpresa } = await supabase
+            .from("sucursales")
+            .select("id")
+            .eq("empresa_id", empresaAUsar)
+            .order("id", { ascending: true })
+            .limit(1)
+
+          if (sucursalesEmpresa && sucursalesEmpresa.length > 0) {
+            const primeraSucursalId = String(sucursalesEmpresa[0].id)
+            localStorage.setItem("sucursal_activa", primeraSucursalId)
+            document.cookie = `sucursal_activa=${primeraSucursalId}; path=/; max-age=86400; SameSite=Lax`
+
+            await supabase
+              .from("usuarios_perfiles")
+              .update({ empresa_activa: empresaAUsar, sucursal_activa: primeraSucursalId })
+              .eq("id", userId)
+          }
+
+          cargarDatosEmpresa(empresaAUsar)
+        }
+      } catch (err) {
+        console.error("Error al sincronizar empresas asignadas en subconceptos:", err)
+      } finally {
+        setLoadingEmpresas(false)
+      }
     }
-  }, [empresaSeleccionada, cargarConceptosPadre, cargarSubconceptos])
-  
+
+    sincronizarEmpresasAsignadas()
+  }, [cargarDatosEmpresa])
+
+  // Cambio de empresa: actualiza estado, localStorage, cookies, y fuerza la primera sucursal en sucursal_activa y usuarios_perfiles
+  const handleEmpresaChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const nuevoId = e.target.value
+    setEmpresaIdSeleccionada(nuevoId)
+    cargarDatosEmpresa(nuevoId)
+
+    localStorage.setItem("empresa_activa", nuevoId)
+    localStorage.setItem("empresa_id", nuevoId)
+    document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`
+
+    const empresaObj = empresas.find(emp => String(emp.id) === String(nuevoId))
+    if (empresaObj) {
+      localStorage.setItem("empresa_activa_nombre", empresaObj.razon_social || empresaObj.nombre_comercial || "")
+    }
+
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+      if (supabaseUrl && supabaseAnonKey) {
+        const supabase = createClient(supabaseUrl, supabaseAnonKey)
+        const { data: authData } = await supabase.auth.getSession()
+        const userId = authData?.session?.user?.id
+        if (userId) {
+          // Consultar de forma estricta la primera sucursal de la nueva empresa
+          const { data: sucursalesEmpresa } = await supabase
+            .from("sucursales")
+            .select("id")
+            .eq("empresa_id", nuevoId)
+            .order("id", { ascending: true })
+            .limit(1)
+
+          const payloadUpdate: Record<string, any> = { empresa_activa: nuevoId }
+
+          if (sucursalesEmpresa && sucursalesEmpresa.length > 0) {
+            const primeraSucursalId = String(sucursalesEmpresa[0].id)
+            payloadUpdate.sucursal_activa = primeraSucursalId
+            
+            localStorage.setItem("sucursal_activa", primeraSucursalId)
+            document.cookie = `sucursal_activa=${primeraSucursalId}; path=/; max-age=86400; SameSite=Lax`
+          }
+
+          await supabase
+            .from("usuarios_perfiles")
+            .update(payloadUpdate)
+            .eq("id", userId)
+        }
+      }
+    } catch (err) {
+      console.error("Error al actualizar empresa_activa y sucursal_activa en usuarios_perfiles:", err)
+    }
+  }
+
   const obtenerSiguienteCodigo = async (conceptoPadreId: string) => {
     if (!conceptoPadreId) return
     try {
-      const res = await fetch(
-        `/api/subconceptos_niif?accion=siguiente_codigo&concepto_niif_id=${conceptoPadreId}`
-      )
-      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`)
-
-      const json = await res.json()
-      if (json.exito && json.siguiente_codigo) {
-        setFormData((prev) => ({ ...prev, codigo: json.siguiente_codigo }))
+      const res = await siguienteCodigoSubconceptoAction(conceptoPadreId)
+      if (res.exito && res.siguiente_codigo) {
+        setFormData((prev) => ({ ...prev, codigo: res.siguiente_codigo! }))
       } else {
         mostrarNotificacion('info', 'No se pudo generar un código automático, ingréselo manualmente.')
       }
     } catch (error) {
       console.error('Error al obtener código sugerido:', error)
-      mostrarNotificacion('error', 'Error de red al solicitar el código sugerido')
+      mostrarNotificacion('error', 'Error al solicitar el código sugerido')
     }
   }
 
@@ -220,29 +303,17 @@ export default function SubconceptosNiifPage() {
 
     setCambiandoEstadoId(item.id)
     try {
-      const payload = {
+      const res = await actualizarSubconceptoAction({
         id: item.id,
-        empresa_id: empresaSeleccionada,
-        concepto_niif_id: item.concepto_niif_id,
-        codigo: item.codigo,
         nombre: item.nombre,
-        descripcion: item.descripcion || '',
         activo: nuevoEstado
-      }
-
-      const res = await fetch('/api/subconceptos_niif', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
       })
 
-      const json = await res.json()
-
-      if (json.exito) {
+      if (res.exito) {
         mostrarNotificacion('exito', `Estado actualizado a ${nuevoEstado ? 'Activo' : 'Inactivo'}`)
-        cargarSubconceptos(empresaSeleccionada)
+        cargarDatosEmpresa(empresaIdSeleccionada)
       } else {
-        mostrarNotificacion('error', json.mensaje || 'No se pudo actualizar el estado')
+        mostrarNotificacion('error', res.mensaje || 'No se pudo actualizar el estado')
       }
     } catch (error) {
       console.error('Error al cambiar estado:', error)
@@ -253,29 +324,23 @@ export default function SubconceptosNiifPage() {
   }
 
   const handleEliminarSubconcepto = async (item: any) => {
-    const confirmacion = window.confirm(
-      `¿Está seguro de eliminar el subconcepto "${item.nombre}" (${item.codigo})?`
-    )
+    const confirmacion = window.confirm(`¿Está seguro de eliminar el subconcepto "${item.nombre}" (${item.codigo})?`)
     if (!confirmacion) return
 
-    setEliminatingId(item.id)
+    setEliminandoId(item.id)
     try {
-      const res = await fetch(`/api/subconceptos_niif?id=${item.id}`, {
-        method: 'DELETE'
-      })
-      const json = await res.json()
-
-      if (json.exito) {
+      const res = await eliminarSubconceptoAction(item.id)
+      if (res.exito) {
         mostrarNotificacion('exito', 'Subconcepto eliminado correctamente')
-        cargarSubconceptos(empresaSeleccionada)
+        cargarDatosEmpresa(empresaIdSeleccionada)
       } else {
-        mostrarNotificacion('error', json.mensaje || 'No se puede eliminar el subconcepto')
+        mostrarNotificacion('error', res.mensaje || 'No se puede eliminar el subconcepto')
       }
     } catch (error) {
       console.error('Error al eliminar subconcepto:', error)
       mostrarNotificacion('error', 'Error al procesar la eliminación')
     } finally {
-      setEliminatingId(null)
+      setEliminandoId(null)
     }
   }
 
@@ -342,7 +407,7 @@ export default function SubconceptosNiifPage() {
       codigo: item.codigo || '',
       nombre: item.nombre || '',
       descripcion: item.descripcion || '',
-      elemento: item.elemento || '',
+      elemento: item.elemento || obtenerElementoTexto(item),
       activo: Boolean(item.activo)
     })
 
@@ -351,15 +416,8 @@ export default function SubconceptosNiifPage() {
 
   const validarFormulario = () => {
     const nuevosErrores: Record<string, string> = {}
-
-    if (!formData.concepto_niif_id) {
-      nuevosErrores.concepto_niif_id = 'Seleccione un concepto NIIF padre'
-    }
-
-    if (!formData.codigo.trim()) {
-      nuevosErrores.codigo = 'Código no disponible'
-    }
-
+    if (!formData.concepto_niif_id) nuevosErrores.concepto_niif_id = 'Seleccione un concepto NIIF padre'
+    if (!formData.codigo.trim()) nuevosErrores.codigo = 'Código no disponible'
     if (!formData.nombre.trim()) {
       nuevosErrores.nombre = 'El nombre es obligatorio'
     } else if (formData.nombre.trim().length < 3) {
@@ -372,39 +430,34 @@ export default function SubconceptosNiifPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-
     if (!validarFormulario()) return
 
     setGuardando(true)
-
     try {
-      const url = '/api/subconceptos_niif'
-      const method = modoEdicion ? 'PUT' : 'POST'
-
-      const payload = {
-        ...formData,
-        activo: modoEdicion ? formData.activo : true,
-        empresa_id: empresaSeleccionada,
-        id: modoEdicion ? subconceptoEditarId : undefined
+      let res;
+      if (modoEdicion && subconceptoEditarId) {
+        res = await actualizarSubconceptoAction({
+          id: subconceptoEditarId,
+          concepto_niif_id: formData.concepto_niif_id,
+          nombre: formData.nombre,
+          descripcion: formData.descripcion,
+          elemento: formData.elemento,
+          activo: formData.activo
+        })
+      } else {
+        res = await crearSubconceptoAction({
+          empresa_id: empresaIdSeleccionada,
+          concepto_niif_id: formData.concepto_niif_id,
+          codigo: formData.codigo,
+          nombre: formData.nombre,
+          descripcion: formData.descripcion,
+          elemento: formData.elemento
+        })
       }
 
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-
-      const json = await res.json()
-
-      if (json.exito) {
-        mostrarNotificacion(
-          'exito',
-          modoEdicion
-            ? 'Subconcepto actualizado correctamente'
-            : 'Subconcepto registrado con éxito'
-        )
-
-        cargarSubconceptos(empresaSeleccionada)
+      if (res.exito) {
+        mostrarNotificacion('exito', modoEdicion ? 'Subconcepto actualizado correctamente' : 'Subconcepto registrado con éxito')
+        cargarDatosEmpresa(empresaIdSeleccionada)
 
         if (modoEdicion) {
           setModalAbierto(false)
@@ -423,7 +476,7 @@ export default function SubconceptosNiifPage() {
           await obtenerSiguienteCodigo(padreActual)
         }
       } else {
-        mostrarNotificacion('error', json.mensaje || 'Ocurrió un error al procesar la solicitud')
+        mostrarNotificacion('error', res.mensaje || 'Ocurrió un error al procesar la solicitud')
       }
     } catch (error) {
       console.error('Error al guardar subconcepto:', error)
@@ -434,7 +487,7 @@ export default function SubconceptosNiifPage() {
   }
 
   const abrirModalCopia = () => {
-    if (!empresaSeleccionada) {
+    if (!empresaIdSeleccionada) {
       mostrarNotificacion('info', 'Seleccione una empresa de origen primero')
       return
     }
@@ -456,23 +509,16 @@ export default function SubconceptosNiifPage() {
 
     setCopiando(true)
     try {
-      const res = await fetch('/api/subconceptos_niif', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accion: 'copiar_a_empresas',
-          empresa_origen_id: empresaSeleccionada,
-          empresas_destino_ids: empresasDestino
-        })
+      const res = await clonarSubconceptosAction({
+        empresa_origen_id: empresaIdSeleccionada,
+        empresas_destino_ids: empresasDestino
       })
 
-      const json = await res.json()
-
-      if (json.exito) {
-        mostrarNotificacion('exito', json.mensaje || 'Copia realizada con éxito')
+      if (res.exito) {
+        mostrarNotificacion('exito', res.mensaje || 'Copia realizada con éxito')
         setModalCopiaAbierto(false)
       } else {
-        mostrarNotificacion('error', json.mensaje || 'Ocurrió un error durante la copia')
+        mostrarNotificacion('error', res.mensaje || 'Ocurrió un error durante la copia')
       }
     } catch (error) {
       console.error('Error al copiar subconceptos:', error)
@@ -489,73 +535,48 @@ export default function SubconceptosNiifPage() {
         !termino ||
         (item.nombre && item.nombre.toLowerCase().includes(termino)) ||
         (item.codigo && item.codigo.toLowerCase().includes(termino)) ||
-        (item.descripcion && item.descripcion.toLowerCase().includes(termino))
+        (item.descripcion && item.descripcion.toLowerCase().includes(termino)) ||
+        (item.elemento && item.elemento.toLowerCase().includes(termino))
 
-      const coincidePadre = filtroPadre
-        ? String(item.concepto_niif_id) === String(filtroPadre)
-        : true
+      const coincidePadre = filtroPadre ? String(item.concepto_niif_id) === String(filtroPadre) : true
 
       const esActivo = Boolean(item.activo)
       const coincideEstado =
-        filtroEstado === 'todos'
-          ? true
-          : filtroEstado === 'activos'
-          ? esActivo
-          : !esActivo
+        filtroEstado === 'todos' ? true : filtroEstado === 'activos' ? esActivo : !esActivo
 
       return coincideTexto && coincidePadre && coincideEstado
     })
   }, [subconceptos, filtroBusqueda, filtroPadre, filtroEstado])
 
-  interface GrupoSubconceptos {
-    padreId: string;
-    padreCodigo: string;
-    padreNombre: string;
-    items: any[];
-  }
-
-  const subconceptosAgrupadosPorPadre = useMemo(() => {
-    const grupos: Record<string, GrupoSubconceptos> = {}
-    subconceptosFiltrados.forEach((item) => {
-      const padreId = item.concepto_niif_id ? String(item.concepto_niif_id) : 'sin_padre'
-      const padreNombre = item.conceptos_niif?.nombre || 'Concepto no especificado'
-      const padreCodigo = item.conceptos_niif?.codigo_concepto || ''
-
-      if (!grupos[padreId]) {
-        grupos[padreId] = {
-          padreId,
-          padreCodigo,
-          padreNombre,
-          items: []
-        }
-      }
-      grupos[padreId].items.push(item)
-    })
-    return Object.values(grupos)
-  }, [subconceptosFiltrados])
-
   const conceptosPadreAgrupadosPorElemento = useMemo(() => {
+    const ordenElementos = ['ACTIVO', 'PASIVO', 'PATRIMONIO', 'INGRESOS', 'GASTOS', 'COSTOS']
     const grupos: Record<string, any[]> = {}
-    conceptosPadre.forEach((c) => {
-      const elemento = obtenerElementoTexto(c) || 'GENERAL / OTROS'
-      if (!grupos[elemento]) {
-        grupos[elemento] = []
-      }
-      grupos[elemento].push(c)
+
+    ordenElementos.forEach((elem) => {
+      grupos[elem] = []
     })
-    return grupos
+
+    conceptosPadre.forEach((c) => {
+      const elementoRaw = (obtenerElementoTexto(c) || 'GENERAL / OTROS').trim().toUpperCase()
+      const elementoKey = ordenElementos.includes(elementoRaw) ? elementoRaw : 'GENERAL / OTROS'
+      if (!grupos[elementoKey]) {
+        grupos[elementoKey] = []
+      }
+      grupos[elementoKey].push(c)
+    })
+
+    return Object.fromEntries(Object.entries(grupos).filter(([_, lista]) => lista.length > 0))
   }, [conceptosPadre])
 
   if (!isMounted) {
-    return null
+    return <div className="p-4 max-w-7xl mx-auto space-y-3 text-gray-500 text-xs">Cargando módulo de subconceptos NIIF...</div>
   }
 
   return (
-    <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4 bg-slate-50/50 min-h-screen text-xs md:text-sm">
-      {/* NOTIFICACIÓN FLOTANTE */}
+    <div className="p-3 md:p-4 max-w-7xl mx-auto space-y-3 text-xs">
       {notificacion.visible && (
         <div
-          className={`fixed top-5 right-5 z-50 flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl shadow-lg border text-xs font-medium transition-all transform animate-in fade-in slide-in-from-top-4 ${
+          className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-lg shadow-md border text-xs font-medium transition-all transform animate-in fade-in slide-in-from-top-4 ${
             notificacion.tipo === 'exito'
               ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
               : notificacion.tipo === 'error'
@@ -563,9 +584,9 @@ export default function SubconceptosNiifPage() {
               : 'bg-sky-50 text-sky-800 border-sky-200'
           }`}
         >
-          {notificacion.tipo === 'exito' && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-          {notificacion.tipo === 'error' && <AlertCircle className="w-4 h-4 text-rose-600" />}
-          {notificacion.tipo === 'info' && <Info className="w-4 h-4 text-sky-600" />}
+          {notificacion.tipo === 'exito' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+          {notificacion.tipo === 'error' && <AlertCircle className="w-3.5 h-3.5 text-rose-600" />}
+          {notificacion.tipo === 'info' && <Info className="w-3.5 h-3.5 text-sky-600" />}
           <span>{notificacion.mensaje}</span>
           <button
             onClick={() => setNotificacion((prev) => ({ ...prev, visible: false }))}
@@ -577,60 +598,57 @@ export default function SubconceptosNiifPage() {
       )}
 
       {/* ENCABEZADO Y SELECTOR DE EMPRESA */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-4 rounded-xl shadow-sm border border-slate-200/80">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-3 rounded-lg shadow-sm border border-gray-200 gap-3">
         <div className="flex items-center gap-2.5">
-          <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
-            <Layers className="w-5 h-5" />
-          </div>
+          <Link
+            href="/modulos/contabilidad/configuracion"
+            className="inline-flex items-center justify-center p-2 bg-gray-50 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-100 shadow-2xs transition-colors shrink-0 cursor-pointer"
+            title="Volver al Menú de Configuración"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-blue-600" />
+          </Link>
           <div>
-            <h1 className="text-lg font-bold text-slate-800 tracking-tight">
-              Subconceptos NIIF
-            </h1>
-            <p className="text-[11px] text-slate-500">
-              Configuración y detalle de subcuentas contables
-            </p>
+            <h1 className="text-base font-bold text-gray-800">Subconceptos NIIF</h1>
+            <p className="text-[11px] text-gray-500">Configuración y detalle de subcuentas contables</p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg">
-            <Building2 className="w-3.5 h-3.5 text-slate-400" />
-            <select
-              value={empresaSeleccionada}
-              onChange={(e) => setEmpresaSeleccionada(e.target.value)}
-              disabled={loadingEmpresas}
-              className="bg-transparent text-xs font-semibold text-slate-700 outline-none cursor-pointer pr-1"
-            >
-              {loadingEmpresas ? (
-                <option value="">Cargando empresas...</option>
-              ) : (
-                empresas.map((emp) => (
-                  <option key={emp.id} value={String(emp.id)}>
-                    {emp.razon_social || emp.nombre_comercial}
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
+        <div className="flex items-center space-x-2 w-full md:w-auto">
+          <select
+            value={empresaIdSeleccionada}
+            disabled={loadingEmpresas || empresas.length <= 1}
+            onChange={handleEmpresaChange}
+            className="border border-gray-300 px-2.5 py-1.5 rounded-md bg-white text-xs font-semibold text-gray-700 shadow-2xs focus:ring-2 focus:ring-blue-500 outline-none min-w-[220px] disabled:bg-gray-100 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {loadingEmpresas ? (
+              <option value="">Cargando empresas...</option>
+            ) : empresas.length !== 1 ? (
+              <option value="">-- Seleccione una Empresa --</option>
+            ) : null}
+            {empresas.map((emp) => (
+              <option key={emp.id} value={String(emp.id)}>
+                🏢 {emp.razon_social || emp.nombre_comercial}
+              </option>
+            ))}
+          </select>
 
           <button
             onClick={() => {
-              if (empresaSeleccionada) {
-                cargarConceptosPadre(empresaSeleccionada)
-                cargarSubconceptos(empresaSeleccionada)
+              if (empresaIdSeleccionada) {
+                cargarDatosEmpresa(empresaIdSeleccionada)
               }
             }}
             title="Recargar datos"
-            className="p-2 text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-lg transition cursor-pointer"
+            className="p-1.5 text-gray-600 hover:text-blue-600 bg-gray-50 hover:bg-blue-50 border border-gray-300 rounded-md transition cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loadingTabla ? 'animate-spin' : ''}`} />
           </button>
 
           <button
             onClick={abrirModalCopia}
-            disabled={!empresaSeleccionada || subconceptos.length === 0}
+            disabled={!empresaIdSeleccionada || subconceptos.length === 0}
             title="Copiar subconceptos a otras empresas"
-            className="px-3 py-2 text-slate-700 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+            className="px-2.5 py-1.5 text-gray-700 hover:text-blue-600 bg-gray-50 hover:bg-blue-50 border border-gray-300 rounded-md text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 shadow-2xs transition cursor-pointer"
           >
             <Copy className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Copiar a Empresas</span>
@@ -639,7 +657,7 @@ export default function SubconceptosNiifPage() {
           <button
             onClick={abrirModalCrear}
             disabled={conceptosPadre.length === 0 || loadingPadres}
-            className="px-3.5 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-3 py-1.5 rounded-md shadow-2xs transition-colors disabled:opacity-50 text-xs whitespace-nowrap cursor-pointer flex items-center gap-1"
           >
             <Plus className="w-3.5 h-3.5" />
             Nuevo Subconcepto
@@ -648,42 +666,47 @@ export default function SubconceptosNiifPage() {
       </div>
 
       {/* BARRA DE FILTROS */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-2 bg-white p-3 rounded-lg shadow-sm border border-gray-200">
         <div className="relative md:col-span-2">
-          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
-            placeholder="Buscar por código, nombre o descripción..."
+            placeholder="Buscar por código, nombre, descripción o elemento..."
             value={filtroBusqueda}
             onChange={(e) => setFiltroBusqueda(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500 transition shadow-sm"
+            className="w-full pl-8 pr-3 py-1.5 bg-white border border-gray-300 rounded-md text-xs outline-none focus:ring-2 focus:ring-blue-500 transition shadow-2xs"
           />
           {filtroBusqueda && (
             <button
               onClick={() => setFiltroBusqueda('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
 
+        {/* SELECTOR DE CONCEPTOS PADRES AGRUPADOS POR ELEMENTO NIIF */}
         <div className="relative">
-          <Filter className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Filter className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <select
             value={filtroPadre}
             onChange={(e) => setFiltroPadre(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-700 outline-none focus:border-indigo-500 transition shadow-sm cursor-pointer"
+            className="w-full pl-8 pr-3 py-1.5 bg-white border border-gray-300 rounded-md text-xs text-gray-700 outline-none focus:ring-2 focus:ring-blue-500 transition shadow-2xs cursor-pointer"
           >
             <option value="">Todos los conceptos padres</option>
-            {conceptosPadre.map((c) => {
-              const elem = obtenerElementoTexto(c)
-              return (
-                <option key={c.id} value={String(c.id)}>
-                  {c.codigo_concepto} - {c.nombre} {elem ? `[${elem}]` : ''}
-                </option>
-              )
-            })}
+            {Object.entries(conceptosPadreAgrupadosPorElemento).map(([elementoGrupo, listaPadres]) => (
+              <optgroup key={elementoGrupo} label={`── ${elementoGrupo} ──`}>
+                {listaPadres.map((c: any) => {
+                  const elem = obtenerElementoTexto(c)
+                  return (
+                    <option key={c.id} value={String(c.id)}>
+                      {c.codigo_concepto} - {c.nombre} {elem ? `[${elem}]` : ''}
+                    </option>
+                  )
+                })}
+              </optgroup>
+            ))}
           </select>
         </div>
 
@@ -691,7 +714,7 @@ export default function SubconceptosNiifPage() {
           <select
             value={filtroEstado}
             onChange={(e) => setFiltroEstado(e.target.value)}
-            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-700 outline-none focus:border-indigo-500 transition shadow-sm cursor-pointer"
+            className="w-full px-3 py-1.5 bg-white border border-gray-300 rounded-md text-xs text-gray-700 outline-none focus:ring-2 focus:ring-blue-500 transition shadow-2xs cursor-pointer"
           >
             <option value="todos">Todos los estados</option>
             <option value="activos">Solo Activos</option>
@@ -700,174 +723,151 @@ export default function SubconceptosNiifPage() {
         </div>
       </div>
 
-      {/* CONTENEDOR PRINCIPAL BASADO EN TARJETAS AGRUPADAS */}
-      <div className="space-y-4">
+      {/* CONTENEDOR PRINCIPAL: TABLA ÚNICA COMPACTA SIN AGRUPACIONES DE PADRE */}
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
         {loadingTabla ? (
-          <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
-            <RefreshCw className="w-6 h-6 text-indigo-500 animate-spin mx-auto mb-2" />
-            <p className="text-xs font-medium text-slate-600">Cargando subconceptos NIIF...</p>
-          </div>
+          <div className="p-8 text-center text-gray-500 text-xs">Cargando subconceptos NIIF...</div>
         ) : subconceptosFiltrados.length === 0 ? (
-          <div className="bg-white rounded-xl border border-slate-200 p-12 text-center max-w-sm mx-auto">
-            <div className="w-10 h-10 bg-slate-100 text-slate-400 rounded-xl flex items-center justify-center mx-auto mb-2">
+          <div className="p-8 text-center max-w-sm mx-auto">
+            <div className="w-10 h-10 bg-gray-50 text-gray-400 rounded-full flex items-center justify-center mx-auto mb-2">
               <FileText className="w-5 h-5" />
             </div>
-            <h3 className="text-xs font-semibold text-slate-700 mb-0.5">
+            <h3 className="text-xs font-semibold text-gray-800 mb-1">
               No hay subconceptos registrados
             </h3>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
+            <p className="text-[11px] text-gray-500 leading-relaxed">
               {filtroBusqueda || filtroPadre || filtroEstado !== 'todos'
                 ? 'No se encontraron resultados que coincidan con los filtros.'
                 : 'Aún no se han agregado subconceptos para esta empresa.'}
             </p>
           </div>
         ) : (
-          subconceptosAgrupadosPorPadre.map((grupo) => (
-            <div key={grupo.padreId} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="bg-slate-100 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
-                <div className="flex items-center gap-2 truncate">
-                  <FolderKanban className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span className="text-[11px] font-bold text-slate-600 uppercase">Concepto Padre:</span>
-                  <span className="font-mono font-bold text-indigo-700 text-xs shrink-0">{grupo.padreCodigo}</span>
-                  <span className="text-slate-400">-</span>
-                  <span className="font-bold text-slate-800 text-xs truncate">{grupo.padreNombre}</span>
-                </div>
-                <span className="text-[10px] font-semibold text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-md shrink-0 ml-2 shadow-2xs">
-                  {grupo.items.length} subconcepto(s)
-                </span>
-              </div>
-
-              <div className="divide-y divide-slate-100 text-xs">
-                <div className="grid grid-cols-12 bg-slate-50/70 px-4 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  <div className="col-span-2">Código</div>
-                  <div className="col-span-4">Nombre Subconcepto</div>
-                  <div className="col-span-4">Descripción</div>
-                  <div className="col-span-1 text-center">Estado</div>
-                  <div className="col-span-1 text-right">Acciones</div>
-                </div>
-
-                {grupo.items.map((item: any) => {
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead className="bg-gray-50 text-gray-700 uppercase font-semibold border-b border-gray-200 text-[11px]">
+                <tr>
+                  <th className="py-2 px-3 w-32">Código</th>
+                  <th className="py-2 px-3">Nombre Subconcepto</th>
+                  <th className="py-2 px-3 w-28">Elemento</th>
+                  <th className="py-2 px-3">Descripción</th>
+                  <th className="py-2 px-3 text-center w-24">Estado</th>
+                  <th className="py-2 px-3 text-center w-24">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {subconceptosFiltrados.map((item: any) => {
                   const estaActivo = Boolean(item.activo)
+                  const elementoTexto = item.elemento || obtenerElementoTexto(item) || '-'
                   return (
-                    <div key={item.id} className="grid grid-cols-12 items-center px-4 py-2 hover:bg-slate-50/80 transition">
-                      <div className="col-span-2 font-mono font-bold text-indigo-600 text-xs truncate pr-2">
+                    <tr key={item.id} className="hover:bg-gray-50/80 transition-colors">
+                      <td className="py-1.5 px-3 font-mono font-bold text-blue-600 text-xs">
                         {item.codigo}
-                      </div>
-                      <div className="col-span-4 font-semibold text-slate-800 truncate pr-2">
+                      </td>
+                      <td className="py-1.5 px-3 font-medium text-gray-900">
                         {item.nombre}
-                      </div>
-                      <div className="col-span-4 text-slate-500 text-[11px] truncate pr-2">
-                        {item.descripcion || <span className="text-slate-300">Sin descripción</span>}
-                      </div>
-                      <div className="col-span-1 text-center">
+                      </td>
+                      <td className="py-1.5 px-3 font-semibold text-gray-700 uppercase text-[11px]">
+                        <span className="bg-gray-100 px-1.5 py-0.5 rounded border border-gray-200">
+                          {elementoTexto}
+                        </span>
+                      </td>
+                      <td className="py-1.5 px-3 text-gray-500 text-[11px]">
+                        {item.descripcion || <span className="text-gray-300">Sin descripción</span>}
+                      </td>
+                      <td className="py-1.5 px-3 text-center">
                         {cambiandoEstadoId === item.id ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-500">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500">
                             <RefreshCw className="w-3 h-3 animate-spin" /> ...
                           </span>
                         ) : (
-                          <select
-                            value={estaActivo ? 'true' : 'false'}
-                            onChange={(e) =>
-                              handleCambiarEstado(item, e.target.value === 'true')
-                            }
-                            className={`cursor-pointer text-[10px] font-semibold px-2 py-0.5 rounded-full border outline-none transition ${
+                          <button
+                            onClick={() => handleCambiarEstado(item, !estaActivo)}
+                            type="button"
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-semibold cursor-pointer ${
                               estaActivo
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                                : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                                : 'bg-red-100 text-red-800 hover:bg-red-200'
                             }`}
                           >
-                            <option value="true">Activo</option>
-                            <option value="false">Inactivo</option>
-                          </select>
+                            {estaActivo ? 'Activo' : 'Inactivo'}
+                          </button>
                         )}
-                      </div>
-                      <div className="col-span-1 text-right">
-                        <div className="flex items-center justify-end gap-1">
+                      </td>
+                      <td className="py-1.5 px-3 text-center">
+                        <div className="flex items-center justify-center space-x-1.5">
                           <button
                             onClick={() => abrirModalEditar(item)}
-                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
+                            type="button"
+                            className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded cursor-pointer"
                             title="Editar"
                           >
-                            <Edit2 className="w-3.5 h-3.5" />
+                            ✏️
                           </button>
                           <button
                             onClick={() => handleEliminarSubconcepto(item)}
                             disabled={eliminandoId === item.id}
-                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition disabled:opacity-50 cursor-pointer"
+                            type="button"
+                            className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded disabled:opacity-30 cursor-pointer"
                             title="Eliminar"
                           >
                             {eliminandoId === item.id ? (
-                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-red-600" />
                             ) : (
-                              <Trash2 className="w-3.5 h-3.5" />
+                              '🗑️'
                             )}
                           </button>
                         </div>
-                      </div>
-                    </div>
+                      </td>
+                    </tr>
                   )
                 })}
-              </div>
-            </div>
-          ))
-        )}
-
-        {!loadingTabla && subconceptosFiltrados.length > 0 && (
-          <div className="px-4 py-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-500 flex items-center justify-between shadow-2xs">
-            <span>
-              Mostrando <strong>{subconceptosFiltrados.length}</strong> de{' '}
-              <strong>{subconceptos.length}</strong> subconceptos en total.
-            </span>
+              </tbody>
+            </table>
           </div>
         )}
       </div>
 
-      {/* MODAL CREAR / EDITAR SUBCONCEPTOS */}
+      {/* MODAL CREAR / EDITAR */}
       {modalAbierto && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-xl w-full p-5 space-y-3.5 animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-3 z-50">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto border border-gray-100 p-4 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-gray-100">
               <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                <div className="p-1.5 bg-blue-50 text-blue-600 rounded-md">
                   <Layers className="w-4 h-4" />
                 </div>
                 <div>
-                  <h2 className="text-xs md:text-sm font-bold text-slate-800">
+                  <h2 className="text-sm font-bold text-gray-800">
                     {modoEdicion ? 'Editar Subconcepto NIIF' : 'Nuevo Subconcepto NIIF'}
                   </h2>
-                  <p className="text-[11px] text-slate-500">
-                    {modoEdicion
-                      ? 'Modifica los datos del subconcepto seleccionado'
-                      : 'Crea subconceptos de forma continua'}
-                  </p>
                 </div>
               </div>
-
               <button
                 onClick={() => setModalAbierto(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                type="button"
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors cursor-pointer"
               >
-                <X className="w-4 h-4" />
+                ✕
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-3">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <form onSubmit={handleSubmit} className="space-y-2.5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                 <div className="md:col-span-2">
-                  <label className="block text-[10px] font-semibold text-slate-600 mb-1 uppercase tracking-wider">
+                  <label className="block text-[11px] font-semibold text-gray-600 uppercase mb-1">
                     Concepto NIIF Padre *
                   </label>
                   <select
                     value={formData.concepto_niif_id}
                     onChange={(e) => handleConceptoPadreChange(e.target.value)}
                     disabled={modoEdicion}
-                    className={`w-full px-2.5 py-1.5 bg-white border rounded-lg text-xs font-medium text-slate-700 outline-none focus:border-indigo-500 transition cursor-pointer ${
-                      modoEdicion ? 'bg-slate-100 cursor-not-allowed opacity-80' : ''
-                    } ${erroresForm.concepto_niif_id ? 'border-rose-400' : 'border-slate-200'}`}
+                    className={`w-full text-xs border p-1.5 rounded-md bg-white font-medium text-gray-700 outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer ${
+                      modoEdicion ? 'bg-gray-100 cursor-not-allowed opacity-80' : ''
+                    } ${erroresForm.concepto_niif_id ? 'border-red-500' : 'border-gray-300'}`}
                   >
                     <option value="">Seleccione un concepto...</option>
                     {Object.entries(conceptosPadreAgrupadosPorElemento).map(([elementoGrupo, listaPadres]) => (
-                      <optgroup key={elementoGrupo} label={`── ${elementoGrupo.toUpperCase()} ──`}>
+                      <optgroup key={elementoGrupo} label={`── ${elementoGrupo} ──`}>
                         {listaPadres.map((c: any) => {
                           const elem = obtenerElementoTexto(c)
                           return (
@@ -880,12 +880,12 @@ export default function SubconceptosNiifPage() {
                     ))}
                   </select>
                   {erroresForm.concepto_niif_id && (
-                    <p className="text-[10px] text-rose-500 mt-0.5">{erroresForm.concepto_niif_id}</p>
+                    <p className="text-red-500 text-[10px] mt-0.5">{erroresForm.concepto_niif_id}</p>
                   )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-600 mb-1 uppercase tracking-wider">
+                  <label className="block text-[11px] font-semibold text-gray-600 uppercase mb-1">
                     Código *
                   </label>
                   <input
@@ -896,68 +896,81 @@ export default function SubconceptosNiifPage() {
                       setErroresForm((prev) => ({ ...prev, codigo: null }))
                     }}
                     placeholder="Generando..."
-                    className="w-full px-2.5 py-1.5 font-mono font-bold text-center text-indigo-600 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500 transition"
+                    className="w-full text-xs border border-gray-300 p-1.5 rounded-md bg-gray-50 font-mono font-bold text-center text-blue-600 outline-none"
                   />
                   {erroresForm.codigo && (
-                    <p className="text-[10px] text-rose-500 mt-0.5">{erroresForm.codigo}</p>
+                    <p className="text-red-500 text-[10px] mt-0.5">{erroresForm.codigo}</p>
                   )}
                 </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-600 mb-1 uppercase tracking-wider">
-                  Nombre del Subconcepto *
-                </label>
-                <input
-                  type="text"
-                  value={formData.nombre}
-                  onChange={(e) => {
-                    setFormData((prev) => ({ ...prev, nombre: e.target.value }))
-                    setErroresForm((prev) => ({ ...prev, nombre: null }))
-                  }}
-                  placeholder="Ingrese el nombre descriptivo"
-                  className={`w-full px-3 py-1.5 bg-white border rounded-lg text-xs outline-none focus:border-indigo-500 transition ${
-                    erroresForm.nombre ? 'border-rose-400' : 'border-slate-200'
-                  }`}
-                />
-                {erroresForm.nombre && (
-                  <p className="text-[10px] text-rose-500 mt-0.5">{erroresForm.nombre}</p>
-                )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-600 uppercase mb-1">
+                    Nombre del Subconcepto *
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.nombre}
+                    onChange={(e) => {
+                      setFormData((prev) => ({ ...prev, nombre: e.target.value }))
+                      setErroresForm((prev) => ({ ...prev, nombre: null }))
+                    }}
+                    placeholder="Ingrese el nombre"
+                    className={`w-full text-xs border p-1.5 rounded-md outline-none focus:ring-2 focus:ring-blue-500 ${
+                      erroresForm.nombre ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  />
+                  {erroresForm.nombre && (
+                    <p className="text-red-500 text-[10px] mt-0.5">{erroresForm.nombre}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-600 uppercase mb-1">
+                    Elemento
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.elemento}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, elemento: e.target.value }))}
+                    placeholder="Ej: ACTIVO"
+                    className="w-full text-xs border border-gray-300 p-1.5 rounded-md bg-gray-50 font-semibold uppercase outline-none"
+                  />
+                </div>
               </div>
 
               <div>
-                <label className="block text-[10px] font-semibold text-slate-600 mb-1 uppercase tracking-wider">
+                <label className="block text-[11px] font-semibold text-gray-600 uppercase mb-1">
                   Descripción (Opcional)
                 </label>
                 <textarea
                   rows={2}
                   value={formData.descripcion}
-                  onChange={(e) =>
-                    setFormData((prev) => ({ ...prev, descripcion: e.target.value }))
-                  }
+                  onChange={(e) => setFormData((prev) => ({ ...prev, descripcion: e.target.value }))}
                   placeholder="Notas adicionales..."
-                  className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500 transition resize-none"
+                  className="w-full text-xs border border-gray-300 p-1.5 rounded-md outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                 />
               </div>
 
-              <div className="flex items-center justify-between pt-2.5 border-t border-slate-100">
-                <span className="text-[10px] text-slate-400">
+              <div className="flex justify-between items-center pt-2.5 border-t border-gray-100">
+                <span className="text-[10px] text-gray-400">
                   {!modoEdicion && 'El formulario permanecerá abierto para agilizar.'}
                 </span>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex space-x-2">
                   <button
                     type="button"
                     onClick={() => setModalAbierto(false)}
                     disabled={guardando}
-                    className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                    className="px-2.5 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 hover:bg-gray-50 cursor-pointer"
                   >
                     {modoEdicion ? 'Cancelar' : 'Cerrar'}
                   </button>
                   <button
                     type="submit"
                     disabled={guardando}
-                    className="px-4 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-medium disabled:opacity-50 cursor-pointer flex items-center gap-1"
                   >
                     {guardando && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                     {modoEdicion ? 'Guardar Cambios' : 'Grabar Subconcepto'}
@@ -969,65 +982,61 @@ export default function SubconceptosNiifPage() {
         </div>
       )}
 
-      {/* MODAL COPIAR SUBCONCEPTOS */}
+      {/* MODAL COPIAR */}
       {modalCopiaAbierto && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-md w-full p-5 space-y-3.5 animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-3 z-50">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full border border-gray-100 p-4 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-gray-100">
               <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                <div className="p-1.5 bg-blue-50 text-blue-600 rounded-md">
                   <Copy className="w-4 h-4" />
                 </div>
                 <div>
-                  <h2 className="text-xs md:text-sm font-bold text-slate-800">
-                    Copiar Subconceptos a Otras Empresas
-                  </h2>
-                  <p className="text-[11px] text-slate-500">
-                    Sincronice la estructura actual
-                  </p>
+                  <h2 className="text-sm font-bold text-gray-800">Copiar Subconceptos</h2>
+                  <p className="text-[11px] text-gray-500">Sincronice la estructura con otras empresas</p>
                 </div>
               </div>
-
               <button
                 onClick={() => setModalCopiaAbierto(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                type="button"
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors cursor-pointer"
               >
-                <X className="w-4 h-4" />
+                ✕
               </button>
             </div>
 
-            <div className="space-y-2.5">
-              <p className="text-[11px] text-slate-600 leading-relaxed">
+            <div className="space-y-2">
+              <p className="text-xs text-gray-600 leading-relaxed">
                 Seleccione las empresas de destino hacia las cuales desea copiar:
               </p>
 
-              <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 bg-slate-50/50 p-1.5 space-y-1">
+              <div className="max-h-44 overflow-y-auto border border-gray-200 rounded-md divide-y divide-gray-100 bg-gray-50/50 p-1 space-y-1">
                 {empresas
-                  .filter((emp) => String(emp.id) !== empresaSeleccionada)
+                  .filter((emp) => String(emp.id) !== String(empresaIdSeleccionada))
                   .map((emp) => {
                     const empIdStr = String(emp.id)
                     const checked = empresasDestino.includes(empIdStr)
                     return (
                       <label
                         key={emp.id}
-                        className={`flex items-center gap-2.5 p-2 rounded-lg border cursor-pointer transition select-none ${
+                        className={`flex items-center gap-2 p-1.5 rounded-md border cursor-pointer transition select-none ${
                           checked
-                            ? 'bg-indigo-50/60 border-indigo-200 text-indigo-900'
-                            : 'bg-white border-transparent hover:border-slate-200 text-slate-700'
+                            ? 'bg-blue-50/60 border-blue-200 text-blue-900'
+                            : 'bg-white border-transparent hover:border-gray-200 text-gray-700'
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={checked}
                           onChange={() => toggleEmpresaDestino(empIdStr)}
-                          className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                          className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
                         />
                         <div className="flex flex-col">
                           <span className="text-xs font-semibold">
                             {emp.razon_social || emp.nombre_comercial}
                           </span>
-                          {emp.nit && (
-                            <span className="text-[10px] text-slate-400">NIT: {emp.nit}</span>
+                          {emp.nit_identificacion && (
+                            <span className="text-[10px] text-gray-400">NIT: {emp.nit_identificacion}</span>
                           )}
                         </div>
                       </label>
@@ -1036,17 +1045,17 @@ export default function SubconceptosNiifPage() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between pt-2.5 border-t border-slate-100">
-              <span className="text-[10px] text-slate-400">
+            <div className="flex justify-between items-center pt-2.5 border-t border-gray-100">
+              <span className="text-[11px] text-gray-400">
                 {empresasDestino.length} empresa(s) seleccionada(s)
               </span>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex space-x-2">
                 <button
                   type="button"
                   onClick={() => setModalCopiaAbierto(false)}
                   disabled={copiando}
-                  className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                  className="px-2.5 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 hover:bg-gray-50 cursor-pointer"
                 >
                   Cancelar
                 </button>
@@ -1054,7 +1063,7 @@ export default function SubconceptosNiifPage() {
                   type="button"
                   onClick={handleCopiarASubconceptos}
                   disabled={copiando || empresasDestino.length === 0}
-                  className="px-4 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-medium disabled:opacity-50 cursor-pointer flex items-center gap-1"
                 >
                   {copiando && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                   Procesar Copia

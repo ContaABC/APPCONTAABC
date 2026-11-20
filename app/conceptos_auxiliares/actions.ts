@@ -1,16 +1,7 @@
-import { NextResponse } from 'next/server'
+'use server'
+
 import { cookies } from 'next/headers'
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false
-  }
-})
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // Valores válidos para "Tipo de Auxiliar"
 const TIPOS_AUXILIAR_VALIDOS = [
@@ -29,17 +20,18 @@ const TIPOS_AUXILIAR_VALIDOS = [
 ]
 
 // ==========================================
-// MÉTODOS GET (Consultar datos)
+// 1. OBTENER DATOS (Equivalente al GET)
 // ==========================================
-export async function GET(request) {
+export async function getConceptosAuxiliaresData(params?: {
+  accion?: string
+  empresa_id?: string | number
+  subconcepto_niif_id?: string | number
+}) {
   try {
-    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
-    const { searchParams } = new URL(request.url)
-    const accion = searchParams.get('accion')
-    
-    // Captura automática de empresaId: si no viene en los parámetros, se lee de la cookie activa
-    const empresaId = searchParams.get('empresa_id') || cookieStore.get('empresa_activa')?.value
-    const subconceptoNiifId = searchParams.get('subconcepto_niif_id')
+    const cookieStore = await cookies()
+    const empresaId = params?.empresa_id || cookieStore.get('empresa_activa')?.value
+    const subconceptoNiifId = params?.subconcepto_niif_id
+    const accion = params?.accion
 
     // 1. Listar empresas activas
     if (accion === 'listar_empresas') {
@@ -51,16 +43,13 @@ export async function GET(request) {
 
       if (error) throw error
 
-      return NextResponse.json({ exito: true, datos: empresas || [] })
+      return { exito: true, datos: empresas || [] }
     }
 
     // 2. Listar Subconceptos NIIF por empresa
     if (accion === 'listar_subconceptos_niif') {
       if (!empresaId) {
-        return NextResponse.json(
-          { exito: false, mensaje: 'El parámetro empresa_id es obligatorio o no hay sesión activa' },
-          { status: 400 }
-        )
+        return { exito: false, mensaje: 'El parámetro empresa_id es obligatorio o no hay sesión activa' }
       }
 
       const { data: subconceptos, error } = await supabaseAdmin
@@ -83,16 +72,13 @@ export async function GET(request) {
 
       if (error) throw error
 
-      return NextResponse.json({ exito: true, datos: subconceptos || [] })
+      return { exito: true, datos: subconceptos || [] }
     }
 
     // 3. Generar nuevo Código Auxiliar autogenerado secuencial
     if (accion === 'generar_codigo_auxiliar') {
       if (!empresaId) {
-        return NextResponse.json(
-          { exito: false, mensaje: 'El parámetro empresa_id es requerido o no hay sesión activa' },
-          { status: 400 }
-        )
+        return { exito: false, mensaje: 'El parámetro empresa_id es requerido o no hay sesión activa' }
       }
 
       let query = supabaseAdmin
@@ -120,15 +106,12 @@ export async function GET(request) {
         }
       }
 
-      return NextResponse.json({ exito: true, nuevo_codigo: siguienteCodigo })
+      return { exito: true, nuevo_codigo: siguienteCodigo }
     }
 
     // 4. Listar Conceptos Auxiliares por empresa (Por defecto)
     if (!empresaId) {
-      return NextResponse.json(
-        { exito: false, mensaje: 'El parámetro empresa_id es requerido o no hay sesión activa' },
-        { status: 400 }
-      )
+      return { exito: false, mensaje: 'El parámetro empresa_id es requerido o no hay sesión activa' }
     }
 
     const { data: conceptos, error } = await supabaseAdmin
@@ -154,7 +137,7 @@ export async function GET(request) {
 
     if (error) throw error
 
-    const conceptosFormateados = (conceptos || []).map((item) => ({
+    const conceptosFormateados = (conceptos || []).map((item: any) => ({
       ...item,
       codigo_subconcepto_niif: item.subconceptos_niif?.codigo || null,
       nombre_subconcepto_niif: item.subconceptos_niif?.nombre || null,
@@ -163,27 +146,21 @@ export async function GET(request) {
       elemento_niif: item.elemento || item.subconceptos_niif?.conceptos_niif?.elemento || item.subconceptos_niif?.elemento || null
     }))
 
-    return NextResponse.json({ exito: true, datos: conceptosFormateados })
+    return { exito: true, datos: conceptosFormateados }
 
-  } catch (error) {
-    console.error('❌ Error en GET /api/conceptos_auxiliares:', error)
-    return NextResponse.json(
-      { exito: false, mensaje: 'Error interno en el servidor', error: error.message },
-      { status: 500 }
-    );
+  } catch (error: any) {
+    console.error('❌ Error en getConceptosAuxiliaresData:', error)
+    return { exito: false, mensaje: 'Error interno en el servidor', error: error.message }
   }
 }
 
 // ==========================================
-// MÉTODOS POST (Crear registro)
+// 2. CREAR REGISTRO (Equivalente al POST)
 // ==========================================
-export async function POST(request) {
+export async function crearConceptoAuxiliar(formData: any) {
   try {
-    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
-    const body = await request.json()
-
-    // Captura automática de empresa_id: desde el body o la cookie de sesión activa
-    const empresa_id = body.empresa_id || body.empresaId || cookieStore.get('empresa_activa')?.value
+    const cookieStore = await cookies()
+    const empresa_id = formData.empresa_id || formData.empresaId || cookieStore.get('empresa_activa')?.value
 
     const {
       subconcepto_niif_id,
@@ -193,13 +170,10 @@ export async function POST(request) {
       descripcion,
       estado,
       elemento
-    } = body
+    } = formData
 
     if (!empresa_id || !nombre) {
-      return NextResponse.json(
-        { exito: false, mensaje: 'Faltan campos obligatorios o no hay sesión activa (empresa_id, nombre)' },
-        { status: 400 }
-      )
+      return { exito: false, mensaje: 'Faltan campos obligatorios o no hay sesión activa (empresa_id, nombre)' }
     }
 
     const tipoAuxiliarSanitizado = TIPOS_AUXILIAR_VALIDOS.includes(tipo_entidad)
@@ -242,7 +216,7 @@ export async function POST(request) {
         .from('conceptos_auxiliares')
         .select('id')
         .eq('empresa_id', Number(empresa_id))
-        .eq('codigo_auxiliar', codigoFinal)
+        .eq('codigo_auxiliar', codigoFinal!) // Aseguramos con ! que no es null aquí
 
       if (subconceptoUuid) {
         queryCheck = queryCheck.eq('subconcepto_niif_id', subconceptoUuid)
@@ -251,7 +225,7 @@ export async function POST(request) {
       const { data: existeCodigo } = await queryCheck.maybeSingle()
 
       if (existeCodigo) {
-        const partes = codigoFinal.split('-')
+        const partes: string[] = codigoFinal!.split('-') // Indicamos explícitamente el tipo string[]
         const ultimoSegmento = partes[partes.length - 1]
         const numActual = parseInt(ultimoSegmento, 10)
         
@@ -285,37 +259,28 @@ export async function POST(request) {
 
     if (error) {
       console.error('❌ Error al insertar concepto auxiliar:', error)
-      return NextResponse.json(
-        { exito: false, mensaje: error.message },
-        { status: 400 }
-      )
+      return { exito: false, mensaje: error.message }
     }
 
-    return NextResponse.json({
+    return {
       exito: true,
       mensaje: 'Concepto auxiliar creado correctamente',
       datos: data[0]
-    })
+    }
 
-  } catch (error) {
-    console.error('❌ Error fatal en POST /api/conceptos_auxiliares:', error)
-    return NextResponse.json(
-      { exito: false, mensaje: 'Error interno del servidor', error: error.message },
-      { status: 500 }
-    )
+  } catch (error: any) {
+    console.error('❌ Error fatal en crearConceptoAuxiliar:', error)
+    return { exito: false, mensaje: 'Error interno del servidor', error: error.message }
   }
 }
 
 // ==========================================
-// MÉTODOS PUT (Actualizar registro)
+// 3. ACTUALIZAR REGISTRO (Equivalente al PUT)
 // ==========================================
-export async function PUT(request) {
+export async function actualizarConceptoAuxiliar(formData: any) {
   try {
-    const cookieStore = await cookies() // <-- CORREGIDO: Await obligatorio
-    const body = await request.json()
-
-    // Captura automática opcional de empresa_id si viene en el body o cookie
-    const empresa_id = body.empresa_id || body.empresaId || cookieStore.get('empresa_activa')?.value
+    const cookieStore = await cookies()
+    const empresa_id = formData.empresa_id || formData.empresaId || cookieStore.get('empresa_activa')?.value
 
     const {
       id,
@@ -326,13 +291,10 @@ export async function PUT(request) {
       descripcion,
       estado,
       elemento
-    } = body
+    } = formData
 
     if (!id) {
-      return NextResponse.json(
-        { exito: false, mensaje: 'El id del concepto es obligatorio para actualizar' },
-        { status: 400 }
-      )
+      return { exito: false, mensaje: 'El id del concepto es obligatorio para actualizar' }
     }
 
     const tipoAuxiliarSanitizado = TIPOS_AUXILIAR_VALIDOS.includes(tipo_entidad)
@@ -343,7 +305,7 @@ export async function PUT(request) {
       ? String(subconcepto_niif_id).trim() 
       : null
 
-    const updatePayload = {
+    const updatePayload: any = {
       tipo_entidad: tipoAuxiliarSanitizado,
       descripcion: descripcion ? String(descripcion).trim() : null,
       subconcepto_niif_id: subconceptoUuid,
@@ -363,40 +325,28 @@ export async function PUT(request) {
 
     if (error) {
       console.error('❌ Error al actualizar concepto auxiliar:', error)
-      return NextResponse.json(
-        { exito: false, mensaje: error.message },
-        { status: 400 }
-      )
+      return { exito: false, mensaje: error.message }
     }
 
-    return NextResponse.json({
+    return {
       exito: true,
       mensaje: 'Concepto auxiliar actualizado correctamente',
       datos: data[0]
-    })
+    }
 
-  } catch (error) {
-    console.error('❌ Error fatal en PUT /api/conceptos_auxiliares:', error)
-    return NextResponse.json(
-      { exito: false, mensaje: 'Error interno del servidor', error: error.message },
-      { status: 500 }
-    )
+  } catch (error: any) {
+    console.error('❌ Error fatal en actualizarConceptoAuxiliar:', error)
+    return { exito: false, mensaje: 'Error interno del servidor', error: error.message }
   }
 }
 
 // ==========================================
-// MÉTODOS DELETE (Eliminar registro)
+// 4. ELIMINAR REGISTRO (Equivalente al DELETE)
 // ==========================================
-export async function DELETE(request) {
+export async function eliminarConceptoAuxiliar(id: string | number) {
   try {
-    const { searchParams } = new URL(request.url)
-    const id = searchParams.get('id')
-
     if (!id) {
-      return NextResponse.json(
-        { exito: false, mensaje: 'El id es requerido para eliminar' },
-        { status: 400 }
-      )
+      return { exito: false, mensaje: 'El id es requerido para eliminar' }
     }
 
     const { error } = await supabaseAdmin
@@ -406,22 +356,16 @@ export async function DELETE(request) {
 
     if (error) {
       console.error('❌ Error al eliminar concepto auxiliar:', error)
-      return NextResponse.json(
-        { exito: false, mensaje: error.message },
-        { status: 400 }
-      )
+      return { exito: false, mensaje: error.message }
     }
 
-    return NextResponse.json({
+    return {
       exito: true,
       mensaje: 'Concepto auxiliar eliminado correctamente'
-    })
+    }
 
-  } catch (error) {
-    console.error('❌ Error fatal en DELETE /api/conceptos_auxiliares:', error)
-    return NextResponse.json(
-      { exito: false, mensaje: 'Error interno del servidor', error: error.message },
-      { status: 500 }
-    )
+  } catch (error: any) {
+    console.error('❌ Error fatal en eliminarConceptoAuxiliar:', error)
+    return { exito: false, mensaje: 'Error interno del servidor', error: error.message }
   }
 }

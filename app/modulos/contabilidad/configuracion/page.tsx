@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Settings, ArrowLeft, ArrowRight, Building2, MapPin } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 interface OpcionModulo {
   name: string;
@@ -15,7 +15,30 @@ interface UsuarioPerfil {
   nombres?: string;
   apellidos?: string;
   tipo_usuario?: string;
+  empresa_activa?: string | number | null;
+  sucursal_activa?: string | number | null;
   [key: string]: unknown;
+}
+
+interface SucursalRow {
+  id: number;
+  empresa_id: number;
+  codigo_sucursal: string;
+  nombre: string;
+  estado?: string | null;
+}
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+function setCookieValue(name: string, value: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=86400; SameSite=Lax`;
 }
 
 export default function ConfiguracionPage() {
@@ -23,49 +46,200 @@ export default function ConfiguracionPage() {
   const [sucursalActivaNombre, setSucursalActivaNombre] = useState<string>("Sucursal Principal");
   const [usuarioActual, setUsuarioActual] = useState<UsuarioPerfil | null>(null);
 
-  useEffect(() => {
-    async function initContexto() {
-      // Leer Empresa y Sucursal desde localStorage
-      if (typeof window !== "undefined") {
-        const storedEmpresa = localStorage.getItem("empresa_activa_nombre");
-        const storedSucursal = localStorage.getItem("sucursal_activa_nombre");
-        if (storedEmpresa) setEmpresaActivaNombre(storedEmpresa);
-        if (storedSucursal) setSucursalActivaNombre(storedSucursal);
-      }
+  const sincronizarContextoAlVolver = useCallback(async () => {
+    if (typeof window === "undefined") return;
 
-      // Cargar sesión del usuario
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      if (!supabaseUrl || !supabaseAnonKey) return;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const supabase: SupabaseClient | null =
+      supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data: perfil } = await supabase
-          .from("usuarios_perfiles")
-          .select("*")
-          .eq("id", user.id)
-          .single();
+    let userId: string | null = null;
+    let perfilData: UsuarioPerfil | null = null;
 
-        if (perfil) setUsuarioActual(perfil as UsuarioPerfil);
+    if (supabase) {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user) {
+          userId = user.id;
+          const { data: perfil } = await supabase
+            .from("usuarios_perfiles")
+            .select("*")
+            .eq("id", user.id)
+            .single();
+
+          if (perfil) {
+            perfilData = perfil as UsuarioPerfil;
+            setUsuarioActual(perfilData);
+          }
+        }
+      } catch (err) {
+        console.error("Error al consultar perfil en Configuración:", err);
       }
     }
-    initContexto();
+
+    // 1. Resolver empresa_activa desde localStorage, cookies o usuarios_perfiles
+    const empresaLocal =
+      localStorage.getItem("empresa_activa") || localStorage.getItem("empresa_id");
+    const empresaCookie = getCookieValue("empresa_activa");
+    const empresaPerfil =
+      perfilData?.empresa_activa != null ? String(perfilData.empresa_activa) : null;
+
+    const empresaIdActual = String(empresaLocal || empresaCookie || empresaPerfil || "").trim();
+
+    if (!supabase || !empresaIdActual) {
+      const storedEmpresaNombre = localStorage.getItem("empresa_activa_nombre");
+      const storedSucursalNombre = localStorage.getItem("sucursal_activa_nombre");
+      if (storedEmpresaNombre) setEmpresaActivaNombre(storedEmpresaNombre);
+      if (storedSucursalNombre) setSucursalActivaNombre(storedSucursalNombre);
+      return;
+    }
+
+    try {
+      // 2. Consultar datos de la empresa en public.empresas
+      const { data: empresaRow } = await supabase
+        .from("empresas")
+        .select("id, razon_social, nombre_comercial")
+        .eq("id", Number(empresaIdActual))
+        .maybeSingle();
+
+      const nombreEmpresaResuelto =
+        (empresaRow?.razon_social || empresaRow?.nombre_comercial || "").trim() ||
+        localStorage.getItem("empresa_activa_nombre") ||
+        "Empresa Principal";
+
+      // 3. Consultar sucursales de esa empresa en public.sucursales
+      let { data: sucursalesEmpresa } = await supabase
+        .from("sucursales")
+        .select("id, empresa_id, codigo_sucursal, nombre, estado")
+        .eq("empresa_id", Number(empresaIdActual))
+        .eq("estado", "Activa")
+        .order("id", { ascending: true });
+
+      if (!sucursalesEmpresa || sucursalesEmpresa.length === 0) {
+        const { data: todasSucursalesEmpresa } = await supabase
+          .from("sucursales")
+          .select("id, empresa_id, codigo_sucursal, nombre, estado")
+          .eq("empresa_id", Number(empresaIdActual))
+          .order("id", { ascending: true });
+
+        sucursalesEmpresa = todasSucursalesEmpresa || [];
+      }
+
+      const listaSucursales = (sucursalesEmpresa || []) as SucursalRow[];
+
+      // 4. Resolver sucursal_activa desde localStorage, cookies o usuarios_perfiles
+      const sucursalCandidata = String(
+        localStorage.getItem("sucursal_activa") ||
+          localStorage.getItem("sucursal_id") ||
+          getCookieValue("sucursal_activa") ||
+          (perfilData?.sucursal_activa != null ? String(perfilData.sucursal_activa) : "") ||
+          ""
+      ).trim();
+
+      let sucursalElegida: SucursalRow | null = null;
+      if (sucursalCandidata) {
+        sucursalElegida =
+          listaSucursales.find((s) => String(s.id) === sucursalCandidata) || null;
+      }
+
+      // Si no hay sucursal candidata o no pertenece a empresa_id, asignar la primera de la empresa
+      if (!sucursalElegida && listaSucursales.length > 0) {
+        sucursalElegida = listaSucursales[0];
+      }
+
+      const sucursalIdFinal = sucursalElegida ? String(sucursalElegida.id) : "";
+      const nombreSucursalFinal = sucursalElegida
+        ? sucursalElegida.nombre.trim()
+        : "Sin sucursal";
+
+      // 5. Actualizar localStorage, cookies y usuarios_perfiles
+      localStorage.setItem("empresa_activa", empresaIdActual);
+      localStorage.setItem("empresa_id", empresaIdActual);
+      localStorage.setItem("empresa_activa_nombre", nombreEmpresaResuelto);
+      setCookieValue("empresa_activa", empresaIdActual);
+
+      if (sucursalIdFinal) {
+        localStorage.setItem("sucursal_activa", sucursalIdFinal);
+        localStorage.setItem("sucursal_id", sucursalIdFinal);
+        localStorage.setItem("sucursal_activa_nombre", nombreSucursalFinal);
+        setCookieValue("sucursal_activa", sucursalIdFinal);
+      } else {
+        localStorage.removeItem("sucursal_activa");
+        localStorage.removeItem("sucursal_id");
+        localStorage.setItem("sucursal_activa_nombre", nombreSucursalFinal);
+      }
+
+      setEmpresaActivaNombre(nombreEmpresaResuelto);
+      setSucursalActivaNombre(nombreSucursalFinal);
+
+      if (userId) {
+        const updatePayload: Record<string, unknown> = {};
+        if (String(perfilData?.empresa_activa ?? "") !== empresaIdActual) {
+          updatePayload.empresa_activa = Number(empresaIdActual);
+        }
+        if (
+          sucursalIdFinal &&
+          String(perfilData?.sucursal_activa ?? "") !== sucursalIdFinal
+        ) {
+          updatePayload.sucursal_activa = Number(sucursalIdFinal);
+        }
+        if (Object.keys(updatePayload).length > 0) {
+          await supabase
+            .from("usuarios_perfiles")
+            .update(updatePayload)
+            .eq("id", userId);
+        }
+      }
+    } catch (err) {
+      console.error("Error al sincronizar empresa y sucursal en Configuración:", err);
+    }
   }, []);
+
+  useEffect(() => {
+    sincronizarContextoAlVolver();
+
+    const handleFocus = () => {
+      sincronizarContextoAlVolver();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        sincronizarContextoAlVolver();
+      }
+    };
+
+    const handlePageShow = () => {
+      sincronizarContextoAlVolver();
+    };
+
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("pageshow", handlePageShow);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("pageshow", handlePageShow);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [sincronizarContextoAlVolver]);
 
   // Se eliminó la opción de "Empresas" para que los usuarios no puedan crearlas libremente
   const opciones: OpcionModulo[] = [
     { name: "Terceros", href: "/terceros" },
     { name: "Clases de Documentos", href: "/configuracion/clases-documento" },
+    { name: "Resoluciones", href: "/configuracion/resoluciones" },
     { name: "Sucursales", href: "/Sucursales" },
     { name: "Conceptos NIIF", href: "/ConceptosNiif" },
     { name: "Subconceptos NIIF", href: "/subconceptos_niif" },
-    { name: "Actividades ABC", href: "/ActividadesABC" },
+    { name: "Actividades ABC", href: "/actividades_abc" },
     { name: "Actividades Auxiliares", href: "/actividades_auxiliares" },
     { name: "Conceptos Auxiliares", href: "/conceptos_auxiliares" },
     { name: "Enlace Clases y Conceptos", href: "/clase_documento_conceptos" },
     { name: "Gestión de Usuarios", href: "/usuarios", isSecurity: true },
-    { name: "Asignación de Empresas y Sucursales", href: "/usuarios/asignaciones", isSecurity: true },
+    { name: "Asignación de Transacciones a Usuarios", href: "/usuarios/permisos", isSecurity: true },
   ];
 
   return (
@@ -85,10 +259,10 @@ export default function ConfiguracionPage() {
             {/* Empresa y Sucursal */}
             <div className="flex items-center gap-2 bg-zinc-50 dark:bg-zinc-800/60 px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700">
               <Building2 className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
-              <span className="font-bold truncate max-w-[120px]">{empresaActivaNombre}</span>
+              <span className="font-bold truncate max-w-[140px]">{empresaActivaNombre}</span>
               <span className="text-zinc-300 dark:text-zinc-600">|</span>
               <MapPin className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
-              <span className="truncate max-w-[100px]">{sucursalActivaNombre}</span>
+              <span className="truncate max-w-[140px]">{sucursalActivaNombre}</span>
             </div>
 
             {/* Usuario */}

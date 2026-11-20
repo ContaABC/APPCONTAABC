@@ -18,19 +18,6 @@ import { createClient } from "@supabase/supabase-js";
 import { calcularIndicadoresDinamicos } from "./finance-actions";
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from "recharts";
 
-interface Empresa {
-  id: number | string;
-  razon_social?: string;
-  nombre_comercial?: string;
-  [key: string]: unknown;
-}
-
-interface Sucursal {
-  id: number | string;
-  nombre: string;
-  [key: string]: unknown;
-}
-
 interface IndicadorDato {
   valor: number;
   varAbs?: number;
@@ -39,11 +26,23 @@ interface IndicadorDato {
 
 export default function GestionFinancieraPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [empresas, setEmpresas] = useState<Empresa[]>([]);
-  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [empresas, setEmpresas] = useState<any[]>([]);
+  const [sucursales, setSucursales] = useState<any[]>([]);
   
-  const [empresaId, setEmpresaId] = useState<string>("");
-  const [sucursalId, setSucursalId] = useState<string>("");
+  const [empresaId, setEmpresaId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("empresa_activa") || "";
+    }
+    return "";
+  });
+
+  const [sucursalId, setSucursalId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("sucursal_activa") || "";
+    }
+    return "";
+  });
+
   const [anio, setAnio] = useState<string>("2026");
   const [mes, setMes] = useState<string>("10");
   const [compararAnioAnterior, setCompararAnioAnterior] = useState<boolean>(false);
@@ -64,41 +63,159 @@ export default function GestionFinancieraPage() {
 
   useEffect(() => {
     setIsMounted(true);
-    async function init() {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    async function sincronizarDatos() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
       if (!supabaseUrl || !supabaseAnonKey) return;
 
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
-      const { data: empData } = await supabase.from("empresas").select("*").order("razon_social");
-      if (empData && empData.length > 0) setEmpresas(empData as Empresa[]);
+
+      try {
+        const { data: authData } = await supabase.auth.getSession();
+        const userId = authData?.session?.user?.id;
+        if (!userId) return;
+
+        const { data: permisosTx } = await supabase
+          .from("usuario_permisos_tx")
+          .select("empresa_id, sucursal_id")
+          .eq("usuario_id", userId);
+
+        if (!permisosTx || permisosTx.length === 0) return;
+
+        const empresaIds = Array.from(new Set(permisosTx.map((p: any) => p.empresa_id).filter(Boolean)));
+        if (empresaIds.length === 0) return;
+
+        const { data: listaEmpresas } = await supabase
+          .from("empresas")
+          .select("id, razon_social, nombre_comercial")
+          .in("id", empresaIds)
+          .order("razon_social", { ascending: true });
+
+        if (listaEmpresas && listaEmpresas.length > 0) {
+          setEmpresas(listaEmpresas);
+
+          const empresaActualVal = localStorage.getItem("empresa_activa");
+          if (!empresaActualVal || !listaEmpresas.some(e => String(e.id) === empresaActualVal)) {
+            const primeraId = String(listaEmpresas[0].id);
+            setEmpresaId(primeraId);
+            localStorage.setItem("empresa_activa", primeraId);
+          } else {
+            setEmpresaId(empresaActualVal);
+          }
+        }
+      } catch (err) {
+        console.error("Error al sincronizar empresas:", err);
+      }
     }
-    init();
+
+    sincronizarDatos();
   }, []);
 
   useEffect(() => {
     if (!empresaId) {
       setSucursales([]);
-      setSucursalId("");
       return;
     }
-    async function cargarSucursalesEmpresa() {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    async function cargarSucursales() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
       if (!supabaseUrl || !supabaseAnonKey) return;
 
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
-      const { data } = await supabase.from("sucursales").select("*").eq("empresa_id", Number(empresaId));
-      if (data && data.length > 0) {
-        setSucursales(data as Sucursal[]);
-        setSucursalId(String(data[0].id));
+      const { data: authData } = await supabase.auth.getSession();
+      const userId = authData?.session?.user?.id;
+      if (!userId) return;
+
+      const { data: permisosTx } = await supabase
+        .from("usuario_permisos_tx")
+        .select("sucursal_id")
+        .eq("usuario_id", userId)
+        .eq("empresa_id", empresaId);
+
+      const sucursalIdsPermitidas = Array.from(
+        new Set((permisosTx || []).map((p: any) => p.sucursal_id).filter((id: any) => id !== null && id !== undefined))
+      );
+      const tieneAccesoGlobal = (permisosTx || []).some((p: any) => p.sucursal_id === null);
+
+      let query = supabase
+        .from("sucursales")
+        .select("id, nombre, empresa_id")
+        .eq("empresa_id", empresaId)
+        .order("nombre", { ascending: true });
+
+      if (!tieneAccesoGlobal && sucursalIdsPermitidas.length > 0) {
+        query = query.in("id", sucursalIdsPermitidas);
+      } else if (!tieneAccesoGlobal && sucursalIdsPermitidas.length === 0) {
+        setSucursales([]);
+        setSucursalId("");
+        return;
+      }
+
+      const { data: listaSuc } = await query;
+      if (listaSuc && listaSuc.length > 0) {
+        setSucursales(listaSuc);
+
+        const sucursalActualVal = localStorage.getItem("sucursal_activa");
+        if (!sucursalActualVal || !listaSuc.some(s => String(s.id) === sucursalActualVal)) {
+          const primerSucId = String(listaSuc[0].id);
+          setSucursalId(primerSucId);
+          localStorage.setItem("sucursal_activa", primerSucId);
+        } else {
+          setSucursalId(sucursalActualVal);
+        }
       } else {
         setSucursales([]);
         setSucursalId("");
       }
     }
-    cargarSucursalesEmpresa();
+
+    cargarSucursales();
   }, [empresaId]);
+
+  const handleCambiarEmpresa = async (nuevaEmpresaId: string) => {
+    setEmpresaId(nuevaEmpresaId);
+    localStorage.setItem("empresa_activa", nuevaEmpresaId);
+
+    const empresaObj = empresas.find(e => String(e.id) === String(nuevaEmpresaId));
+    if (empresaObj) {
+      localStorage.setItem("empresa_activa_nombre", empresaObj.razon_social || empresaObj.nombre_comercial || "");
+    }
+    document.cookie = `empresa_activa=${nuevaEmpresaId}; path=/; max-age=86400; SameSite=Lax`;
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+    if (supabaseUrl && supabaseAnonKey) {
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data: authData } = await supabase.auth.getSession();
+      const userId = authData?.session?.user?.id;
+      if (userId) {
+        supabase.from("usuarios_perfiles").update({ empresa_activa: nuevaEmpresaId }).eq("id", userId).then();
+      }
+    }
+  };
+
+  const handleCambiarSucursal = async (nuevoSucursalId: string) => {
+    setSucursalId(nuevoSucursalId);
+    localStorage.setItem("sucursal_activa", nuevoSucursalId);
+
+    const sucursalObj = sucursales.find(s => String(s.id) === String(nuevoSucursalId));
+    if (sucursalObj) {
+      localStorage.setItem("sucursal_activa_nombre", sucursalObj.nombre || "");
+    }
+    document.cookie = `sucursal_activa=${nuevoSucursalId}; path=/; max-age=86400; SameSite=Lax`;
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+    if (supabaseUrl && supabaseAnonKey) {
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data: authData } = await supabase.auth.getSession();
+      const userId = authData?.session?.user?.id;
+      if (userId) {
+        supabase.from("usuarios_perfiles").update({ sucursal_activa: nuevoSucursalId }).eq("id", userId).then();
+      }
+    }
+  };
 
   const ejecutarConsulta = async () => {
     if (!empresaId || !sucursalId) {
@@ -135,7 +252,6 @@ export default function GestionFinancieraPage() {
   const clavesIndicadores = Object.keys(indicadores);
   const coloresGrafico = ["#06b6d4", "#2563eb", "#f59e0b", "#10b981", "#ec4899", "#8b5cf6"];
 
-  // Helpers seguros para evitar errores de objetos "undefined"
   const getValorSeguro = (item: IndicadorDato | number | undefined): number => {
     if (item === undefined || item === null) return 0;
     return typeof item === 'object' ? item.valor : item;
@@ -150,7 +266,7 @@ export default function GestionFinancieraPage() {
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-4 md:p-6">
       <div className="max-w-7xl mx-auto space-y-4">
         
-        {/* BARRA SUPERIOR COMPACTA CON ENLACE DIRECTO AL MENÚ DE MÓDULOS MAYORES */}
+        {/* BARRA SUPERIOR */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-4 py-2.5 rounded-xl shadow-sm flex justify-between items-center">
           <div className="flex items-center gap-2.5">
             <Link 
@@ -172,19 +288,22 @@ export default function GestionFinancieraPage() {
           </Link>
         </div>
 
-        {/* FILTROS OPTIMIZADOS: EMPRESA Y SUCURSAL AMPLIOS, AÑO Y MES MÍNIMOS */}
+        {/* FILTROS CON DESHABILITACIÓN SI SOLO HAY 1 OPCIÓN */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-3 rounded-xl shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 items-end text-xs">
           
           <div className="lg:col-span-3">
             <label className="block font-semibold text-zinc-400 mb-0.5">Empresa *</label>
             <select
               value={empresaId}
-              onChange={(e) => setEmpresaId(e.target.value)}
-              className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent font-bold text-indigo-600 text-xs cursor-pointer"
+              disabled={empresas.length <= 1}
+              onChange={(e) => handleCambiarEmpresa(e.target.value)}
+              className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent font-bold text-indigo-600 text-xs disabled:bg-zinc-100 dark:disabled:bg-zinc-800 disabled:cursor-not-allowed cursor-pointer"
             >
               <option value="" className="dark:bg-zinc-900">Seleccione empresa...</option>
               {empresas.map((emp) => (
-                <option key={emp.id} value={emp.id} className="dark:bg-zinc-900">{emp.razon_social || emp.nombre_comercial}</option>
+                <option key={emp.id} value={emp.id} className="dark:bg-zinc-900">
+                  {emp.razon_social || emp.nombre_comercial}
+                </option>
               ))}
             </select>
           </div>
@@ -193,13 +312,15 @@ export default function GestionFinancieraPage() {
             <label className="block font-semibold text-zinc-400 mb-0.5">Sucursal *</label>
             <select
               value={sucursalId}
-              onChange={(e) => setSucursalId(e.target.value)}
-              disabled={!empresaId}
-              className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs disabled:opacity-50 font-semibold cursor-pointer"
+              onChange={(e) => handleCambiarSucursal(e.target.value)}
+              disabled={!empresaId || sucursales.length <= 1}
+              className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-xs disabled:bg-zinc-100 dark:disabled:bg-zinc-800 disabled:cursor-not-allowed font-semibold cursor-pointer"
             >
               <option value="" className="dark:bg-zinc-900">Seleccione sucursal...</option>
               {sucursales.map((suc) => (
-                <option key={suc.id} value={suc.id} className="dark:bg-zinc-900">{suc.nombre}</option>
+                <option key={suc.id} value={suc.id} className="dark:bg-zinc-900">
+                  {suc.nombre}
+                </option>
               ))}
             </select>
           </div>
@@ -264,10 +385,9 @@ export default function GestionFinancieraPage() {
             Seleccione Empresa y Sucursal para visualizar el panel directivo financiero.
           </div>
         ) : (
-          /* ESTRUCTURA A 2 COLUMNAS PERFECTAS */
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             
-            {/* COLUMNA IZQUIERDA: INDICADORES FINANCIEROS Y SU GRÁFICA */}
+            {/* COLUMNA IZQUIERDA: INDICADORES */}
             <div className="space-y-4">
               <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-blue-600 flex items-center gap-1.5">
@@ -299,7 +419,6 @@ export default function GestionFinancieraPage() {
                 </div>
               </div>
 
-              {/* GRÁFICA DE INDICADORES */}
               {historico.length > 0 && (
                 <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Tendencia Anual - Indicadores</h3>
@@ -321,16 +440,15 @@ export default function GestionFinancieraPage() {
               )}
             </div>
 
-            {/* COLUMNA DERECHA: BALANCE GENERAL (ARRIBA) Y ESTADO DE RESULTADOS (ABAJO) */}
+            {/* COLUMNA DERECHA: BALANCE Y RESULTADOS */}
             <div className="space-y-4">
               
-              {/* 1. BALANCE GENERAL */}
+              {/* BALANCE GENERAL */}
               <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 flex items-center gap-1.5">
                   <Scale className="w-4 h-4" /> Balance General (Activo, Pasivo, Patrimonio)
                 </h2>
                 <div className="grid grid-cols-3 gap-2.5">
-                  {/* ACTIVO */}
                   <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[10px] text-zinc-400 font-bold uppercase">Activo</p>
                     {modoComparativoActivo && (
@@ -342,7 +460,6 @@ export default function GestionFinancieraPage() {
                     <h3 className="text-sm font-black text-[#4f46e5] text-right">{fmt(getValorSeguro(balance.ACTIVO))}</h3>
                   </div>
 
-                  {/* PASIVO */}
                   <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[10px] text-zinc-400 font-bold uppercase">Pasivo</p>
                     {modoComparativoActivo && (
@@ -354,7 +471,6 @@ export default function GestionFinancieraPage() {
                     <h3 className="text-sm font-black text-[#f43f5e] text-right">{fmt(getValorSeguro(balance.PASIVO))}</h3>
                   </div>
 
-                  {/* PATRIMONIO */}
                   <div className="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[10px] text-zinc-400 font-bold uppercase" title="Incluye Utilidad del Periodo">Patrimonio (+Util)</p>
                     {modoComparativoActivo && (
@@ -368,7 +484,6 @@ export default function GestionFinancieraPage() {
                 </div>
               </div>
 
-              {/* GRÁFICA DE BALANCE */}
               {historicoBalance.length > 0 && (
                 <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Evolución Anual - Balance General</h3>
@@ -389,14 +504,13 @@ export default function GestionFinancieraPage() {
                 </div>
               )}
 
-              {/* 2. ESTADO DE RESULTADOS */}
+              {/* ESTADO DE RESULTADOS */}
               <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-emerald-600 flex items-center gap-1.5">
                   <FileText className="w-4 h-4" /> Estado de Resultados (Ingresos, Gastos, Costos, Utilidad)
                 </h2>
                 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {/* INGRESOS */}
                   <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[9px] text-zinc-400 font-bold uppercase">Ingresos</p>
                     {modoComparativoActivo && (
@@ -408,7 +522,6 @@ export default function GestionFinancieraPage() {
                     <h3 className="text-sm font-black text-emerald-600 text-right">{fmt(getValorSeguro(resultadosOp.INGRESOS))}</h3>
                   </div>
 
-                  {/* COSTOS */}
                   <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[9px] text-zinc-400 font-bold uppercase">Costos</p>
                     {modoComparativoActivo && (
@@ -420,7 +533,6 @@ export default function GestionFinancieraPage() {
                     <h3 className="text-sm font-black text-amber-600 text-right">{fmt(getValorSeguro(resultadosOp.COSTOS))}</h3>
                   </div>
 
-                  {/* GASTOS */}
                   <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[9px] text-zinc-400 font-bold uppercase">Gastos</p>
                     {modoComparativoActivo && (
@@ -432,7 +544,6 @@ export default function GestionFinancieraPage() {
                     <h3 className="text-sm font-black text-rose-600 text-right">{fmt(getValorSeguro(resultadosOp.GASTOS))}</h3>
                   </div>
 
-                  {/* UTILIDAD */}
                   <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 shadow-sm space-y-1">
                     <p className="text-[9px] text-zinc-400 font-bold uppercase">Utilidad</p>
                     {modoComparativoActivo && (
@@ -445,7 +556,6 @@ export default function GestionFinancieraPage() {
                   </div>
                 </div>
 
-                {/* GRÁFICA DE RESULTADOS & UTILIDAD */}
                 {historicoResultados.length > 0 && (
                   <div className="space-y-1 pt-1">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Tendencia Anual - Resultados y Utilidad</h3>

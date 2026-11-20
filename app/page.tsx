@@ -12,7 +12,7 @@ interface UsuarioPerfil {
   nombres?: string;
   apellidos?: string;
   tipo_usuario?: string;
-  empresa_id?: number | string;
+  empresa_activa?: number | string; // <-- Actualizado al nuevo campo de la BD
   sucursal_id?: number | string;
   [key: string]: unknown;
 }
@@ -63,7 +63,8 @@ export default function ModulosMayoresPage() {
         .eq("id", session.user.id)
         .single();
 
-      let empresaIdAsignada = perfil?.empresa_id || null;
+      // Tomamos estrictamente la empresa_activa del perfil de la BD
+      let empresaActivaId = perfil?.empresa_activa || null;
       let sucursalIdAsignada = perfil?.sucursal_id || null;
 
       if (perfil) {
@@ -72,22 +73,25 @@ export default function ModulosMayoresPage() {
         setUsuarioActual({ nombres: session.user.email, tipo_usuario: "Operador" });
       }
 
-      // 3. Obtener nombres desde localStorage (si ya pasó por la pantalla de selección) o consultarlos de la BD
-      let nombreEmpresa = typeof window !== 'undefined' ? localStorage.getItem("empresa_activa_nombre") : null;
+      // 3. Obtener el nombre de la empresa activa consultando directamente la tabla 'empresas' usando el ID de la BD
+      let nombreEmpresa = null;
       let nombreSucursal = typeof window !== 'undefined' ? localStorage.getItem("sucursal_activa_nombre") : null;
 
-      // Si no están en localStorage, consultamos directamente las tablas usando los IDs del perfil o asignaciones
-      if (!nombreEmpresa && empresaIdAsignada) {
+      if (empresaActivaId) {
         const { data: empData } = await supabase
           .from("empresas")
           .select("razon_social, nombre_comercial")
-          .eq("id", empresaIdAsignada)
+          .eq("id", empresaActivaId)
           .single();
 
         if (empData) {
           nombreEmpresa = empData.razon_social || empData.nombre_comercial;
-          localStorage.setItem("empresa_activa_nombre", nombreEmpresa || "");
         }
+      }
+
+      // Si por alguna razón no viniera en el perfil, intentamos respaldar con localStorage
+      if (!nombreEmpresa && typeof window !== 'undefined') {
+        nombreEmpresa = localStorage.getItem("empresa_activa_nombre");
       }
 
       if (!nombreSucursal && sucursalIdAsignada) {

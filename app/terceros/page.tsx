@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useMemo, ChangeEvent, FormEvent } from 'react'
+import Link from 'next/link'
 import {
   Search,
   Plus,
@@ -10,11 +11,16 @@ import {
   CheckCircle,
   XCircle,
   X,
+  ArrowLeft,
 } from 'lucide-react'
+import {
+  obtenerTercerosAction,
+  crearTerceroAction,
+  actualizarTerceroAction,
+  eliminarTerceroAction,
+} from './actions'
+import { createClient } from '@supabase/supabase-js'
 
-// ==========================================
-// INTERFACES DE TIPADO
-// ==========================================
 interface Empresa {
   id: string | number;
   razon_social?: string;
@@ -69,30 +75,32 @@ interface Tercero {
 }
 
 export default function TercerosPage() {
-  const [mounted, setMounted] = useState<boolean>(false)
+  const [isMounted, setIsMounted] = useState<boolean>(false)
   const [empresas, setEmpresas] = useState<Empresa[]>([])
-  const [empresaId, setEmpresaId] = useState<string | number>('')
+  
+  const [empresaId, setEmpresaId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("empresa_activa") || "";
+    }
+    return "";
+  });
+
   const [todosLosTerceros, setTodosLosTerceros] = useState<Tercero[]>([])
   const [cargando, setCargando] = useState<boolean>(false)
   const [hasBuscado, setHasBuscado] = useState<boolean>(false)
-
   const [conceptosRetencion, setConceptosRetencion] = useState<ConceptoRetencion[]>([])
 
-  // Filtros
   const [busqueda, setBusqueda] = useState<string>('')
   const [filtroTipo, setFiltroTipo] = useState<string>('TODOS')
   const [filtroEstado, setFiltroEstado] = useState<string>('TODOS')
 
-  // Paginación
   const [paginaActual, setPaginaActual] = useState<number>(1)
   const registrosPorPagina = 10
 
-  // Modales
   const [modalAbierto, setModalAbierto] = useState<boolean>(false)
   const [guardando, setGuardando] = useState<boolean>(false)
   const [mensajeForm, setMensajeForm] = useState<{ tipo: string; texto: string }>({ tipo: '', texto: '' })
 
-  // Formulario
   const [formulario, setFormulario] = useState<Tercero>({
     id: undefined,
     tipo_persona: 'JURIDICA',
@@ -128,61 +136,106 @@ export default function TercerosPage() {
   })
 
   useEffect(() => {
-    setMounted(true)
-    cargarEmpresas()
+    setIsMounted(true)
+    async function sincronizarEmpresas() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      if (!supabaseUrl || !supabaseAnonKey) return;
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+      try {
+        const { data: authData } = await supabase.auth.getSession();
+        const userId = authData?.session?.user?.id;
+        if (!userId) return;
+
+        const { data: permisosTx } = await supabase
+          .from("usuario_permisos_tx")
+          .select("empresa_id")
+          .eq("usuario_id", userId);
+
+        if (!permisosTx || permisosTx.length === 0) return;
+
+        const empresaIds = Array.from(new Set(permisosTx.map((p: any) => p.empresa_id).filter(Boolean)));
+        if (empresaIds.length === 0) return;
+
+        const { data: listaEmpresas } = await supabase
+          .from("empresas")
+          .select("id, razon_social, nombre_comercial")
+          .in("id", empresaIds)
+          .order("razon_social", { ascending: true });
+
+        if (listaEmpresas && listaEmpresas.length > 0) {
+          setEmpresas(listaEmpresas);
+
+          const empresaActualVal = localStorage.getItem("empresa_activa");
+          if (!empresaActualVal || !listaEmpresas.some(e => String(e.id) === empresaActualVal)) {
+            const primeraId = String(listaEmpresas[0].id);
+            setEmpresaId(primeraId);
+            localStorage.setItem("empresa_activa", primeraId);
+          } else {
+            setEmpresaId(empresaActualVal);
+          }
+        }
+      } catch (err) {
+        console.error("Error al sincronizar empresas en terceros:", err);
+      }
+    }
+
+    sincronizarEmpresas();
   }, [])
 
   useEffect(() => {
-    if (mounted && empresaId) {
+    if (isMounted && empresaId) {
       setTodosLosTerceros([])
       setHasBuscado(false)
       setPaginaActual(1)
       cargarConceptosRetencion(empresaId)
     }
-  }, [empresaId, mounted])
-
-  const cargarEmpresas = async () => {
-    try {
-      const res = await fetch('/api/empresas/listar')
-      const data = await res.json()
-      
-      console.log("Respuesta de /api/empresas/listar:", data)
-
-      // Extraer la lista de empresas de forma segura
-      const listaEmpresas = data.empresas || data.data || (Array.isArray(data) ? data : [])
-      setEmpresas(listaEmpresas)
-
-      // Intentar recuperar la empresa activa de la cookie o localStorage
-      const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'))
-      const idGuardado = match ? match[2] : localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id')
-
-      if (idGuardado && listaEmpresas.some((e: Empresa) => String(e.id) === String(idGuardado))) {
-        setEmpresaId(idGuardado)
-      } else if (listaEmpresas.length > 0) {
-        const primerId = listaEmpresas[0].id
-        setEmpresaId(primerId)
-        localStorage.setItem('empresa_activa', String(primerId))
-        localStorage.setItem('empresa_id', String(primerId))
-        document.cookie = `empresa_activa=${primerId}; path=/; max-age=86400; SameSite=Lax`
-      }
-    } catch (err) {
-      console.error('Error al cargar empresas:', err)
-    }
-  }
+  }, [empresaId, isMounted])
 
   const cargarConceptosRetencion = async (idEmpresa: string | number) => {
     try {
-      const res = await fetch(`/api/conceptos-retencion?empresa_id=${idEmpresa}`)
-      if (res.ok) {
-        const data = await res.json()
-        setConceptosRetencion(data.conceptos || [])
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      if (!supabaseUrl || !supabaseAnonKey) return;
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+      const { data, error } = await supabase
+        .from('conceptos_retencion')
+        .select('*')
+        .eq('empresa_id', idEmpresa);
+
+      if (!error && data) {
+        setConceptosRetencion(data);
       }
     } catch (err) {
       console.error('Error al cargar conceptos de retención:', err)
     }
   }
 
-  // Filtrar conceptos por tipo de retención normalizado
+  const handleCambiarEmpresa = async (nuevaEmpresaId: string) => {
+    setEmpresaId(nuevaEmpresaId);
+    localStorage.setItem("empresa_activa", nuevaEmpresaId);
+
+    const empresaObj = empresas.find(e => String(e.id) === String(nuevaEmpresaId));
+    if (empresaObj) {
+      localStorage.setItem("empresa_activa_nombre", empresaObj.razon_social || empresaObj.nombre_comercial || "");
+    }
+    document.cookie = `empresa_activa=${nuevaEmpresaId}; path=/; max-age=86400; SameSite=Lax`;
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+    if (supabaseUrl && supabaseAnonKey) {
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data: authData } = await supabase.auth.getSession();
+      const userId = authData?.session?.user?.id;
+      if (userId) {
+        supabase.from("usuarios_perfiles").update({ empresa_activa: nuevaEmpresaId }).eq("id", userId).then();
+      }
+    }
+  };
+
   const conceptosRenta = useMemo(() => {
     return conceptosRetencion.filter(
       (c) => (c.tipo_retencion || '').toUpperCase() === 'RENTA'
@@ -206,11 +259,9 @@ export default function TercerosPage() {
     setCargando(true)
     setHasBuscado(true)
     try {
-      const res = await fetch(`/api/terceros?empresa_id=${empresaId}`)
-      const data = await res.json()
-
-      if (res.ok && data.exito) {
-        setTodosLosTerceros(data.terceros || [])
+      const res = await obtenerTercerosAction({ empresaId: String(empresaId) })
+      if (res && res.exito) {
+        setTodosLosTerceros(res.terceros || [])
       } else {
         setTodosLosTerceros([])
       }
@@ -360,14 +411,22 @@ export default function TercerosPage() {
 
     if (codigo.trim().length === 5) {
       try {
-        const res = await fetch(`/api/ubicaciones?codigo_dane=${codigo.trim()}`)
-        const json = await res.json()
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+        if (!supabaseUrl || !supabaseAnonKey) return;
+        const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-        if (res.ok && json.exito && json.datos) {
+        const { data, error } = await supabase
+          .from('municipios_dane')
+          .select('municipio, departamento')
+          .eq('codigo_dane', codigo.trim())
+          .maybeSingle();
+
+        if (!error && data) {
           setFormulario((prev) => ({
             ...prev,
-            ciudad: json.datos.municipio || '',
-            departamento_estado: json.datos.departamento || '',
+            ciudad: data.municipio || '',
+            departamento_estado: data.departamento || '',
           }))
         } else {
           setFormulario((prev) => ({
@@ -377,7 +436,7 @@ export default function TercerosPage() {
           }))
         }
       } catch (err) {
-        console.error('Error consultando API de ubicaciones:', err)
+        console.error('Error consultando ubicación:', err)
       }
     }
   }
@@ -460,24 +519,20 @@ export default function TercerosPage() {
     setMensajeForm({ tipo: '', texto: '' })
 
     try {
-      const url = '/api/terceros'
-      const method = formulario.id ? 'PUT' : 'POST'
-
       const payload = {
         ...formulario,
         empresa_id: empresaId,
         dv: formulario.tipo_persona === 'JURIDICA' ? formulario.dv : null,
       }
 
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
+      let data;
+      if (formulario.id) {
+        data = await actualizarTerceroAction(payload)
+      } else {
+        data = await crearTerceroAction(payload)
+      }
 
-      const data = await res.json()
-
-      if (res.ok && data.exito) {
+      if (data && data.exito) {
         setMensajeForm({
           tipo: 'exito',
           texto: formulario.id ? 'Tercero actualizado con éxito.' : 'Tercero creado con éxito.',
@@ -487,7 +542,7 @@ export default function TercerosPage() {
       } else {
         setMensajeForm({
           tipo: 'error',
-          texto: data.mensaje || data.error || 'No se pudo insertar o actualizar el tercero en la BD.',
+          texto: data?.mensaje || data?.error || 'No se pudo insertar o actualizar el tercero en la BD.',
         })
       }
     } catch (err) {
@@ -500,13 +555,8 @@ export default function TercerosPage() {
   const toggleEstadoTercero = async (item: Tercero) => {
     const nuevoEstado = item.estado === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO'
     try {
-      const res = await fetch('/api/terceros', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: item.id, estado: nuevoEstado }),
-      })
-
-      if (res.ok) buscarTerceros()
+      const res = await actualizarTerceroAction({ id: item.id, estado: nuevoEstado })
+      if (res && res.exito) buscarTerceros()
     } catch (err) {
       console.error('Error al cambiar estado:', err)
     }
@@ -516,10 +566,13 @@ export default function TercerosPage() {
     if (!id) return
     if (!confirm(`¿Está seguro de eliminar a "${razonSocial || 'este tercero'}"?`)) return
     try {
-      const res = await fetch(`/api/terceros?id=${id}`, { method: 'DELETE' })
-      const data = await res.json()
-      if (res.ok && data.exito) buscarTerceros()
-      else alert(data.mensaje || 'No se pudo eliminar.')
+      const res = await eliminarTerceroAction(id)
+      if (res && res.exito) {
+        buscarTerceros()
+      } else {
+        alert(res?.mensaje || 'No se pudo eliminar.')
+        if (hasBuscado) buscarTerceros()
+      }
     } catch (err) {
       console.error('Error al eliminar:', err)
     }
@@ -530,38 +583,42 @@ export default function TercerosPage() {
   const indiceUltimo = indicePrimer + registrosPorPagina
   const tercerosPaginados = tercerosFiltrados.slice(indicePrimer, indiceUltimo)
 
-  if (!mounted) return null
+  if (!isMounted) return null
 
   const isNatural = formulario.tipo_persona === 'NATURAL'
 
   return (
     <div className="min-h-screen bg-gray-100 p-3 md:p-6 text-gray-800">
-      {/* BARRA SUPERIOR DE FILTROS */}
+      
+      {/* BARRA SUPERIOR DE FILTROS ALINEADA Y LIMPIA */}
       <div className="max-w-7xl mx-auto mb-4 bg-white p-3 md:p-4 rounded-lg shadow-sm border border-gray-200">
         <div className="flex flex-col lg:flex-row items-center justify-between gap-3">
-          <div className="w-full lg:w-72">
-            <label className="block text-[11px] font-bold text-gray-600 uppercase mb-1">
-              Empresa Activa *
-            </label>
-            <select
-              value={empresaId}
-              onChange={(e) => {
-                const nuevoId = e.target.value
-                setEmpresaId(nuevoId)
-                if (nuevoId) {
-                  localStorage.setItem('empresa_id', nuevoId)
-                  document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`
-                }
-              }}
-              className="w-full border-2 border-blue-500 rounded-md p-1.5 text-sm bg-blue-50 font-semibold text-blue-900 focus:outline-none cursor-pointer"
+          
+          {/* BOTÓN FLECHA Y SELECTOR DE EMPRESA (Deshabilitado si solo hay 1 empresa asignada) */}
+          <div className="flex items-center gap-2.5 w-full lg:w-auto">
+            <Link
+              href="/modulos/contabilidad/configuracion"
+              className="inline-flex items-center justify-center p-2.5 bg-gray-50 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-100 shadow-sm transition-colors shrink-0"
+              title="Volver al Menú de Configuración"
             >
-              <option value="">-- Seleccione una Empresa --</option>
-              {empresas.map((emp) => (
-                <option key={emp.id} value={emp.id}>
-                  {emp.razon_social || emp.nombre_comercial || emp.nombre}
-                </option>
-              ))}
-            </select>
+              <ArrowLeft className="w-4 h-4 text-blue-600" />
+            </Link>
+
+            <div className="w-full sm:w-72">
+              <select
+                value={empresaId}
+                disabled={empresas.length <= 1}
+                onChange={(e) => handleCambiarEmpresa(e.target.value)}
+                className="w-full border-2 border-blue-500 rounded-md p-2 text-sm bg-blue-50 font-semibold text-blue-900 focus:outline-none disabled:bg-gray-100 disabled:cursor-not-allowed cursor-pointer"
+              >
+                <option value="">-- Seleccione una Empresa --</option>
+                {empresas.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.razon_social || emp.nombre_comercial}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
@@ -572,7 +629,7 @@ export default function TercerosPage() {
                 placeholder="Buscar por NIT o Nombre..."
                 value={busqueda}
                 onChange={(e) => setBusqueda(e.target.value)}
-                className="w-full pl-3 pr-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:bg-gray-100"
+                className="w-full pl-3 pr-3 py-2 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:bg-gray-100"
               />
             </div>
 
@@ -580,7 +637,7 @@ export default function TercerosPage() {
               disabled={!empresaId}
               value={filtroTipo}
               onChange={(e) => setFiltroTipo(e.target.value)}
-              className="border rounded-md p-1.5 text-sm bg-white focus:outline-none disabled:bg-gray-100 cursor-pointer"
+              className="border rounded-md p-2 text-sm bg-white focus:outline-none disabled:bg-gray-100 cursor-pointer"
             >
               <option value="TODOS">Todos los Tipos</option>
               <option value="CLIENTE">Clientes</option>
@@ -593,7 +650,7 @@ export default function TercerosPage() {
               disabled={!empresaId}
               value={filtroEstado}
               onChange={(e) => setFiltroEstado(e.target.value)}
-              className="border rounded-md p-1.5 text-sm bg-white focus:outline-none disabled:bg-gray-100 cursor-pointer"
+              className="border rounded-md p-2 text-sm bg-white focus:outline-none disabled:bg-gray-100 cursor-pointer"
             >
               <option value="TODOS">Todos los Estados</option>
               <option value="ACTIVO">Activos</option>
@@ -603,7 +660,7 @@ export default function TercerosPage() {
             <button
               disabled={!empresaId || cargando}
               onClick={buscarTerceros}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 text-white rounded-md text-sm font-medium hover:bg-gray-900 transition-colors disabled:opacity-50 cursor-pointer"
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-gray-800 text-white rounded-md text-sm font-medium hover:bg-gray-900 transition-colors disabled:opacity-50 cursor-pointer"
             >
               <Search className="w-4 h-4" />
               Buscar
@@ -612,7 +669,7 @@ export default function TercerosPage() {
             <button
               disabled={!empresaId}
               onClick={abrirModalNuevo}
-              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               Nuevo Tercero
@@ -1060,7 +1117,6 @@ export default function TercerosPage() {
                     value={formulario.codigo_ciiu || ''}
                     onChange={handleInputChange}
                     className="w-full border border-amber-300 rounded h-7 px-1.5 bg-white font-mono text-[11px]"
-                    title="Código CIIU Rev. 5 A.C. Principal (4 dígitos)"
                   />
                 </div>
                 <div>
@@ -1076,7 +1132,6 @@ export default function TercerosPage() {
                     value={formulario.codigo_ciiu_2 || ''}
                     onChange={handleInputChange}
                     className="w-full border border-amber-300 rounded h-7 px-1.5 bg-white font-mono text-[11px] disabled:bg-gray-100 disabled:text-gray-400"
-                    title="Segundo código CIIU"
                   />
                 </div>
                 <div>
@@ -1092,7 +1147,6 @@ export default function TercerosPage() {
                     value={formulario.codigo_ciiu_3 || ''}
                     onChange={handleInputChange}
                     className="w-full border border-amber-300 rounded h-7 px-1.5 bg-white font-mono text-[11px] disabled:bg-gray-100 disabled:text-gray-400"
-                    title="Tercer código CIIU"
                   />
                 </div>
                 <div>
@@ -1108,7 +1162,6 @@ export default function TercerosPage() {
                     value={formulario.codigo_ciiu_4 || ''}
                     onChange={handleInputChange}
                     className="w-full border border-amber-300 rounded h-7 px-1.5 bg-white font-mono text-[11px] disabled:bg-gray-100 disabled:text-gray-400"
-                    title="Cuarto código CIIU"
                   />
                 </div>
               </div>
@@ -1129,11 +1182,8 @@ export default function TercerosPage() {
                     {conceptosRenta.map((c) => {
                       const tarifaPorcentaje = (Number(c.tarifa || 0) * 100).toFixed(2)
                       const conceptoLargo = c.concepto || c.descripcion || ''
-                      const conceptoCorto = conceptoLargo.length > 45 
-                        ? `${conceptoLargo.substring(0, 45)}...` 
-                        : conceptoLargo
+                      const conceptoCorto = conceptoLargo.length > 45 ? `${conceptoLargo.substring(0, 45)}...` : conceptoLargo
                       const codigoStr = c.codigo ? `${c.codigo} ` : ''
-                      
                       return (
                         <option key={c.id} value={c.id} title={`${conceptoLargo} (${tarifaPorcentaje}%)`}>
                           {`${codigoStr}${conceptoCorto} (${tarifaPorcentaje}%)`}
@@ -1157,11 +1207,8 @@ export default function TercerosPage() {
                     {conceptosIva.map((c) => {
                       const tarifaPorcentaje = (Number(c.tarifa || 0) * 100).toFixed(2)
                       const conceptoLargo = c.concepto || c.descripcion || ''
-                      const conceptoCorto = conceptoLargo.length > 45 
-                        ? `${conceptoLargo.substring(0, 45)}...` 
-                        : conceptoLargo
+                      const conceptoCorto = conceptoLargo.length > 45 ? `${conceptoLargo.substring(0, 45)}...` : conceptoLargo
                       const codigoStr = c.codigo ? `${c.codigo} ` : ''
-
                       return (
                         <option key={c.id} value={c.id} title={`${conceptoLargo} (${tarifaPorcentaje}%)`}>
                           {`${codigoStr}${conceptoCorto} (${tarifaPorcentaje}%)`}
@@ -1185,11 +1232,8 @@ export default function TercerosPage() {
                     {conceptosIca.map((c) => {
                       const tarifaPorMil = (Number(c.tarifa || 0) * 1000).toFixed(2)
                       const conceptoLargo = c.concepto || c.descripcion || ''
-                      const conceptoCorto = conceptoLargo.length > 45 
-                        ? `${conceptoLargo.substring(0, 45)}...` 
-                        : conceptoLargo
+                      const conceptoCorto = conceptoLargo.length > 45 ? `${conceptoLargo.substring(0, 45)}...` : conceptoLargo
                       const codigoStr = c.codigo ? `${c.codigo} ` : ''
-
                       return (
                         <option key={c.id} value={c.id} title={`${conceptoLargo} (${tarifaPorMil}‰)`}>
                           {`${codigoStr}${conceptoCorto} (${tarifaPorMil}‰)`}

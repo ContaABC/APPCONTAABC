@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, ChangeEvent } from "react";
+import React, { useState, useEffect, useMemo, useCallback, ChangeEvent } from "react";
 import { procesarFacturaXmlAdmin } from "@/app/facturas/cargar/actions";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -37,13 +37,69 @@ interface InvoiceParsedData {
 
 interface ConceptoRetencion {
   id: number | string;
-  empresa_id: number;
+  empresa_id: number | string;
+  anio?: number | string;
   tipo_retencion: string;
   codigo?: string;
   concepto?: string;
   descripcion?: string;
-  tarifa: number;
+  tarifa: number | string;
   activo?: boolean;
+}
+
+function extraerAnioFecha(fechaStr?: string): number {
+  if (fechaStr) {
+    const match = /^(\d{4})/.exec(fechaStr.trim());
+    if (match) {
+      const anioNum = Number(match[1]);
+      if (!Number.isNaN(anioNum) && anioNum > 1900) return anioNum;
+    }
+    const d = new Date(fechaStr);
+    if (!Number.isNaN(d.getTime())) return d.getUTCFullYear();
+  }
+  return new Date().getFullYear();
+}
+
+function deduplicarConceptos(
+  lista: ConceptoRetencion[],
+  empresaIdNum: number,
+  anioNum: number
+): ConceptoRetencion[] {
+  const porId = new Map<string, ConceptoRetencion>();
+
+  for (const item of lista) {
+    if (Number(item.empresa_id) !== empresaIdNum) continue;
+    if (item.activo === false) continue;
+    if (
+      item.anio !== undefined &&
+      item.anio !== null &&
+      Number(item.anio) !== anioNum
+    ) {
+      continue;
+    }
+
+    const idKey = String(item.id);
+    if (!porId.has(idKey)) {
+      porId.set(idKey, item);
+    }
+  }
+
+  const vistosEtiqueta = new Set<string>();
+  const resultado: ConceptoRetencion[] = [];
+
+  for (const item of porId.values()) {
+    const tipoNorm = String(item.tipo_retencion || "").trim().toUpperCase();
+    const texto = String(item.concepto || item.descripcion || "").trim();
+    const tarifaNum = Number(item.tarifa || 0);
+    const etiquetaKey = `${anioNum}::${tipoNorm}::${texto.toLowerCase()}::${tarifaNum}`;
+
+    if (!vistosEtiqueta.has(etiquetaKey)) {
+      vistosEtiqueta.add(etiquetaKey);
+      resultado.push(item);
+    }
+  }
+
+  return resultado;
 }
 
 export default function XmlUploader({
@@ -53,95 +109,215 @@ export default function XmlUploader({
   fechaContabilizacion: propFechaContabilizacion,
   onSuccess,
 }: XmlUploaderProps) {
+  const [isMounted, setIsMounted] = useState<boolean>(false);
   const [file, setFile] = useState<File | null>(null);
   const [pdfUrlInput, setPdfUrlInput] = useState<string>("");
   const [parsedInvoice, setParsedInvoice] = useState<InvoiceParsedData | null>(null);
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [statusMessage, setStatusMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
-  // Sincronización corporativa automática con localStorage / Cookies si no se pasa por props
-  const [empresaActivaId, setEmpresaActivaId] = useState<string>(propCompanyId || "");
+  const [empresaLocalId, setEmpresaLocalId] = useState<string>(propCompanyId || "");
 
   useEffect(() => {
+    setIsMounted(true);
     if (propCompanyId) {
-      setEmpresaActivaId(propCompanyId);
-    } else {
+      setEmpresaLocalId(propCompanyId);
+      return;
+    }
+    if (typeof window !== "undefined") {
       const cookieEmpresa = document.cookie
         .split("; ")
         .find((row) => row.startsWith("empresa_activa="));
-      const empresaCookie = cookieEmpresa ? cookieEmpresa.split("=")[1] : null;
-      const empresaLocal = localStorage.getItem("empresa_activa");
-      
-      if (empresaCookie || empresaLocal) {
-        setEmpresaActivaId(empresaCookie || empresaLocal || "");
-      }
+      const empresaCookie = cookieEmpresa
+        ? decodeURIComponent(cookieEmpresa.split("=")[1])
+        : "";
+      const empresaStorage = localStorage.getItem("empresa_activa") || "";
+      setEmpresaLocalId(empresaStorage || empresaCookie || "");
     }
   }, [propCompanyId]);
 
-  const selectedCompanyId = propCompanyId || empresaActivaId;
+  const activeCompanyId = propCompanyId || empresaLocalId;
   const selectedBranchId = propBranchId || "";
   const selectedDocumentClassId = propDocumentClassId || "";
-  const fechaContabilizacion = propFechaContabilizacion || new Date().toISOString().split("T")[0];
+  const fechaContabilizacion =
+    propFechaContabilizacion || new Date().toISOString().split("T")[0];
+  const anioContabilidad = useMemo(
+    () => extraerAnioFecha(fechaContabilizacion),
+    [fechaContabilizacion]
+  );
 
-  // Conceptos de retención para la empresa activa
   const [conceptosRetencion, setConceptosRetencion] = useState<ConceptoRetencion[]>([]);
-
-  // Estados para las retenciones seleccionadas en pantalla
   const [retRentaId, setRetRentaId] = useState<string>("");
   const [retIvaId, setRetIvaId] = useState<string>("");
   const [retIcaId, setRetIcaId] = useState<string>("");
 
   const formatCOP = (val: number) =>
-    new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(val || 0);
+    new Intl.NumberFormat("es-CO", {
+      style: "currency",
+      currency: "COP",
+      maximumFractionDigits: 0,
+    }).format(val || 0);
 
   const normalizarNit = (nit?: string): string => {
     if (!nit) return "";
     return nit.replace(/[\.\-\s]/g, "").trim();
   };
 
-  // Cargar conceptos de retención consumiendo la API interna /api/conceptos-retencion
   useEffect(() => {
-    if (!selectedCompanyId) {
-      setConceptosRetencion([]);
+    if (!isMounted) return;
+
+    setConceptosRetencion([]);
+    setRetRentaId("");
+    setRetIvaId("");
+    setRetIcaId("");
+
+    const empNum = Number(activeCompanyId);
+    if (!activeCompanyId || Number.isNaN(empNum) || empNum <= 0) {
       return;
     }
 
+    let cancelado = false;
+
     const cargarConceptos = async () => {
       try {
-        const response = await fetch(`/api/conceptos-retencion?empresa_id=${selectedCompanyId}`);
+        const response = await fetch(
+          `/api/conceptos-retencion?empresa_id=${empNum}&anio=${anioContabilidad}&_t=${Date.now()}`,
+          { cache: "no-store" }
+        );
         const result = await response.json();
 
-        if (result.exito && result.conceptos) {
-          setConceptosRetencion(result.conceptos);
-        } else {
-          setConceptosRetencion([]);
-          console.error("Error al cargar conceptos de retención:", result.mensaje);
-        }
+        if (cancelado) return;
+
+        const listaRaw: ConceptoRetencion[] =
+          result?.exito && Array.isArray(result?.conceptos)
+            ? result.conceptos
+            : Array.isArray(result?.data)
+            ? result.data
+            : [];
+
+        setConceptosRetencion(
+          deduplicarConceptos(listaRaw, empNum, anioContabilidad)
+        );
       } catch (err) {
-        console.error("Error al cargar conceptos de retención:", err);
-        setConceptosRetencion([]);
+        if (!cancelado) {
+          console.error("Error al cargar conceptos de retención:", err);
+          setConceptosRetencion([]);
+        }
       }
     };
 
     cargarConceptos();
-  }, [selectedCompanyId]);
 
-  // Filtrado exacto por la columna tipo_retencion
+    return () => {
+      cancelado = true;
+    };
+  }, [isMounted, activeCompanyId, anioContabilidad]);
+
+  const consultarRetencionesTercero = useCallback(
+    async (companyIdStr: string, emisorNit: string) => {
+      const empNum = Number(companyIdStr);
+      const nitLimpio = normalizarNit(emisorNit);
+      if (!companyIdStr || Number.isNaN(empNum) || empNum <= 0 || !nitLimpio) {
+        setRetRentaId("");
+        setRetIvaId("");
+        setRetIcaId("");
+        return;
+      }
+
+      const { data: terceros } = await supabase
+        .from("terceros")
+        .select(
+          "id, numero_identificacion, retencion_renta_id, retencion_iva_id, retencion_ica_id"
+        )
+        .eq("empresa_id", empNum);
+
+      const terceroEncontrado = terceros?.find((t) => {
+        const nitDB = normalizarNit(String(t.numero_identificacion || ""));
+        return (
+          nitDB === nitLimpio ||
+          nitDB.startsWith(nitLimpio) ||
+          nitLimpio.startsWith(nitDB)
+        );
+      });
+
+      if (terceroEncontrado) {
+        setRetRentaId(
+          terceroEncontrado.retencion_renta_id
+            ? String(terceroEncontrado.retencion_renta_id)
+            : ""
+        );
+        setRetIvaId(
+          terceroEncontrado.retencion_iva_id
+            ? String(terceroEncontrado.retencion_iva_id)
+            : ""
+        );
+        setRetIcaId(
+          terceroEncontrado.retencion_ica_id
+            ? String(terceroEncontrado.retencion_ica_id)
+            : ""
+        );
+      } else {
+        setRetRentaId("");
+        setRetIvaId("");
+        setRetIcaId("");
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (isMounted && parsedInvoice?.emisorNit && activeCompanyId) {
+      consultarRetencionesTercero(activeCompanyId, parsedInvoice.emisorNit);
+    }
+  }, [
+    isMounted,
+    activeCompanyId,
+    anioContabilidad,
+    parsedInvoice?.emisorNit,
+    consultarRetencionesTercero,
+  ]);
+
   const conceptosRenta = useMemo(() => {
-    return conceptosRetencion.filter((c) => (c.tipo_retencion || "").toUpperCase() === "RENTA" && c.activo !== false);
-  }, [conceptosRetencion]);
+    const empNum = Number(activeCompanyId);
+    return conceptosRetencion.filter(
+      (c) =>
+        Number(c.empresa_id) === empNum &&
+        (c.anio === undefined || c.anio === null || Number(c.anio) === anioContabilidad) &&
+        String(c.tipo_retencion || "").trim().toUpperCase() === "RENTA" &&
+        c.activo !== false
+    );
+  }, [conceptosRetencion, activeCompanyId, anioContabilidad]);
 
   const conceptosIva = useMemo(() => {
-    return conceptosRetencion.filter((c) => (c.tipo_retencion || "").toUpperCase() === "IVA" && c.activo !== false);
-  }, [conceptosRetencion]);
+    const empNum = Number(activeCompanyId);
+    return conceptosRetencion.filter(
+      (c) =>
+        Number(c.empresa_id) === empNum &&
+        (c.anio === undefined || c.anio === null || Number(c.anio) === anioContabilidad) &&
+        String(c.tipo_retencion || "").trim().toUpperCase() === "IVA" &&
+        c.activo !== false
+    );
+  }, [conceptosRetencion, activeCompanyId, anioContabilidad]);
 
   const conceptosIca = useMemo(() => {
-    return conceptosRetencion.filter((c) => (c.tipo_retencion || "").toUpperCase() === "ICA" && c.activo !== false);
-  }, [conceptosRetencion]);
+    const empNum = Number(activeCompanyId);
+    return conceptosRetencion.filter(
+      (c) =>
+        Number(c.empresa_id) === empNum &&
+        (c.anio === undefined || c.anio === null || Number(c.anio) === anioContabilidad) &&
+        String(c.tipo_retencion || "").trim().toUpperCase() === "ICA" &&
+        c.activo !== false
+    );
+  }, [conceptosRetencion, activeCompanyId, anioContabilidad]);
 
-  // Helper para obtener el primer elemento por su localName
-  const getFirstByLocalName = (parent: Element | Document, localName: string): Element | null => {
+  const getFirstByLocalName = (
+    parent: Element | Document,
+    localName: string
+  ): Element | null => {
     const elements = parent.getElementsByTagName("*");
     for (let i = 0; i < elements.length; i++) {
       if (elements[i].localName === localName) {
@@ -151,8 +327,10 @@ export default function XmlUploader({
     return null;
   };
 
-  // Helper para obtener todos los elementos por localName
-  const getAllByLocalName = (parent: Element | Document, localName: string): Element[] => {
+  const getAllByLocalName = (
+    parent: Element | Document,
+    localName: string
+  ): Element[] => {
     const elements = parent.getElementsByTagName("*");
     const result: Element[] = [];
     for (let i = 0; i < elements.length; i++) {
@@ -163,17 +341,21 @@ export default function XmlUploader({
     return result;
   };
 
-  const getTextValue = (parent: Element | Document | null, localName: string): string => {
+  const getTextValue = (
+    parent: Element | Document | null,
+    localName: string
+  ): string => {
     if (!parent) return "";
     const el = getFirstByLocalName(parent, localName);
     return el?.textContent?.trim() || "";
   };
 
-  // Extrae los datos reales de Party en el estándar DIAN
   const parsePartyData = (partyParentNode: Element | null) => {
-    if (!partyParentNode) return { nit: "Sin Identificación", nombre: "Sin Nombre" };
+    if (!partyParentNode)
+      return { nit: "Sin Identificación", nombre: "Sin Nombre" };
 
-    const partyNode = getFirstByLocalName(partyParentNode, "Party") || partyParentNode;
+    const partyNode =
+      getFirstByLocalName(partyParentNode, "Party") || partyParentNode;
 
     let nit = "";
     const partyTaxScheme = getFirstByLocalName(partyNode, "PartyTaxScheme");
@@ -187,7 +369,8 @@ export default function XmlUploader({
       }
     }
     if (!nit) {
-      nit = getTextValue(partyNode, "CompanyID") || getTextValue(partyNode, "ID");
+      nit =
+        getTextValue(partyNode, "CompanyID") || getTextValue(partyNode, "ID");
     }
 
     let nombre = "";
@@ -208,7 +391,9 @@ export default function XmlUploader({
       }
     }
     if (!nombre) {
-      nombre = getTextValue(partyNode, "RegistrationName") || getTextValue(partyNode, "Name");
+      nombre =
+        getTextValue(partyNode, "RegistrationName") ||
+        getTextValue(partyNode, "Name");
     }
 
     return {
@@ -223,7 +408,10 @@ export default function XmlUploader({
     if (!selectedFile) return;
 
     if (!selectedFile.name.toLowerCase().endsWith(".xml")) {
-      setStatusMessage({ type: "error", text: "Por favor seleccione un archivo con extensión .xml" });
+      setStatusMessage({
+        type: "error",
+        text: "Por favor seleccione un archivo con extensión .xml",
+      });
       return;
     }
 
@@ -252,21 +440,36 @@ export default function XmlUploader({
 
         const numeroFactura = getTextValue(xmlDoc, "ID") || "SIN_NUMERO";
         const cufe = getTextValue(xmlDoc, "UUID") || "";
-        const fechaEmision = getTextValue(xmlDoc, "IssueDate") || new Date().toISOString().split("T")[0];
+        const fechaEmision =
+          getTextValue(xmlDoc, "IssueDate") ||
+          new Date().toISOString().split("T")[0];
 
-        const supplierNode = getFirstByLocalName(xmlDoc, "AccountingSupplierParty");
+        const supplierNode = getFirstByLocalName(
+          xmlDoc,
+          "AccountingSupplierParty"
+        );
         const emisor = parsePartyData(supplierNode);
 
-        const customerNode = getFirstByLocalName(xmlDoc, "AccountingCustomerParty");
+        const customerNode = getFirstByLocalName(
+          xmlDoc,
+          "AccountingCustomerParty"
+        );
         const cliente = parsePartyData(customerNode);
 
-        const legalMonetaryTotal = getFirstByLocalName(xmlDoc, "LegalMonetaryTotal");
+        const legalMonetaryTotal = getFirstByLocalName(
+          xmlDoc,
+          "LegalMonetaryTotal"
+        );
         let subtotalVal = 0;
         let totalVal = 0;
 
         if (legalMonetaryTotal) {
-          subtotalVal = parseFloat(getTextValue(legalMonetaryTotal, "LineExtensionAmount") || "0");
-          totalVal = parseFloat(getTextValue(legalMonetaryTotal, "PayableAmount") || "0");
+          subtotalVal = parseFloat(
+            getTextValue(legalMonetaryTotal, "LineExtensionAmount") || "0"
+          );
+          totalVal = parseFloat(
+            getTextValue(legalMonetaryTotal, "PayableAmount") || "0"
+          );
         }
 
         const taxTotalNodes = getAllByLocalName(xmlDoc, "TaxTotal");
@@ -288,31 +491,48 @@ export default function XmlUploader({
             descripcion = getTextValue(itemNode, "Description");
           }
           if (!descripcion) {
-            descripcion = getTextValue(lineNode, "Description") || "Producto / Servicio";
+            descripcion =
+              getTextValue(lineNode, "Description") || "Producto / Servicio";
           }
 
           let codigo = "";
           if (itemNode) {
-            const sellersItem = getFirstByLocalName(itemNode, "SellersItemIdentification");
-            const standardItem = getFirstByLocalName(itemNode, "StandardItemIdentification");
-            codigo = getTextValue(sellersItem, "ID") || getTextValue(standardItem, "ID");
+            const sellersItem = getFirstByLocalName(
+              itemNode,
+              "SellersItemIdentification"
+            );
+            const standardItem = getFirstByLocalName(
+              itemNode,
+              "StandardItemIdentification"
+            );
+            codigo =
+              getTextValue(sellersItem, "ID") ||
+              getTextValue(standardItem, "ID");
           }
           if (!codigo) {
             codigo = getTextValue(lineNode, "ID");
           }
 
-          const qtyEl = getFirstByLocalName(lineNode, "InvoicedQuantity") || getFirstByLocalName(lineNode, "CreditedQuantity");
+          const qtyEl =
+            getFirstByLocalName(lineNode, "InvoicedQuantity") ||
+            getFirstByLocalName(lineNode, "CreditedQuantity");
           const cantidad = parseFloat(qtyEl?.textContent?.trim() || "1");
 
-          const lineSubtotal = parseFloat(getTextValue(lineNode, "LineExtensionAmount") || "0");
+          const lineSubtotal = parseFloat(
+            getTextValue(lineNode, "LineExtensionAmount") || "0"
+          );
 
           const priceNode = getFirstByLocalName(lineNode, "Price");
           let precioUnitario = 0;
           if (priceNode) {
-            precioUnitario = parseFloat(getTextValue(priceNode, "PriceAmount") || "0");
+            precioUnitario = parseFloat(
+              getTextValue(priceNode, "PriceAmount") || "0"
+            );
           }
           if (precioUnitario === 0) {
-            precioUnitario = parseFloat(getTextValue(lineNode, "PriceAmount") || "0");
+            precioUnitario = parseFloat(
+              getTextValue(lineNode, "PriceAmount") || "0"
+            );
           }
           if (precioUnitario === 0 && cantidad > 0 && lineSubtotal > 0) {
             precioUnitario = lineSubtotal / cantidad;
@@ -327,7 +547,7 @@ export default function XmlUploader({
           };
         });
 
-        setParsedInvoice({
+        const facturaParseada: InvoiceParsedData = {
           numeroFactura,
           cufe,
           fechaEmision,
@@ -340,36 +560,19 @@ export default function XmlUploader({
           total: totalVal > 0 ? totalVal : subtotalVal + taxVal,
           xmlContent: text,
           items,
-        });
+        };
 
-        // Consultar retenciones configuradas en la tabla 'terceros'
-        if (selectedCompanyId && emisor.nit) {
-          const nitEmisorLimpio = normalizarNit(emisor.nit);
-          const empresaIdNum = Number(selectedCompanyId);
+        setParsedInvoice(facturaParseada);
 
-          const { data: terceros } = await supabase
-            .from("terceros")
-            .select("id, numero_identificacion, retencion_renta_id, retencion_iva_id, retencion_ica_id")
-            .eq("empresa_id", empresaIdNum);
-
-          const terceroEncontrado = terceros?.find((t) => {
-            const nitDB = normalizarNit(String(t.numero_identificacion || ""));
-            return nitDB === nitEmisorLimpio || nitDB.startsWith(nitEmisorLimpio) || nitEmisorLimpio.startsWith(nitDB);
-          });
-
-          if (terceroEncontrado) {
-            setRetRentaId(terceroEncontrado.retencion_renta_id ? String(terceroEncontrado.retencion_renta_id) : "");
-            setRetIvaId(terceroEncontrado.retencion_iva_id ? String(terceroEncontrado.retencion_iva_id) : "");
-            setRetIcaId(terceroEncontrado.retencion_ica_id ? String(terceroEncontrado.retencion_ica_id) : "");
-          } else {
-            setRetRentaId("");
-            setRetIvaId("");
-            setRetIcaId("");
-          }
+        if (activeCompanyId && emisor.nit) {
+          await consultarRetencionesTercero(activeCompanyId, emisor.nit);
         }
       } catch (err: unknown) {
         console.error("Error al previsualizar XML:", err);
-        const errorMsg = err instanceof Error ? err.message : "No se pudo leer la estructura del XML.";
+        const errorMsg =
+          err instanceof Error
+            ? err.message
+            : "No se pudo leer la estructura del XML.";
         setStatusMessage({ type: "error", text: errorMsg });
       } finally {
         setIsParsing(false);
@@ -380,13 +583,19 @@ export default function XmlUploader({
   };
 
   const handleSaveInvoice = async () => {
-    if (!selectedCompanyId || !selectedBranchId || !selectedDocumentClassId) {
-      setStatusMessage({ type: "error", text: "Debe seleccionar Empresa, Sucursal y Clase de Documento." });
+    if (!activeCompanyId || !selectedBranchId || !selectedDocumentClassId) {
+      setStatusMessage({
+        type: "error",
+        text: "Debe seleccionar Empresa, Sucursal y Clase de Documento.",
+      });
       return;
     }
 
     if (!parsedInvoice) {
-      setStatusMessage({ type: "error", text: "No hay ninguna factura cargada." });
+      setStatusMessage({
+        type: "error",
+        text: "No hay ninguna factura cargada.",
+      });
       return;
     }
 
@@ -407,7 +616,7 @@ export default function XmlUploader({
           receptor_nit: parsedInvoice.clienteNit,
           receptor_nombre: parsedInvoice.clienteNombre,
         },
-        selectedCompanyId,
+        activeCompanyId,
         selectedBranchId,
         selectedDocumentClassId,
         parsedInvoice.xmlContent,
@@ -424,7 +633,10 @@ export default function XmlUploader({
         throw new Error(res.error || "Ocurrió un error al guardar la factura.");
       }
 
-      setStatusMessage({ type: "success", text: `Factura ${parsedInvoice.numeroFactura} contabilizada con éxito.` });
+      setStatusMessage({
+        type: "success",
+        text: `Factura ${parsedInvoice.numeroFactura} contabilizada con éxito.`,
+      });
       setFile(null);
       setParsedInvoice(null);
       setPdfUrlInput("");
@@ -434,12 +646,17 @@ export default function XmlUploader({
 
       if (onSuccess) onSuccess();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Error al procesar factura.";
+      const msg =
+        err instanceof Error ? err.message : "Error al procesar factura.";
       setStatusMessage({ type: "error", text: msg });
     } finally {
       setIsSaving(false);
     }
   };
+
+  if (!isMounted) {
+    return null;
+  }
 
   return (
     <div className="space-y-1.5">
@@ -458,12 +675,14 @@ export default function XmlUploader({
       {!parsedInvoice && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2 bg-white p-2 rounded border border-dashed border-gray-300 items-center">
           <div className="md:col-span-2 flex items-center gap-2">
-            <span className="text-[11px] font-bold text-gray-700 whitespace-nowrap">Archivo XML:</span>
+            <span className="text-[11px] font-bold text-gray-700 whitespace-nowrap">
+              Archivo XML:
+            </span>
             <input
               type="file"
               accept=".xml"
               onChange={handleFileChange}
-              disabled={isParsing || !selectedCompanyId}
+              disabled={isParsing || !activeCompanyId}
               className="block w-full text-xs text-gray-500 file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer disabled:opacity-50"
             />
           </div>
@@ -483,31 +702,54 @@ export default function XmlUploader({
         <div className="bg-white rounded border border-blue-200 p-2 space-y-1.5">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2 bg-blue-50/80 p-2 rounded text-xs border border-blue-100">
             <div className="flex flex-col justify-center">
-              <span className="text-[9px] text-gray-500 uppercase font-semibold leading-tight">Factura Nº</span>
-              <span className="font-bold text-blue-900 text-sm leading-tight">{parsedInvoice.numeroFactura}</span>
-              <span className="text-[10px] text-gray-600 mt-0.5">Emisión: {parsedInvoice.fechaEmision}</span>
+              <span className="text-[9px] text-gray-500 uppercase font-semibold leading-tight">
+                Factura Nº
+              </span>
+              <span className="font-bold text-blue-900 text-sm leading-tight">
+                {parsedInvoice.numeroFactura}
+              </span>
+              <span className="text-[10px] text-gray-600 mt-0.5">
+                Emisión: {parsedInvoice.fechaEmision}
+              </span>
             </div>
 
             <div className="border-t md:border-t-0 md:border-l border-blue-200 pt-1 md:pt-0 md:pl-3 flex flex-col justify-center">
-              <span className="text-[9px] text-blue-800 uppercase font-bold leading-tight">Emisor (Proveedor)</span>
-              <span className="font-semibold text-gray-900 truncate leading-tight" title={parsedInvoice.emisorNombre}>
+              <span className="text-[9px] text-blue-800 uppercase font-bold leading-tight">
+                Emisor (Proveedor)
+              </span>
+              <span
+                className="font-semibold text-gray-900 truncate leading-tight"
+                title={parsedInvoice.emisorNombre}
+              >
                 {parsedInvoice.emisorNombre}
               </span>
-              <span className="text-[10px] font-mono text-gray-600">NIT/ID: {parsedInvoice.emisorNit}</span>
+              <span className="text-[10px] font-mono text-gray-600">
+                NIT/ID: {parsedInvoice.emisorNit}
+              </span>
             </div>
 
             <div className="border-t md:border-t-0 md:border-l border-blue-200 pt-1 md:pt-0 md:pl-3 flex items-center justify-between">
               <div className="flex flex-col justify-center min-w-0">
-                <span className="text-[9px] text-amber-800 uppercase font-bold leading-tight">Adquirente (Facturado a)</span>
-                <span className="font-semibold text-gray-900 truncate leading-tight" title={parsedInvoice.clienteNombre}>
+                <span className="text-[9px] text-amber-800 uppercase font-bold leading-tight">
+                  Adquirente (Facturado a)
+                </span>
+                <span
+                  className="font-semibold text-gray-900 truncate leading-tight"
+                  title={parsedInvoice.clienteNombre}
+                >
                   {parsedInvoice.clienteNombre}
                 </span>
-                <span className="text-[10px] font-mono text-gray-600">NIT/ID: {parsedInvoice.clienteNit}</span>
+                <span className="text-[10px] font-mono text-gray-600">
+                  NIT/ID: {parsedInvoice.clienteNit}
+                </span>
               </div>
 
               <button
                 type="button"
-                onClick={() => setParsedInvoice(null)}
+                onClick={() => {
+                  setParsedInvoice(null);
+                  setFile(null);
+                }}
                 className="ml-2 px-2 py-1 text-[10px] text-gray-600 hover:text-red-600 bg-white border border-gray-300 hover:border-red-300 rounded font-medium shadow-2xs whitespace-nowrap cursor-pointer"
               >
                 Cambiar XML
@@ -515,28 +757,33 @@ export default function XmlUploader({
             </div>
           </div>
 
-          {/* SECCIÓN DE SELECCIÓN DE RETENCIONES HEREDADAS DEL TERCERO */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-blue-50/40 p-2 rounded border border-blue-200 items-end">
             <div>
               <label className="block text-[10px] font-bold text-blue-900 uppercase mb-0.5">
-                Ret. Renta
+                Ret. Renta ({anioContabilidad})
               </label>
               <select
                 value={retRentaId}
+                disabled={conceptosRenta.length === 0}
                 onChange={(e) => setRetRentaId(e.target.value)}
-                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer"
+                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer disabled:bg-gray-100"
               >
                 <option value="">-- Seleccione --</option>
                 {conceptosRenta.map((c) => {
                   const tarifaPorcentaje = (Number(c.tarifa || 0) * 100).toFixed(2);
                   const conceptoLargo = c.concepto || c.descripcion || "";
-                  const conceptoCorto = conceptoLargo.length > 45 
-                    ? `${conceptoLargo.substring(0, 45)}...` 
-                    : conceptoLargo;
+                  const conceptoCorto =
+                    conceptoLargo.length > 45
+                      ? `${conceptoLargo.substring(0, 45)}...`
+                      : conceptoLargo;
                   const codigoStr = c.codigo ? `${c.codigo} - ` : "";
 
                   return (
-                    <option key={c.id} value={c.id} title={`${conceptoLargo} (${tarifaPorcentaje}%)`}>
+                    <option
+                      key={`${activeCompanyId}_${anioContabilidad}_renta_${c.id}`}
+                      value={String(c.id)}
+                      title={`${conceptoLargo} (${tarifaPorcentaje}%)`}
+                    >
                       {`${codigoStr}${conceptoCorto} (${tarifaPorcentaje}%)`}
                     </option>
                   );
@@ -546,24 +793,30 @@ export default function XmlUploader({
 
             <div>
               <label className="block text-[10px] font-bold text-blue-900 uppercase mb-0.5">
-                Ret. IVA
+                Ret. IVA ({anioContabilidad})
               </label>
               <select
                 value={retIvaId}
+                disabled={conceptosIva.length === 0}
                 onChange={(e) => setRetIvaId(e.target.value)}
-                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer"
+                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer disabled:bg-gray-100"
               >
                 <option value="">-- Seleccione --</option>
                 {conceptosIva.map((c) => {
                   const tarifaPorcentaje = (Number(c.tarifa || 0) * 100).toFixed(2);
                   const conceptoLargo = c.concepto || c.descripcion || "";
-                  const conceptoCorto = conceptoLargo.length > 45 
-                    ? `${conceptoLargo.substring(0, 45)}...` 
-                    : conceptoLargo;
+                  const conceptoCorto =
+                    conceptoLargo.length > 45
+                      ? `${conceptoLargo.substring(0, 45)}...`
+                      : conceptoLargo;
                   const codigoStr = c.codigo ? `${c.codigo} - ` : "";
 
                   return (
-                    <option key={c.id} value={c.id} title={`${conceptoLargo} (${tarifaPorcentaje}%)`}>
+                    <option
+                      key={`${activeCompanyId}_${anioContabilidad}_iva_${c.id}`}
+                      value={String(c.id)}
+                      title={`${conceptoLargo} (${tarifaPorcentaje}%)`}
+                    >
                       {`${codigoStr}${conceptoCorto} (${tarifaPorcentaje}%)`}
                     </option>
                   );
@@ -573,24 +826,30 @@ export default function XmlUploader({
 
             <div>
               <label className="block text-[10px] font-bold text-blue-900 uppercase mb-0.5">
-                Ret. ICA
+                Ret. ICA ({anioContabilidad})
               </label>
               <select
                 value={retIcaId}
+                disabled={conceptosIca.length === 0}
                 onChange={(e) => setRetIcaId(e.target.value)}
-                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer"
+                className="w-full border border-blue-300 rounded h-7 px-1 bg-white text-[10px] truncate cursor-pointer disabled:bg-gray-100"
               >
                 <option value="">-- Seleccione --</option>
                 {conceptosIca.map((c) => {
                   const tarifaPorMil = (Number(c.tarifa || 0) * 1000).toFixed(2);
                   const conceptoLargo = c.concepto || c.descripcion || "";
-                  const conceptoCorto = conceptoLargo.length > 45 
-                    ? `${conceptoLargo.substring(0, 45)}...` 
-                    : conceptoLargo;
+                  const conceptoCorto =
+                    conceptoLargo.length > 45
+                      ? `${conceptoLargo.substring(0, 45)}...`
+                      : conceptoLargo;
                   const codigoStr = c.codigo ? `${c.codigo} - ` : "";
 
                   return (
-                    <option key={c.id} value={c.id} title={`${conceptoLargo} (${tarifaPorMil}‰)`}>
+                    <option
+                      key={`${activeCompanyId}_${anioContabilidad}_ica_${c.id}`}
+                      value={String(c.id)}
+                      title={`${conceptoLargo} (${tarifaPorMil}‰)`}
+                    >
                       {`${codigoStr}${conceptoCorto} (${tarifaPorMil}‰)`}
                     </option>
                   );
@@ -615,16 +874,29 @@ export default function XmlUploader({
                   {parsedInvoice.items.length > 0 ? (
                     parsedInvoice.items.map((item, idx) => (
                       <tr key={idx} className="hover:bg-gray-50 font-sans">
-                        <td className="px-2 py-0.5 font-mono text-[10px] text-gray-500">{item.codigo || "-"}</td>
-                        <td className="px-2 py-0.5 truncate max-w-xs">{item.descripcion}</td>
-                        <td className="px-2 py-0.5 text-center font-mono font-medium">{item.cantidad}</td>
-                        <td className="px-2 py-0.5 text-right font-mono">{formatCOP(item.precio_unitario)}</td>
-                        <td className="px-2 py-0.5 text-right font-mono font-medium">{formatCOP(item.subtotal)}</td>
+                        <td className="px-2 py-0.5 font-mono text-[10px] text-gray-500">
+                          {item.codigo || "-"}
+                        </td>
+                        <td className="px-2 py-0.5 truncate max-w-xs">
+                          {item.descripcion}
+                        </td>
+                        <td className="px-2 py-0.5 text-center font-mono font-medium">
+                          {item.cantidad}
+                        </td>
+                        <td className="px-2 py-0.5 text-right font-mono">
+                          {formatCOP(item.precio_unitario)}
+                        </td>
+                        <td className="px-2 py-0.5 text-right font-mono font-medium">
+                          {formatCOP(item.subtotal)}
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={5} className="px-2 py-2 text-center text-xs text-gray-400 italic">
+                      <td
+                        colSpan={5}
+                        className="px-2 py-2 text-center text-xs text-gray-400 italic"
+                      >
                         No se encontraron detalles de ítems en el XML.
                       </td>
                     </tr>
@@ -636,19 +908,32 @@ export default function XmlUploader({
 
           <div className="flex items-center justify-between pt-1 border-t border-gray-100">
             <div className="flex items-center gap-3 text-xs font-mono">
-              <span className="text-gray-500 text-[11px]">Subtotal: <strong className="text-gray-800">{formatCOP(parsedInvoice.subtotal)}</strong></span>
-              <span className="text-gray-500 text-[11px]">IVA / Imp: <strong className="text-gray-800">{formatCOP(parsedInvoice.impuestos)}</strong></span>
+              <span className="text-gray-500 text-[11px]">
+                Subtotal:{" "}
+                <strong className="text-gray-800">
+                  {formatCOP(parsedInvoice.subtotal)}
+                </strong>
+              </span>
+              <span className="text-gray-500 text-[11px]">
+                IVA / Imp:{" "}
+                <strong className="text-gray-800">
+                  {formatCOP(parsedInvoice.impuestos)}
+                </strong>
+              </span>
               <span className="text-blue-900 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-200 text-xs">
                 Total: {formatCOP(parsedInvoice.total)}
               </span>
             </div>
 
             <button
+              type="button"
               onClick={handleSaveInvoice}
               disabled={isSaving}
               className="px-4 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded shadow-xs transition-colors disabled:bg-blue-300 cursor-pointer"
             >
-              {isSaving ? "Guardando y Contabilizando..." : "Guardar y Contabilizar Factura"}
+              {isSaving
+                ? "Guardando y Contabilizando..."
+                : "Guardar y Contabilizar Factura"}
             </button>
           </div>
         </div>

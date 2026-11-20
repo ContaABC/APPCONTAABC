@@ -57,8 +57,9 @@ export default function ClientesPage() {
     { name: "Consulta Facturas Clientes", href: "/facturas-emitidas" },
     { name: "Recibos de Caja Clientes", href: "/cobros/nuevo" },
     { name: "Items de Facturación", href: "/items" },
-    { name: "Notas para Clientes", href: "/notas-emitidas" },
-    { name: "Consulta de Notas Clientes", href: "/notas-emitidas/nueva" },
+    { name: "Notas para Clientes Manuales", href: "/notas-emitidas/nueva" },
+    { name: "Notas para Clientes XML", href: "facturas/notas" },
+    { name: "Consulta de Notas Clientes", href: "/notas-emitidas" },
   ];
 
   return (

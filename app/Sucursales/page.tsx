@@ -1,6 +1,16 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, ChangeEvent, FormEvent } from 'react'
+import Link from 'next/link'
+import { ArrowLeft } from 'lucide-react'
+import {
+  obtenerSucursalesAction,
+  siguienteCodigoSucursalAction,
+  crearSucursalAction,
+  actualizarSucursalAction,
+  eliminarSucursalAction
+} from './actions'
+import { createClient } from '@supabase/supabase-js'
 
 // ==========================================
 // INTERFACES DE TIPADO
@@ -134,14 +144,13 @@ function SubformularioSucursal({
     []
   )
 
-  // 3. Obtener consecutivo de código de la sucursal
+  // 3. Obtener consecutivo de código de la sucursal mediante Action
   const obtenerCodigoAuto = async (empId: string | number) => {
     if (!empId) return
     try {
-      const res = await fetch(`/api/sucursales?empresa_id=${empId}&accion=siguiente_codigo`)
-      const data = await res.json()
-      if (data.exito) {
-        setFormData((prev) => ({ ...prev, codigo_sucursal: data.siguiente_codigo }))
+      const res = await siguienteCodigoSucursalAction(empId)
+      if (res.exito && res.siguiente_codigo) {
+        setFormData((prev) => ({ ...prev, codigo_sucursal: res.siguiente_codigo! }))
       }
     } catch (err) {
       console.error('Error al obtener consecutivo:', err)
@@ -265,18 +274,27 @@ function SubformularioSucursal({
     }
 
     try {
-      const metodo = sucursalEditar ? 'PUT' : 'POST'
-      const res = await fetch('/api/sucursales', {
-        method: metodo,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+      let res;
+      if (sucursalEditar && formData.id) {
+        res = await actualizarSucursalAction({
+          id: formData.id,
+          nombre: formData.nombre,
+          nombre_sucursal: formData.nombre,
+          direccion: formData.direccion,
+          telefono: formData.telefono,
+          email: formData.email,
+          departamento: formData.departamento,
+          ciudad: formData.ciudad,
+          codigo_dane: formData.codigo_dane
+        })
+      } else {
+        res = await crearSucursalAction(payload)
+      }
 
-      const data = await res.json()
-      if (data.exito) {
+      if (res.exito) {
         onSave()
       } else {
-        alert(data.mensaje || 'Error al guardar la sucursal.')
+        alert(res.mensaje || 'Error al guardar la sucursal.')
       }
     } catch (err) {
       console.error('Error en envío:', err)
@@ -484,7 +502,12 @@ function SubformularioSucursal({
 // ==========================================
 export default function SucursalesPage() {
   const [empresas, setEmpresas] = useState<Empresa[]>([])
-  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState<string | number>('')
+  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState<string | number>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("empresa_activa") || "";
+    }
+    return "";
+  })
   const [sucursales, setSucursales] = useState<Sucursal[]>([])
   const [cargando, setCargando] = useState<boolean>(true)
   const [modalAbierto, setModalAbierto] = useState<boolean>(false)
@@ -499,10 +522,9 @@ export default function SucursalesPage() {
     if (!empId) return
     setCargando(true)
     try {
-      const res = await fetch(`/api/sucursales?empresa_id=${empId}`)
-      const data = await res.json()
-      if (data.exito) {
-        setSucursales(data.datos || [])
+      const res = await obtenerSucursalesAction(empId)
+      if (res.exito) {
+        setSucursales(res.datos || [])
       } else {
         setSucursales([])
       }
@@ -515,48 +537,107 @@ export default function SucursalesPage() {
   }, [])
 
   useEffect(() => {
-    async function cargarEmpresasIniciales() {
+    async function sincronizarEmpresasAsignadas() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      if (!supabaseUrl || !supabaseAnonKey) return;
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
       try {
-        const res = await fetch('/api/sucursales?accion=listar_empresas')
-        const data = await res.json()
-        if (data.exito && data.datos.length > 0) {
-          const empresasOrdenadas = [...data.datos].sort((a: Empresa, b: Empresa) => {
-            const nombreA = a.razon_social || a.nombre_comercial || ''
-            const nombreB = b.razon_social || b.nombre_comercial || ''
-            return nombreA.localeCompare(nombreB, 'es', { sensitivity: 'base' })
-          })
-
-          setEmpresas(empresasOrdenadas)
-
-          // Leer cookie corporativa empresa_activa o usar la primera por defecto
-          const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'))
-          let empresaIdAUsar: string | number = empresasOrdenadas[0].id
-
-          if (match && empresasOrdenadas.some((e: Empresa) => String(e.id) === match[2])) {
-            empresaIdAUsar = match[2]
-          }
-
-          setEmpresaIdSeleccionada(empresaIdAUsar)
-          cargarSucursales(empresaIdAUsar)
-        } else {
-          setCargando(false)
+        const { data: authData } = await supabase.auth.getSession();
+        const userId = authData?.session?.user?.id;
+        if (!userId) {
+          setCargando(false);
+          return;
         }
-      } catch (error) {
-        console.error('Error al cargar empresas:', error)
-        setCargando(false)
+
+        const { data: permisosTx } = await supabase
+          .from("usuario_permisos_tx")
+          .select("empresa_id")
+          .eq("usuario_id", userId);
+
+        if (!permisosTx || permisosTx.length === 0) {
+          setCargando(false);
+          return;
+        }
+
+        const empresaIds = Array.from(new Set(permisosTx.map((p: any) => p.empresa_id).filter(Boolean)));
+        if (empresaIds.length === 0) {
+          setCargando(false);
+          return;
+        }
+
+        const { data: listaEmpresas, error } = await supabase
+          .from("empresas")
+          .select("id, razon_social, nombre_comercial")
+          .in("id", empresaIds)
+          .order("razon_social", { ascending: true });
+
+        if (!error && listaEmpresas && listaEmpresas.length > 0) {
+          setEmpresas(listaEmpresas);
+
+          if (listaEmpresas.length === 1) {
+            const unicaId = String(listaEmpresas[0].id);
+            setEmpresaIdSeleccionada(unicaId);
+            localStorage.setItem("empresa_activa", unicaId);
+            document.cookie = `empresa_activa=${unicaId}; path=/; max-age=86400; SameSite=Lax`;
+            cargarSucursales(unicaId);
+          } else {
+            const empresaActualVal = localStorage.getItem("empresa_activa");
+            if (!empresaActualVal || !listaEmpresas.some(e => String(e.id) === empresaActualVal)) {
+              const primeraId = String(listaEmpresas[0].id);
+              setEmpresaIdSeleccionada(primeraId);
+              localStorage.setItem("empresa_activa", primeraId);
+              document.cookie = `empresa_activa=${primeraId}; path=/; max-age=86400; SameSite=Lax`;
+              cargarSucursales(primeraId);
+            } else {
+              setEmpresaIdSeleccionada(empresaActualVal);
+              cargarSucursales(empresaActualVal);
+            }
+          }
+        } else {
+          setCargando(false);
+        }
+      } catch (err) {
+        console.error("Error al sincronizar empresas asignadas en sucursales:", err);
+        setCargando(false);
       }
     }
-    cargarEmpresasIniciales()
+
+    sincronizarEmpresasAsignadas();
   }, [cargarSucursales])
 
-  const handleEmpresaChange = (e: ChangeEvent<HTMLSelectElement>) => {
+  const handleEmpresaChange = async (e: ChangeEvent<HTMLSelectElement>) => {
     const nuevoId = e.target.value
     setEmpresaIdSeleccionada(nuevoId)
     cargarSucursales(nuevoId)
 
-    // Guardar cookie y localStorage al cambiar empresa
     localStorage.setItem("empresa_activa", nuevoId)
     document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`
+
+    const empresaObj = empresas.find(emp => String(emp.id) === String(nuevoId))
+    if (empresaObj) {
+      localStorage.setItem("empresa_activa_nombre", empresaObj.razon_social || empresaObj.nombre_comercial || "")
+    }
+
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      if (supabaseUrl && supabaseAnonKey) {
+        const supabase = createClient(supabaseUrl, supabaseAnonKey);
+        const { data: authData } = await supabase.auth.getSession();
+        const userId = authData?.session?.user?.id;
+        if (userId) {
+          await supabase
+            .from("usuarios_perfiles")
+            .update({ empresa_activa: nuevoId })
+            .eq("id", userId);
+        }
+      }
+    } catch (err) {
+      console.error("Error al actualizar empresa_activa en usuarios_perfiles:", err);
+    }
   }
 
   const handleNuevaSucursal = () => {
@@ -572,16 +653,11 @@ export default function SucursalesPage() {
   const handleToggleEstado = async (sucursal: Sucursal) => {
     const nuevoEstado = sucursal.estado === 'Activa' ? 'Inactiva' : 'Activa'
     try {
-      const res = await fetch('/api/sucursales', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: sucursal.id, estado: nuevoEstado })
-      })
-      const data = await res.json()
-      if (data.exito) {
+      const res = await actualizarSucursalAction({ id: sucursal.id!, estado: nuevoEstado })
+      if (res.exito) {
         cargarSucursales(empresaIdSeleccionada)
       } else {
-        alert(data.mensaje)
+        alert(res.mensaje)
       }
     } catch (error) {
       console.error('Error al cambiar estado:', error)
@@ -593,35 +669,48 @@ export default function SucursalesPage() {
     if (!confirm(`¿Deseas eliminar la sucursal "${nombreVisual}"?`)) return
 
     try {
-      const res = await fetch(`/api/sucursales?id=${sucursal.id}&empresa_id=${empresaIdSeleccionada}`, {
-        method: 'DELETE'
-      })
-      const data = await res.json()
-      if (data.exito) {
+      const res = await eliminarSucursalAction(sucursal.id!)
+      if (res.exito) {
         cargarSucursales(empresaIdSeleccionada)
       } else {
-        alert(data.mensaje || 'No se pudo eliminar la sucursal.')
+        alert(res.mensaje || 'No se pudo eliminar la sucursal.')
       }
     } catch (error) {
       console.error('Error al eliminar sucursal:', error)
     }
   }
 
+  // Evitar renderizado prematuro del select en SSR hasta que el cliente esté montado
+  if (!isMounted) {
+    return <div className="p-6 max-w-7xl mx-auto space-y-6 text-gray-500 text-sm">Cargando módulo de sucursales...</div>
+  }
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       {/* Encabezado */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 rounded-lg shadow-sm border border-gray-200 gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">Gestión de Sucursales</h1>
-          <p className="text-sm text-gray-500">Administra las sedes y ubicaciones vinculadas a la empresa.</p>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/modulos/contabilidad/configuracion"
+            className="inline-flex items-center justify-center p-2.5 bg-gray-50 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-100 shadow-sm transition-colors shrink-0 cursor-pointer"
+            title="Volver al Menú de Configuración"
+          >
+            <ArrowLeft className="w-4 h-4 text-blue-600" />
+          </Link>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-800">Gestión de Sucursales</h1>
+            <p className="text-sm text-gray-500">Administra las sedes y ubicaciones vinculadas a la empresa.</p>
+          </div>
         </div>
 
         <div className="flex items-center space-x-3 w-full md:w-auto">
           <select
             value={empresaIdSeleccionada}
+            disabled={empresas.length <= 1}
             onChange={handleEmpresaChange}
-            className="border border-gray-300 p-2 rounded-md bg-white text-sm font-semibold text-gray-700 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none min-w-[240px] cursor-pointer"
+            className="border border-gray-300 p-2 rounded-md bg-white text-sm font-semibold text-gray-700 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none min-w-[240px] disabled:bg-gray-100 disabled:cursor-not-allowed cursor-pointer"
           >
+            {empresas.length !== 1 && <option value="">-- Seleccione una Empresa --</option>}
             {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>
                 🏢 {emp.razon_social || emp.nombre_comercial}

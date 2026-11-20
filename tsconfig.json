@@ -29,6 +29,6 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts"
-  ],
+, "app/actividades_auxiliares/page.js", "app/terceros/actions.js"  ],
   "exclude": ["node_modules"]
 }

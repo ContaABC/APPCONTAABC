@@ -1,9 +1,23 @@
 "use client";
 
-import { useState, useEffect, FormEvent, ChangeEvent, MouseEvent } from "react";
+import { useState, useEffect, useCallback, FormEvent, ChangeEvent, MouseEvent } from "react";
 import Link from "next/link";
-import { ArrowLeft, Users, UserPlus, Shield, CheckCircle2, XCircle, Trash2, Power, Search, Edit3, X } from "lucide-react";
-import { createClient } from "@supabase/supabase-js"; 
+import { useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  Users,
+  UserPlus,
+  Shield,
+  CheckCircle2,
+  XCircle,
+  Trash2,
+  Power,
+  Search,
+  Edit3,
+  X,
+  Building2,
+} from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { crearOActualizarUsuarioAdmin, UsuarioFormData } from "./actions";
 
 // ==========================================
@@ -27,11 +41,22 @@ interface MensajeEstado {
   tipo: "success" | "info" | "error" | "";
 }
 
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
 export default function UsuariosPage() {
+  const router = useRouter();
+
   const [usuarios, setUsuarios] = useState<UsuarioPerfil[]>([]);
+  const [empresasAdminIds, setEmpresasAdminIds] = useState<string[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [cargandoLista, setCargandoLista] = useState<boolean>(true);
-  
+
   const [usuarioSeleccionadoId, setUsuarioSeleccionadoId] = useState<string | null>(null);
 
   const [busqueda, setBusqueda] = useState<string>("");
@@ -46,33 +71,106 @@ export default function UsuariosPage() {
     password: "",
     tipo_usuario: "Operador",
     es_temporal: true,
-    fecha_expiracion_password: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    fecha_expiracion_password: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split("T")[0],
   });
 
   const [mensaje, setMensaje] = useState<MensajeEstado>({ texto: "", tipo: "" });
 
-  useEffect(() => {
-    cargarUsuarios();
-  }, []);
-
-  const cargarUsuarios = async () => {
+  const cargarUsuarios = useCallback(async () => {
     setCargandoLista(true);
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    
+
     if (supabaseUrl && supabaseAnonKey) {
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        setUsuarios([]);
+        setEmpresasAdminIds([]);
+        setCargandoLista(false);
+        return;
+      }
+
+      // 1. Obtener empresas permitidas al administrador actual
+      const { data: permisosAdmin, error: errPermisosAdmin } = await supabase
+        .from("usuario_permisos_tx")
+        .select("empresa_id")
+        .eq("usuario_id", user.id);
+
+      const idsEmpresasAdmin = Array.from(
+        new Set(
+          (permisosAdmin || [])
+            .map((p: { empresa_id?: string | number | null }) =>
+              p.empresa_id != null ? String(p.empresa_id).trim() : ""
+            )
+            .filter(Boolean)
+        )
+      );
+
+      setEmpresasAdminIds(idsEmpresasAdmin);
+
+      // Si el administrador no tiene empresas asignadas en usuario_permisos_tx, no debe ver usuarios de otras empresas
+      if (errPermisosAdmin || idsEmpresasAdmin.length === 0) {
+        setUsuarios([]);
+        setCargandoLista(false);
+        return;
+      }
+
+      // 2. Obtener IDs de usuarios asignados a las empresas del administrador
+      const { data: permisosUsuariosEmpresa, error: errPermisosUsuarios } = await supabase
+        .from("usuario_permisos_tx")
+        .select("usuario_id")
+        .in("empresa_id", idsEmpresasAdmin);
+
+      if (errPermisosUsuarios) {
+        setUsuarios([]);
+        setCargandoLista(false);
+        return;
+      }
+
+      const idsUsuariosPermitidos = Array.from(
+        new Set(
+          [
+            ...(permisosUsuariosEmpresa || []).map(
+              (p: { usuario_id?: string | null }) =>
+                p.usuario_id ? String(p.usuario_id).trim() : ""
+            ),
+            String(user.id),
+          ].filter(Boolean)
+        )
+      );
+
+      if (idsUsuariosPermitidos.length === 0) {
+        setUsuarios([]);
+        setCargandoLista(false);
+        return;
+      }
+
+      // 3. Consultar únicamente los perfiles dentro del alcance de empresas del administrador
       const { data, error } = await supabase
         .from("usuarios_perfiles")
         .select("*")
+        .in("id", idsUsuariosPermitidos)
         .order("created_at", { ascending: false });
 
       if (!error && data) {
         setUsuarios(data as UsuarioPerfil[]);
+      } else {
+        setUsuarios([]);
       }
     }
     setCargandoLista(false);
-  };
+  }, []);
+
+  useEffect(() => {
+    cargarUsuarios();
+  }, [cargarUsuarios]);
 
   const seleccionarUsuarioParaEditar = (u: UsuarioPerfil) => {
     setUsuarioSeleccionadoId(u.id);
@@ -84,22 +182,26 @@ export default function UsuariosPage() {
       password: "",
       tipo_usuario: u.tipo_usuario || "Operador",
       es_temporal: u.es_temporal ?? true,
-      fecha_expiracion_password: u.fecha_expiracion_password ? u.fecha_expiracion_password.split('T')[0] : "",
+      fecha_expiracion_password: u.fecha_expiracion_password
+        ? u.fecha_expiracion_password.split("T")[0]
+        : "",
     });
     setMensaje({ texto: `Editando al usuario: ${u.nombres} ${u.apellidos}`, tipo: "info" });
   };
 
   const limpiarFormulario = () => {
     setUsuarioSeleccionadoId(null);
-    setFormData({ 
-      nombres: "", 
-      apellidos: "", 
-      cedula: "", 
-      email: "", 
-      password: "", 
+    setFormData({
+      nombres: "",
+      apellidos: "",
+      cedula: "",
+      email: "",
+      password: "",
       tipo_usuario: "Operador",
       es_temporal: true,
-      fecha_expiracion_password: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      fecha_expiracion_password: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .split("T")[0],
     });
     setMensaje({ texto: "", tipo: "" });
   };
@@ -110,6 +212,7 @@ export default function UsuariosPage() {
     setMensaje({ texto: "", tipo: "" });
 
     try {
+      const esCreacionNueva = !usuarioSeleccionadoId;
       const resultado = await crearOActualizarUsuarioAdmin({
         id: usuarioSeleccionadoId || undefined,
         ...formData,
@@ -119,9 +222,81 @@ export default function UsuariosPage() {
         throw new Error(resultado.message);
       }
 
+      let nuevoUsuarioId: string | undefined;
+
+      if (esCreacionNueva) {
+        nuevoUsuarioId =
+          (resultado as { userId?: string; id?: string; data?: { id?: string } })?.userId ||
+          (resultado as { id?: string })?.id ||
+          (resultado as { data?: { id?: string } })?.data?.id;
+
+        if (!nuevoUsuarioId && formData.email) {
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+          if (supabaseUrl && supabaseAnonKey) {
+            const supabase = createClient(supabaseUrl, supabaseAnonKey);
+            const { data: perfilCreado } = await supabase
+              .from("usuarios_perfiles")
+              .select("id")
+              .eq("email", formData.email.trim())
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (perfilCreado?.id) {
+              nuevoUsuarioId = String(perfilCreado.id);
+            }
+          }
+        }
+
+        if (empresasAdminIds.length > 0 && nuevoUsuarioId) {
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+          const empresaActivaLocal =
+            typeof window !== "undefined"
+              ? localStorage.getItem("empresa_activa") || localStorage.getItem("empresa_id")
+              : null;
+          const empresaActivaCookie = getCookieValue("empresa_activa");
+          const empresaCandidata = String(empresaActivaLocal || empresaActivaCookie || "").trim();
+
+          const empresaAsignar = empresasAdminIds.includes(empresaCandidata)
+            ? empresaCandidata
+            : empresasAdminIds[0];
+
+          if (supabaseUrl && supabaseAnonKey && empresaAsignar) {
+            const supabase = createClient(supabaseUrl, supabaseAnonKey);
+            const { data: sucursalesEmp } = await supabase
+              .from("sucursales")
+              .select("id")
+              .eq("empresa_id", Number(empresaAsignar))
+              .order("id", { ascending: true })
+              .limit(1);
+
+            const primeraSucursalId =
+              sucursalesEmp && sucursalesEmp.length > 0 ? Number(sucursalesEmp[0].id) : null;
+
+            await supabase.from("usuario_permisos_tx").insert([
+              {
+                usuario_id: nuevoUsuarioId,
+                empresa_id: Number(empresaAsignar),
+                sucursal_id: primeraSucursalId,
+              },
+            ]);
+          }
+        }
+      }
+
       setMensaje({ texto: resultado.message, tipo: "success" });
       limpiarFormulario();
-      cargarUsuarios();
+      await cargarUsuarios();
+
+      if (esCreacionNueva && nuevoUsuarioId) {
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("nuevo_usuario_permisos_id", String(nuevoUsuarioId));
+        }
+        router.push(
+          `/usuarios/permisos?from=/usuarios&usuarioId=${encodeURIComponent(String(nuevoUsuarioId))}`
+        );
+      }
     } catch (error: any) {
       setMensaje({ texto: error.message || "Error al procesar la solicitud.", tipo: "error" });
     } finally {
@@ -162,7 +337,9 @@ export default function UsuariosPage() {
   };
 
   const usuariosFiltrados = usuarios.filter((u) => {
-    const textoMatch = `${u.nombres} ${u.apellidos} ${u.cedula} ${u.email}`.toLowerCase().includes(busqueda.toLowerCase());
+    const textoMatch = `${u.nombres} ${u.apellidos} ${u.cedula} ${u.email}`
+      .toLowerCase()
+      .includes(busqueda.toLowerCase());
     const tipoMatch = filtroTipo ? u.tipo_usuario === filtroTipo : true;
     const estadoMatch = filtroEstado !== "" ? String(u.activo) === filtroEstado : true;
     return textoMatch && tipoMatch && estadoMatch;
@@ -171,9 +348,11 @@ export default function UsuariosPage() {
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-10">
       <div className="max-w-7xl mx-auto">
-        
-        <Link href="/modulos/contabilidad" className="inline-flex items-center gap-2 text-sm text-zinc-500 hover:text-blue-600 mb-4 transition">
-          <ArrowLeft className="w-4 h-4" /> Volver al Menú Contable
+        <Link
+          href="/modulos/contabilidad/configuracion"
+          className="inline-flex items-center gap-2 text-sm text-zinc-500 hover:text-blue-600 mb-4 transition cursor-pointer"
+        >
+          <ArrowLeft className="w-4 h-4" /> Volver a Configuración
         </Link>
 
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
@@ -183,28 +362,34 @@ export default function UsuariosPage() {
             </div>
             <div>
               <h1 className="text-xl font-bold">Gestión de Usuarios y Accesos</h1>
-              <p className="text-xs text-zinc-500">Control de perfiles, clasificaciones temporales/permanentes y vigencias</p>
+              <p className="text-xs text-zinc-500">
+                Control de perfiles, clasificaciones temporales/permanentes y vigencias
+              </p>
             </div>
           </div>
           <Link
-            href="/usuarios/asignaciones"
+            href="/usuarios/permisos?from=/usuarios"
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-semibold text-xs transition shadow-sm flex items-center gap-2 cursor-pointer"
           >
-            <span>Ir a Asignaciones de Empresas</span>
+            <Building2 className="w-4 h-4" />
+            <span>Asignar Transacciones al usuario</span>
           </Link>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          
           {/* Formulario Compacto en 2 Columnas (Izquierda - 5 columnas) */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm lg:col-span-5 h-fit">
             <div className="flex justify-between items-center mb-3">
               <h2 className="text-sm font-bold flex items-center gap-2">
-                {usuarioSeleccionadoId ? <Edit3 className="w-4 h-4 text-amber-600" /> : <UserPlus className="w-4 h-4 text-blue-600" />}
+                {usuarioSeleccionadoId ? (
+                  <Edit3 className="w-4 h-4 text-amber-600" />
+                ) : (
+                  <UserPlus className="w-4 h-4 text-blue-600" />
+                )}
                 {usuarioSeleccionadoId ? "Editar Usuario" : "Nuevo Usuario"}
               </h2>
               {usuarioSeleccionadoId && (
-                <button 
+                <button
                   type="button"
                   onClick={limpiarFormulario}
                   className="text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 underline flex items-center gap-1 cursor-pointer"
@@ -215,11 +400,20 @@ export default function UsuariosPage() {
             </div>
 
             {mensaje.texto && (
-              <div className={`p-2.5 mb-3 rounded-xl text-[11px] font-semibold flex items-center gap-2 ${
-                mensaje.tipo === 'success' ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 
-                mensaje.tipo === 'info' ? 'bg-blue-50 text-blue-600 border border-blue-200' : 'bg-red-50 text-red-600 border border-red-200'
-              }`}>
-                {mensaje.tipo === 'success' ? <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" /> : <XCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+              <div
+                className={`p-2.5 mb-3 rounded-xl text-[11px] font-semibold flex items-center gap-2 ${
+                  mensaje.tipo === "success"
+                    ? "bg-emerald-50 text-emerald-600 border border-emerald-200"
+                    : mensaje.tipo === "info"
+                    ? "bg-blue-50 text-blue-600 border border-blue-200"
+                    : "bg-red-50 text-red-600 border border-red-200"
+                }`}
+              >
+                {mensaje.tipo === "success" ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                )}
                 <span>{mensaje.texto}</span>
               </div>
             )}
@@ -228,22 +422,26 @@ export default function UsuariosPage() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block font-semibold text-zinc-500 mb-1">Nombres</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     required
                     value={formData.nombres}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({...formData, nombres: e.target.value})}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setFormData({ ...formData, nombres: e.target.value })
+                    }
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600"
                     placeholder="Ej. Juan"
                   />
                 </div>
                 <div>
                   <label className="block font-semibold text-zinc-500 mb-1">Apellidos</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     required
                     value={formData.apellidos}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({...formData, apellidos: e.target.value})}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setFormData({ ...formData, apellidos: e.target.value })
+                    }
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600"
                     placeholder="Ej. Pérez"
                   />
@@ -253,38 +451,52 @@ export default function UsuariosPage() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block font-semibold text-zinc-500 mb-1">Cédula</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     required
                     value={formData.cedula}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({...formData, cedula: e.target.value})}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setFormData({ ...formData, cedula: e.target.value })
+                    }
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600"
                     placeholder="Nro documento"
                   />
                 </div>
                 <div>
                   <label className="block font-semibold text-zinc-500 mb-1">Tipo Usuario</label>
-                  <select 
+                  <select
                     value={formData.tipo_usuario}
-                    onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({...formData, tipo_usuario: e.target.value})}
+                    onChange={(e: ChangeEvent<HTMLSelectElement>) =>
+                      setFormData({ ...formData, tipo_usuario: e.target.value })
+                    }
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 cursor-pointer"
                   >
-                    <option value="Operador" className="dark:bg-zinc-900">Operador</option>
-                    <option value="Contador" className="dark:bg-zinc-900">Contador</option>
-                    <option value="Administrador" className="dark:bg-zinc-900">Administrador</option>
-                    <option value="Auditor" className="dark:bg-zinc-900">Auditor</option>
+                    <option value="Operador" className="dark:bg-zinc-900">
+                      Operador
+                    </option>
+                    <option value="Contador" className="dark:bg-zinc-900">
+                      Contador
+                    </option>
+                    <option value="Administrador" className="dark:bg-zinc-900">
+                      Administrador
+                    </option>
+                    <option value="Auditor" className="dark:bg-zinc-900">
+                      Auditor
+                    </option>
                   </select>
                 </div>
               </div>
 
               <div>
                 <label className="block font-semibold text-zinc-500 mb-1">Correo Electrónico</label>
-                <input 
-                  type="email" 
+                <input
+                  type="email"
                   required
                   disabled={Boolean(usuarioSeleccionadoId)}
                   value={formData.email}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({...formData, email: e.target.value})}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setFormData({ ...formData, email: e.target.value })
+                  }
                   className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 disabled:opacity-50"
                   placeholder="correo@empresa.com"
                 />
@@ -294,12 +506,14 @@ export default function UsuariosPage() {
                 <label className="block font-semibold text-zinc-500 mb-1">
                   {usuarioSeleccionadoId ? "Nueva Contraseña (Opcional)" : "Contraseña Temporal"}
                 </label>
-                <input 
-                  type="password" 
+                <input
+                  type="password"
                   required={!usuarioSeleccionadoId}
                   minLength={6}
                   value={formData.password}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({...formData, password: e.target.value})}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setFormData({ ...formData, password: e.target.value })
+                  }
                   className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600"
                   placeholder={usuarioSeleccionadoId ? "Mantener actual (en blanco)" : "Mínimo 6 caracteres"}
                 />
@@ -307,28 +521,38 @@ export default function UsuariosPage() {
 
               {/* BLOQUE DE CONTROL DE SEGURIDAD Y VIGENCIA */}
               <div className="border-t border-zinc-200 dark:border-zinc-800 pt-2.5 mt-2 space-y-2.5">
-                <h3 className="text-[11px] font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wide">Seguridad y Vigencia</h3>
-                
+                <h3 className="text-[11px] font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wide">
+                  Seguridad y Vigencia
+                </h3>
+
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block font-semibold text-zinc-500 mb-1">Clasificación</label>
-                    <select 
+                    <select
                       value={formData.es_temporal ? "temporal" : "permanente"}
-                      onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({...formData, es_temporal: e.target.value === "temporal"})}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) =>
+                        setFormData({ ...formData, es_temporal: e.target.value === "temporal" })
+                      }
                       className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 text-[11px] cursor-pointer"
                     >
-                      <option value="temporal" className="dark:bg-zinc-900">Temporal (Expira cuenta)</option>
-                      <option value="permanente" className="dark:bg-zinc-900">Permanente (Renueva clave)</option>
+                      <option value="temporal" className="dark:bg-zinc-900">
+                        Temporal (Expira cuenta)
+                      </option>
+                      <option value="permanente" className="dark:bg-zinc-900">
+                        Permanente (Renueva clave)
+                      </option>
                     </select>
                   </div>
 
                   <div>
                     <label className="block font-semibold text-zinc-500 mb-1">Fecha Vencimiento</label>
-                    <input 
+                    <input
                       type="date"
                       required
                       value={formData.fecha_expiracion_password}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({...formData, fecha_expiracion_password: e.target.value})}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setFormData({ ...formData, fecha_expiracion_password: e.target.value })
+                      }
                       className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 text-[11px]"
                     />
                   </div>
@@ -336,14 +560,20 @@ export default function UsuariosPage() {
               </div>
 
               <div className="pt-1">
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   disabled={loading}
                   className={`w-full py-2 rounded-xl font-semibold transition shadow-sm text-white cursor-pointer ${
-                    usuarioSeleccionadoId ? "bg-amber-600 hover:bg-amber-700" : "bg-blue-600 hover:bg-blue-700"
+                    usuarioSeleccionadoId
+                      ? "bg-amber-600 hover:bg-amber-700"
+                      : "bg-blue-600 hover:bg-blue-700"
                   } disabled:opacity-50`}
                 >
-                  {loading ? "Procesando..." : usuarioSeleccionadoId ? "Actualizar Usuario" : "Guardar Usuario"}
+                  {loading
+                    ? "Procesando..."
+                    : usuarioSeleccionadoId
+                    ? "Actualizar Usuario"
+                    : "Guardar Usuario"}
                 </button>
               </div>
             </form>
@@ -351,7 +581,6 @@ export default function UsuariosPage() {
 
           {/* Listado de Usuarios (Derecha - 7 columnas) */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm lg:col-span-7">
-            
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
               <h2 className="text-sm font-bold flex items-center gap-2">
                 <Shield className="w-4 h-4 text-blue-600" /> Usuarios Registrados ({usuariosFiltrados.length})
@@ -374,11 +603,21 @@ export default function UsuariosPage() {
                   onChange={(e: ChangeEvent<HTMLSelectElement>) => setFiltroTipo(e.target.value)}
                   className="px-2.5 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 cursor-pointer"
                 >
-                  <option value="" className="dark:bg-zinc-900">Tipos</option>
-                  <option value="Operador" className="dark:bg-zinc-900">Operador</option>
-                  <option value="Contador" className="dark:bg-zinc-900">Contador</option>
-                  <option value="Administrador" className="dark:bg-zinc-900">Administrador</option>
-                  <option value="Auditor" className="dark:bg-zinc-900">Auditor</option>
+                  <option value="" className="dark:bg-zinc-900">
+                    Tipos
+                  </option>
+                  <option value="Operador" className="dark:bg-zinc-900">
+                    Operador
+                  </option>
+                  <option value="Contador" className="dark:bg-zinc-900">
+                    Contador
+                  </option>
+                  <option value="Administrador" className="dark:bg-zinc-900">
+                    Administrador
+                  </option>
+                  <option value="Auditor" className="dark:bg-zinc-900">
+                    Auditor
+                  </option>
                 </select>
 
                 <select
@@ -386,9 +625,15 @@ export default function UsuariosPage() {
                   onChange={(e: ChangeEvent<HTMLSelectElement>) => setFiltroEstado(e.target.value)}
                   className="px-2.5 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 cursor-pointer"
                 >
-                  <option value="" className="dark:bg-zinc-900">Estados</option>
-                  <option value="true" className="dark:bg-zinc-900">Activos</option>
-                  <option value="false" className="dark:bg-zinc-900">Inactivos</option>
+                  <option value="" className="dark:bg-zinc-900">
+                    Estados
+                  </option>
+                  <option value="true" className="dark:bg-zinc-900">
+                    Activos
+                  </option>
+                  <option value="false" className="dark:bg-zinc-900">
+                    Inactivos
+                  </option>
                 </select>
               </div>
             </div>
@@ -396,7 +641,9 @@ export default function UsuariosPage() {
             {cargandoLista ? (
               <p className="text-xs text-zinc-400 py-6 text-center">Cargando usuarios...</p>
             ) : usuariosFiltrados.length === 0 ? (
-              <p className="text-xs text-zinc-400 py-6 text-center">No se encontraron usuarios con los filtros aplicados.</p>
+              <p className="text-xs text-zinc-400 py-6 text-center">
+                No se encontraron usuarios asignados a las empresas de su alcance.
+              </p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
@@ -414,15 +661,19 @@ export default function UsuariosPage() {
                     {usuariosFiltrados.map((u) => {
                       const esSeleccionado = usuarioSeleccionadoId === u.id;
                       return (
-                        <tr 
+                        <tr
                           key={u.id}
                           onClick={() => seleccionarUsuarioParaEditar(u)}
                           className={`cursor-pointer transition hover:bg-blue-50/50 dark:hover:bg-blue-950/20 ${
-                            esSeleccionado ? "bg-blue-50 dark:bg-blue-950/40 border-l-4 border-blue-600" : ""
+                            esSeleccionado
+                              ? "bg-blue-50 dark:bg-blue-950/40 border-l-4 border-blue-600"
+                              : ""
                           }`}
                         >
                           <td className="py-2.5">
-                            <p className="font-medium">{u.nombres} {u.apellidos}</p>
+                            <p className="font-medium">
+                              {u.nombres} {u.apellidos}
+                            </p>
                             <span className="text-[11px] text-zinc-400">CC: {u.cedula}</span>
                           </td>
                           <td className="py-2.5 text-zinc-500 truncate max-w-[120px]">{u.email}</td>
@@ -434,26 +685,45 @@ export default function UsuariosPage() {
                           <td className="py-2.5 text-[11px]">
                             {u.es_temporal ? (
                               <span className="text-amber-600 font-medium">
-                                Temp ({u.fecha_expiracion_password ? new Date(u.fecha_expiracion_password).toLocaleDateString() : 'N/A'})
+                                Temp (
+                                {u.fecha_expiracion_password
+                                  ? new Date(u.fecha_expiracion_password).toLocaleDateString()
+                                  : "N/A"}
+                                )
                               </span>
                             ) : (
                               <span className="text-emerald-600 font-medium">
-                                Perm ({u.fecha_expiracion_password ? new Date(u.fecha_expiracion_password).toLocaleDateString() : 'N/A'})
+                                Perm (
+                                {u.fecha_expiracion_password
+                                  ? new Date(u.fecha_expiracion_password).toLocaleDateString()
+                                  : "N/A"}
+                                )
                               </span>
                             )}
                           </td>
                           <td className="py-2.5">
-                            <span className={`px-2 py-0.5 rounded-md font-semibold text-[11px] ${
-                              u.activo ? 'bg-emerald-500/10 text-emerald-600' : 'bg-red-500/10 text-red-600'
-                            }`}>
-                              {u.activo ? 'Activo' : 'Inactivo'}
+                            <span
+                              className={`px-2 py-0.5 rounded-md font-semibold text-[11px] ${
+                                u.activo
+                                  ? "bg-emerald-500/10 text-emerald-600"
+                                  : "bg-red-500/10 text-red-600"
+                              }`}
+                            >
+                              {u.activo ? "Activo" : "Inactivo"}
                             </span>
                           </td>
-                          <td className="py-2.5 text-right space-x-1" onClick={(e: MouseEvent<HTMLTableCellElement>) => e.stopPropagation()}>
+                          <td
+                            className="py-2.5 text-right space-x-1"
+                            onClick={(e: MouseEvent<HTMLTableCellElement>) => e.stopPropagation()}
+                          >
                             <button
                               type="button"
                               onClick={() => handleToggleEstado(u.id, u.activo)}
-                              className={`p-1 rounded-md transition cursor-pointer ${u.activo ? 'bg-amber-50 text-amber-600 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}
+                              className={`p-1 rounded-md transition cursor-pointer ${
+                                u.activo
+                                  ? "bg-amber-50 text-amber-600 hover:bg-amber-100"
+                                  : "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                              }`}
                               title={u.activo ? "Deshabilitar usuario" : "Activar usuario"}
                             >
                               <Power className="w-3.5 h-3.5" />
@@ -475,9 +745,7 @@ export default function UsuariosPage() {
               </div>
             )}
           </div>
-
         </div>
-
       </div>
     </main>
   );

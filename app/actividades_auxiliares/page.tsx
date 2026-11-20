@@ -1,7 +1,14 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useEmpresaContext } from '@/app/context/EmpresaContext'
+import {
+  getActividadesAuxiliaresData,
+  crearActividadAuxiliar,
+  actualizarActividadAuxiliar,
+  eliminarActividadAuxiliar
+} from './actions'
+import { createClient } from '@supabase/supabase-js'
 import {
   Plus,
   Edit2,
@@ -16,51 +23,88 @@ import {
   X,
   FileText,
   Layers,
-  Power
+  Power,
+  ArrowLeft
 } from 'lucide-react'
 
-export default function ActividadesAuxiliaresPage() {
-  const [isMounted, setIsMounted] = useState(false)
+interface Empresa {
+  id: string | number
+  razon_social?: string
+  nombre_comercial?: string
+}
 
-  // Consumimos el contexto global
+interface Actividad {
+  id: string | number
+  codigo?: string
+  nombre?: string
+  actividad_padre_id?: string | number | null
+  descripcion?: string
+  unidad_medida?: string
+  estado?: boolean | string
+}
+
+export default function ActividadesAuxiliaresPage() {
+  const [isMounted, setIsMounted] = useState<boolean>(false)
+
   const {
     empresaActiva,
     setEmpresaActiva,
     bloquearSelectores,
     cargandoContexto
-  } = useEmpresaContext()
+  } = useEmpresaContext() as {
+    empresaActiva?: string | number
+    setEmpresaActiva?: (id: string) => void
+    bloquearSelectores?: boolean
+    cargandoContexto?: boolean
+  }
 
-  // Estados locales para manejo unificado de empresas
-  const [empresas, setEmpresas] = useState([])
-  const [loadingEmpresas, setLoadingEmpresas] = useState(false)
-  const [empresaSeleccionada, setEmpresaSeleccionada] = useState('')
+  // Estados locales para manejo unificado de empresas asignadas
+  const [empresas, setEmpresas] = useState<Empresa[]>([])
+  const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(true)
+  const [empresaSeleccionada, setEmpresaSeleccionada] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id') || ''
+    }
+    return ''
+  })
 
   // Estados principales de datos
-  const [actividades, setActividades] = useState([])
-  const [actividadesAbc, setActividadesAbc] = useState([])
+  const [actividades, setActividades] = useState<Actividad[]>([])
+  const [actividadesAbc, setActividadesAbc] = useState<Actividad[]>([])
 
   // Estados de carga e interfaz
-  const [loadingTabla, setLoadingTabla] = useState(false)
-  const [guardando, setGuardando] = useState(false)
-  const [eliminandoId, setEliminandoId] = useState(null)
+  const [loadingTabla, setLoadingTabla] = useState<boolean>(false)
+  const [guardando, setGuardando] = useState<boolean>(false)
+  const [eliminandoId, setEliminandoId] = useState<string | number | null>(null)
 
   // Filtros
-  const [filtroBusqueda, setFiltroBusqueda] = useState('')
+  const [filtroBusqueda, setFiltroBusqueda] = useState<string>('')
 
   // Modales
-  const [modalAbierto, setModalAbierto] = useState(false)
-  const [modoEdicion, setModoEdicion] = useState(false)
-  const [actividadEditarId, setActividadEditarId] = useState(null)
+  const [modalAbierto, setModalAbierto] = useState<boolean>(false)
+  const [modoEdicion, setModoEdicion] = useState<boolean>(false)
+  const [actividadEditarId, setActividadEditarId] = useState<string | number | null>(null)
 
   // Notificaciones
-  const [notificacion, setNotificacion] = useState({
+  const [notificacion, setNotificacion] = useState<{
+    visible: boolean
+    tipo: 'exito' | 'error' | 'info'
+    mensaje: string
+  }>({
     visible: false,
     tipo: 'exito',
     mensaje: ''
   })
 
   // Formulario
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    actividad_padre_id: string
+    codigo: string
+    nombre: string
+    descripcion: string
+    unidad_medida: string
+    estado: boolean
+  }>({
     actividad_padre_id: '',
     codigo: '',
     nombre: '',
@@ -69,9 +113,12 @@ export default function ActividadesAuxiliaresPage() {
     estado: true
   })
 
-  const [erroresForm, setErroresForm] = useState({})
+  const [erroresForm, setErroresForm] = useState<{
+    nombre?: string | null
+    codigo?: string | null
+  }>({})
 
-  const mostrarNotificacion = useCallback((tipo, mensaje) => {
+  const mostrarNotificacion = useCallback((tipo: 'exito' | 'error' | 'info', mensaje: string) => {
     setNotificacion({ visible: true, tipo, mensaje })
   }, [])
 
@@ -88,86 +135,176 @@ export default function ActividadesAuxiliaresPage() {
     }
   }, [notificacion.visible])
 
-  // Cargar empresas de forma centralizada y unificada desde el endpoint seguro
-  const cargarEmpresas = useCallback(async () => {
-    setLoadingEmpresas(true)
-    try {
-      const res = await fetch('/api/empresas/listar')
-      const json = await res.json()
-
-      if (json.exito) {
-        const listaEmpresas = json.empresas || []
-        setEmpresas(listaEmpresas)
-
-        if (listaEmpresas.length > 0) {
-          // 1. Obtener cookie o localStorage de la empresa activa
-          const empresaGuardada = 
-            (typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id') : '') ||
-            (document.cookie.match(/(^| )empresa_activa=([^;]+)/)?.[2] ?? '') ||
-            (empresaActiva ? String(empresaActiva) : '')
-
-          // 2. Seleccionar la empresa guardada si existe en la lista permitida
-          if (empresaGuardada && listaEmpresas.some((e) => String(e.id) === String(empresaGuardada))) {
-            setEmpresaSeleccionada(String(empresaGuardada))
-          } else {
-            // 3. Caso contrario, tomar la primera disponible
-            const primeraEmpresa = String(listaEmpresas[0].id)
-            setEmpresaSeleccionada(primeraEmpresa)
-            if (typeof window !== 'undefined') {
-              localStorage.setItem('empresa_activa', primeraEmpresa)
-              localStorage.setItem('empresa_id', primeraEmpresa)
-            }
-            document.cookie = `empresa_activa=${primeraEmpresa}; path=/; max-age=86400; SameSite=Lax`
-          }
-        }
-      } else {
-        mostrarNotificacion('error', json.mensaje || 'Error al obtener empresas')
-      }
-    } catch (error) {
-      console.error('Error al cargar empresas:', error)
-      mostrarNotificacion('error', 'Error de red al cargar empresas')
-    } finally {
-      setLoadingEmpresas(false)
-    }
-  }, [empresaActiva, mostrarNotificacion])
-
-  useEffect(() => {
-    cargarEmpresas()
-  }, [cargarEmpresas])
-
-  const handleCambioEmpresa = (nuevaEmpresaId) => {
-    setEmpresaSeleccionada(nuevaEmpresaId)
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('empresa_activa', nuevaEmpresaId)
-      localStorage.setItem('empresa_id', nuevaEmpresaId)
-    }
-    document.cookie = `empresa_activa=${nuevaEmpresaId}; path=/; max-age=86400; SameSite=Lax`
-    if (setEmpresaActiva) setEmpresaActiva(nuevaEmpresaId)
-  }
-
-  // Cargar Actividades Auxiliares y Actividades ABC de la empresa seleccionada
-  const cargarDatosEmpresa = useCallback(async (empId) => {
+  // Cargar Actividades Auxiliares y Actividades ABC usando los Server Actions locales
+  const cargarDatosEmpresa = useCallback(async (empId: string) => {
     if (!empId) return
     setLoadingTabla(true)
     try {
-      const resAux = await fetch(`/api/actividades_auxiliares?empresa_id=${empId}`)
-      const jsonAux = await resAux.json()
-      if (jsonAux.exito) {
-        setActividades(jsonAux.datos || [])
+      const resAux = await getActividadesAuxiliaresData({ empresaId: empId })
+      if (resAux.exito) {
+        setActividades(resAux.datos || [])
+      } else {
+        setActividades([])
+        mostrarNotificacion('error', resAux.mensaje || 'Error al cargar actividades auxiliares')
       }
 
-      const resAbc = await fetch(`/api/actividades_auxiliares?empresa_id=${empId}&accion=listar_actividades_abc`)
-      const jsonAbc = await resAbc.json()
-      if (jsonAbc.exito) {
-        setActividadesAbc(jsonAbc.datos || [])
+      const resAbc = await getActividadesAuxiliaresData({ empresaId: empId, accion: 'listar_actividades_abc' })
+      if (resAbc.exito) {
+        setActividadesAbc(resAbc.datos || [])
+      } else {
+        setActividadesAbc([])
       }
     } catch (error) {
       console.error('Error al cargar datos:', error)
+      setActividades([])
+      setActividadesAbc([])
       mostrarNotificacion('error', 'Error de red al consultar datos de la empresa')
     } finally {
       setLoadingTabla(false)
     }
   }, [mostrarNotificacion])
+
+  // Sincronizar únicamente las empresas asignadas al usuario desde usuario_permisos_tx
+  const cargarEmpresas = useCallback(async () => {
+    setLoadingEmpresas(true)
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setLoadingEmpresas(false)
+      return
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+    try {
+      const { data: authData } = await supabase.auth.getSession()
+      const userId = authData?.session?.user?.id
+      if (!userId) {
+        setLoadingEmpresas(false)
+        return
+      }
+
+      const { data: permisosTx } = await supabase
+        .from('usuario_permisos_tx')
+        .select('empresa_id')
+        .eq('usuario_id', userId)
+
+      if (!permisosTx || permisosTx.length === 0) {
+        setEmpresas([])
+        setLoadingEmpresas(false)
+        return
+      }
+
+      const empresaIds = Array.from(new Set(permisosTx.map((p: any) => p.empresa_id).filter(Boolean)))
+      if (empresaIds.length === 0) {
+        setEmpresas([])
+        setLoadingEmpresas(false)
+        return
+      }
+
+      const { data: listaEmpresas, error } = await supabase
+        .from('empresas')
+        .select('id, razon_social, nombre_comercial')
+        .in('id', empresaIds)
+        .order('razon_social', { ascending: true })
+
+      if (!error && listaEmpresas && listaEmpresas.length > 0) {
+        setEmpresas(listaEmpresas)
+
+        const empresaGuardada =
+          (typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') || localStorage.getItem('empresa_id') : '') ||
+          (typeof document !== 'undefined' ? (document.cookie.match(/(^| )empresa_activa=([^;]+)/)?.[2] ?? '') : '') ||
+          (empresaActiva ? String(empresaActiva) : '')
+
+        let empActiva = ''
+        if (empresaGuardada && listaEmpresas.some((e: Empresa) => String(e.id) === String(empresaGuardada))) {
+          empActiva = String(empresaGuardada)
+        } else {
+          empActiva = String(listaEmpresas[0].id)
+        }
+
+        setEmpresaSeleccionada(empActiva)
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('empresa_activa', empActiva)
+          localStorage.setItem('empresa_id', empActiva)
+          const empObj = listaEmpresas.find((e) => String(e.id) === String(empActiva))
+          if (empObj) {
+            localStorage.setItem('empresa_activa_nombre', empObj.razon_social || empObj.nombre_comercial || '')
+          }
+        }
+        document.cookie = `empresa_activa=${empActiva}; path=/; max-age=86400; SameSite=Lax`
+        if (setEmpresaActiva) setEmpresaActiva(empActiva)
+      } else {
+        setEmpresas([])
+      }
+    } catch (error) {
+      console.error('Error al cargar empresas:', error)
+      mostrarNotificacion('error', 'Error al cargar empresas autorizadas')
+    } finally {
+      setLoadingEmpresas(false)
+    }
+  }, [empresaActiva, setEmpresaActiva, mostrarNotificacion])
+
+  useEffect(() => {
+    cargarEmpresas()
+  }, [cargarEmpresas])
+
+  const handleCambioEmpresa = async (nuevaEmpresaId: string) => {
+    setEmpresaSeleccionada(nuevaEmpresaId)
+
+    if (!nuevaEmpresaId) {
+      setActividades([])
+      setActividadesAbc([])
+      return
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('empresa_activa', nuevaEmpresaId)
+      localStorage.setItem('empresa_id', nuevaEmpresaId)
+      const empObj = empresas.find((emp) => String(emp.id) === String(nuevaEmpresaId))
+      if (empObj) {
+        localStorage.setItem('empresa_activa_nombre', empObj.razon_social || empObj.nombre_comercial || '')
+      }
+    }
+    document.cookie = `empresa_activa=${nuevaEmpresaId}; path=/; max-age=86400; SameSite=Lax`
+    if (setEmpresaActiva) setEmpresaActiva(nuevaEmpresaId)
+
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+      if (supabaseUrl && supabaseAnonKey) {
+        const supabase = createClient(supabaseUrl, supabaseAnonKey)
+        const { data: authData } = await supabase.auth.getSession()
+        const userId = authData?.session?.user?.id
+        if (userId) {
+          const { data: sucursalesEmpresa } = await supabase
+            .from('sucursales')
+            .select('id')
+            .eq('empresa_id', nuevaEmpresaId)
+            .order('id', { ascending: true })
+            .limit(1)
+
+          const payloadUpdate: Record<string, any> = { empresa_activa: nuevaEmpresaId }
+          if (sucursalesEmpresa && sucursalesEmpresa.length > 0) {
+            const primeraSucursalId = String(sucursalesEmpresa[0].id)
+            payloadUpdate.sucursal_activa = primeraSucursalId
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('sucursal_activa', primeraSucursalId)
+            }
+            document.cookie = `sucursal_activa=${primeraSucursalId}; path=/; max-age=86400; SameSite=Lax`
+          }
+
+          await supabase
+            .from('usuarios_perfiles')
+            .update(payloadUpdate)
+            .eq('id', userId)
+        }
+      }
+    } catch (err) {
+      console.error('Error al actualizar empresa_activa y sucursal_activa en usuarios_perfiles:', err)
+    }
+  }
 
   useEffect(() => {
     if (empresaSeleccionada) {
@@ -179,12 +316,17 @@ export default function ActividadesAuxiliaresPage() {
   }, [empresaSeleccionada, cargarDatosEmpresa])
 
   const mapaActividadesAbc = useMemo(() => {
-    const map = new Map()
+    const map = new Map<string, Actividad>()
     actividadesAbc.forEach((item) => map.set(String(item.id), item))
     return map
   }, [actividadesAbc])
 
-  const calcularCodigoAutomatico = (padreId, actividadesAuxList, abcList, excluirId = null) => {
+  const calcularCodigoAutomatico = (
+    padreId: string,
+    actividadesAuxList: Actividad[],
+    abcList: Actividad[],
+    excluirId: string | number | null = null
+  ) => {
     if (!padreId) {
       const raices = actividadesAuxList.filter(
         (item) => !item.actividad_padre_id && (!excluirId || item.id !== excluirId)
@@ -205,7 +347,7 @@ export default function ActividadesAuxiliaresPage() {
     return `${padreAbc.codigo}-${consecutivo}`
   }
 
-  const handleCambioPadre = (nuevoPadreId) => {
+  const handleCambioPadre = (nuevoPadreId: string) => {
     setFormData((prev) => {
       const nuevoCodigo = calcularCodigoAutomatico(
         nuevoPadreId,
@@ -222,29 +364,28 @@ export default function ActividadesAuxiliaresPage() {
     setErroresForm((prev) => ({ ...prev, codigo: null }))
   }
 
-  const handleToggleEstado = async (item) => {
-    const nuevoEstado = !(item.estado !== false)
+  const handleToggleEstado = async (item: Actividad) => {
+    const estadoActual = item.estado === true || item.estado === 'Activo'
+    const nuevoEstado = !estadoActual
+
     try {
-      const res = await fetch('/api/actividades_auxiliares', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: item.id,
-          codigo: item.codigo,
-          nombre: item.nombre,
-          actividad_padre_id: item.actividad_padre_id,
-          descripcion: item.descripcion,
-          unidad_medida: item.unidad_medida,
-          estado: nuevoEstado
-        })
+      const res = await actualizarActividadAuxiliar({
+        id: item.id,
+        codigo_auxiliar: item.codigo,
+        nombre: item.nombre,
+        tipo_entidad: 'Auxiliar_General',
+        actividad_padre_id: item.actividad_padre_id,
+        descripcion: item.descripcion,
+        unidad_medida: item.unidad_medida,
+        estado: nuevoEstado ? 'Activo' : 'Inactivo',
+        empresa_id: empresaSeleccionada
       })
 
-      const json = await res.json()
-      if (json.exito) {
+      if (res.exito) {
         mostrarNotificacion('exito', `Estado cambiado a ${nuevoEstado ? 'Activo' : 'Inactivo'}`)
         cargarDatosEmpresa(empresaSeleccionada)
       } else {
-        mostrarNotificacion('error', json.mensaje || 'Error al actualizar el estado')
+        mostrarNotificacion('error', res.mensaje || 'Error al actualizar el estado')
       }
     } catch (error) {
       console.error('Error al cambiar estado:', error)
@@ -252,7 +393,7 @@ export default function ActividadesAuxiliaresPage() {
     }
   }
 
-  const handleEliminar = async (item) => {
+  const handleEliminar = async (item: Actividad) => {
     const confirmacion = window.confirm(
       `¿Está seguro de eliminar la actividad auxiliar "${item.nombre}"?`
     )
@@ -260,16 +401,13 @@ export default function ActividadesAuxiliaresPage() {
 
     setEliminandoId(item.id)
     try {
-      const res = await fetch(`/api/actividades_auxiliares?id=${item.id}&empresa_id=${empresaSeleccionada}`, {
-        method: 'DELETE'
-      })
-      const json = await res.json()
+      const res = await eliminarActividadAuxiliar(item.id)
 
-      if (json.exito) {
+      if (res.exito) {
         mostrarNotificacion('exito', 'Actividad eliminada correctamente')
         cargarDatosEmpresa(empresaSeleccionada)
       } else {
-        mostrarNotificacion('error', json.mensaje || 'No se puede eliminar la actividad')
+        mostrarNotificacion('error', res.mensaje || 'No se puede eliminar la actividad')
       }
     } catch (error) {
       console.error('Error al eliminar:', error)
@@ -283,7 +421,7 @@ export default function ActividadesAuxiliaresPage() {
     setModoEdicion(false)
     setActividadEditarId(null)
     setErroresForm({})
-    
+
     const codigoInicial = calcularCodigoAutomatico('', actividades, actividadesAbc, null)
     setFormData({
       actividad_padre_id: '',
@@ -296,23 +434,24 @@ export default function ActividadesAuxiliaresPage() {
     setModalAbierto(true)
   }
 
-  const abrirModalEditar = (item) => {
+  const abrirModalEditar = (item: Actividad) => {
     setModoEdicion(true)
     setActividadEditarId(item.id)
     setErroresForm({})
+    const estaActivo = item.estado === true || item.estado === 'Activo'
     setFormData({
       actividad_padre_id: item.actividad_padre_id ? String(item.actividad_padre_id) : '',
       codigo: item.codigo || '',
       nombre: item.nombre || '',
       descripcion: item.descripcion || '',
       unidad_medida: item.unidad_medida || '',
-      estado: item.estado !== false
+      estado: estaActivo
     })
     setModalAbierto(true)
   }
 
   const validarFormulario = () => {
-    const nuevosErrores = {}
+    const nuevosErrores: { nombre?: string; codigo?: string } = {}
     if (!formData.nombre.trim()) {
       nuevosErrores.nombre = 'El nombre es obligatorio'
     }
@@ -323,28 +462,29 @@ export default function ActividadesAuxiliaresPage() {
     return Object.keys(nuevosErrores).length === 0
   }
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!validarFormulario()) return
 
     setGuardando(true)
     try {
-      const method = modoEdicion ? 'PUT' : 'POST'
       const payload = {
         ...formData,
+        codigo_auxiliar: formData.codigo,
+        estado: formData.estado ? 'Activo' : 'Inactivo',
+        tipo_entidad: formData.actividad_padre_id ? 'Actividad_ABC' : 'Auxiliar_General',
         empresa_id: empresaSeleccionada,
         id: modoEdicion ? actividadEditarId : undefined
       }
 
-      const res = await fetch('/api/actividades_auxiliares', {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+      let res
+      if (modoEdicion) {
+        res = await actualizarActividadAuxiliar(payload)
+      } else {
+        res = await crearActividadAuxiliar(payload)
+      }
 
-      const json = await res.json()
-
-      if (json.exito) {
+      if (res.exito) {
         mostrarNotificacion(
           'exito',
           modoEdicion ? 'Actividad actualizada correctamente' : 'Actividad registrada con éxito'
@@ -352,7 +492,7 @@ export default function ActividadesAuxiliaresPage() {
         cargarDatosEmpresa(empresaSeleccionada)
         setModalAbierto(false)
       } else {
-        mostrarNotificacion('error', json.mensaje || 'Ocurrió un error al procesar')
+        mostrarNotificacion('error', res.mensaje || 'Ocurrió un error al procesar')
       }
     } catch (error) {
       console.error('Error al guardar:', error)
@@ -403,7 +543,15 @@ export default function ActividadesAuxiliaresPage() {
       )}
 
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200/80">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-3">
+          <a
+            href="/modulos/contabilidad/configuracion"
+            className="p-2.5 text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-xl transition flex items-center justify-center"
+            title="Volver a Configuración"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </a>
+
           <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
             <Activity className="w-6 h-6" />
           </div>
@@ -423,23 +571,27 @@ export default function ActividadesAuxiliaresPage() {
             <select
               value={empresaSeleccionada}
               onChange={(e) => handleCambioEmpresa(e.target.value)}
-              disabled={loadingEmpresas || empresas.length === 0}
-              className="bg-transparent text-sm font-semibold text-slate-700 outline-none cursor-pointer pr-2 disabled:opacity-60"
+              disabled={!isMounted || loadingEmpresas || empresas.length <= 1}
+              suppressHydrationWarning
+              className="bg-transparent text-sm font-semibold text-slate-700 outline-none cursor-pointer pr-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {loadingEmpresas ? (
+              {!isMounted || loadingEmpresas ? (
                 <option value="">Cargando empresas...</option>
               ) : empresas.length === 0 ? (
                 <option value="">Sin empresas asignadas</option>
               ) : (
-                empresas.map((emp) => {
-                  const id = String(emp.id)
-                  const nombre = emp.razon_social || emp.nombre_comercial
-                  return (
-                    <option key={id} value={id}>
-                      {nombre}
-                    </option>
-                  )
-                })
+                <>
+                  {empresas.length !== 1 && <option value="">-- Seleccione una Empresa --</option>}
+                  {empresas.map((emp) => {
+                    const id = String(emp.id)
+                    const nombre = emp.razon_social || emp.nombre_comercial
+                    return (
+                      <option key={id} value={id}>
+                        {nombre}
+                      </option>
+                    )
+                  })}
+                </>
               )}
             </select>
           </div>
@@ -448,15 +600,17 @@ export default function ActividadesAuxiliaresPage() {
             onClick={() => {
               if (empresaSeleccionada) cargarDatosEmpresa(empresaSeleccionada)
             }}
+            disabled={!isMounted || !empresaSeleccionada || loadingTabla}
             title="Recargar datos"
-            className="p-2.5 text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-xl transition"
+            className="p-2.5 text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-xl transition disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${loadingTabla ? 'animate-spin' : ''}`} />
           </button>
 
           <button
             onClick={abrirModalCrear}
-            disabled={!empresaSeleccionada || empresas.length === 0}
+            disabled={!isMounted || !empresaSeleccionada || empresas.length === 0}
+            suppressHydrationWarning
             className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition"
           >
             <Plus className="w-4 h-4" />
@@ -530,7 +684,7 @@ export default function ActividadesAuxiliaresPage() {
                   const nombrePadreAbc = item.actividad_padre_id
                     ? mapaActividadesAbc.get(String(item.actividad_padre_id))?.nombre
                     : null
-                  const estaActivo = item.estado !== false
+                  const estaActivo = item.estado === true || item.estado === 'Activo'
 
                   return (
                     <tr key={item.id} className="hover:bg-slate-50/80 transition group">

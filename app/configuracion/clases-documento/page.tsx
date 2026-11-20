@@ -2,7 +2,9 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { getEmpresasPermitidas } from "@/app/actions/accionesEmpresas";
 import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
@@ -31,14 +33,20 @@ interface ClaseDocumento {
 export default function ClasesDocumentoPage() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
-  const [empresaId, setEmpresaId] = useState<string>("");
+  const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(true);
+  const [empresaId, setEmpresaId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("empresa_activa") || localStorage.getItem("empresa_id") || "";
+    }
+    return "";
+  });
   const [clases, setClases] = useState<ClaseDocumento[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
 
   // Estados del formulario modal (Crear / Editar)
   const [modalAbierto, setModalAbierto] = useState<boolean>(false);
   const [claseEditar, setClaseEditar] = useState<ClaseDocumento | null>(null);
-  
+
   const [codigoClase, setCodigoClase] = useState<string>("");
   const [nombreClase, setNombreClase] = useState<string>("");
   const [descripcion, setDescripcion] = useState<string>("");
@@ -50,45 +58,138 @@ export default function ClasesDocumentoPage() {
     setIsMounted(true);
   }, []);
 
-  // Cargar empresas y detectar la empresa activa corporativa
+  // Cargar únicamente empresas asignadas al usuario y detectar la empresa activa
   useEffect(() => {
     if (!isMounted) return;
 
     async function cargarEmpresas() {
-      const { data, error } = await supabase
-        .from("empresas")
-        .select("*")
-        .order("razon_social", { ascending: true });
+      setLoadingEmpresas(true);
+      try {
+        let listaEmpresas: Empresa[] = [];
 
-      if (!error && data && data.length > 0) {
-        setEmpresas(data);
+        const { data: authData } = await supabase.auth.getSession();
+        const userId = authData?.session?.user?.id;
 
-        const cookieEmpresa = document.cookie
-          .split("; ")
-          .find((row) => row.startsWith("empresa_activa="));
-        const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split("=")[1] : null;
-        const empresaGuardadaLocal = typeof window !== "undefined" ? localStorage.getItem("empresa_activa") : null;
+        if (userId) {
+          const { data: permisosTx } = await supabase
+            .from("usuario_permisos_tx")
+            .select("empresa_id")
+            .eq("usuario_id", userId);
 
-        const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal;
-        const existeEmpresa = data.some((emp: Empresa) => String(emp.id) === String(empresaIdParaSeleccionar));
+          const empresaIds = Array.from(
+            new Set((permisosTx || []).map((p: any) => String(p.empresa_id)).filter(Boolean))
+          );
 
-        if (existeEmpresa && empresaIdParaSeleccionar) {
-          setEmpresaId(String(empresaIdParaSeleccionar));
-        } else {
-          setEmpresaId(String(data[0].id));
+          if (empresaIds.length > 0) {
+            const { data, error } = await supabase
+              .from("empresas")
+              .select("*")
+              .in("id", empresaIds)
+              .order("razon_social", { ascending: true });
+
+            if (!error && data && data.length > 0) {
+              listaEmpresas = data;
+            }
+          }
         }
+
+        if (listaEmpresas.length === 0) {
+          const resPermitidas: any = await getEmpresasPermitidas();
+          if (Array.isArray(resPermitidas)) {
+            listaEmpresas = resPermitidas;
+          } else if (Array.isArray(resPermitidas?.datos)) {
+            listaEmpresas = resPermitidas.datos;
+          } else if (Array.isArray(resPermitidas?.data)) {
+            listaEmpresas = resPermitidas.data;
+          }
+        }
+
+        if (listaEmpresas.length > 0) {
+          setEmpresas(listaEmpresas);
+
+          const cookieEmpresa = document.cookie
+            .split("; ")
+            .find((row) => row.startsWith("empresa_activa="));
+          const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split("=")[1] : null;
+          const empresaGuardadaLocal =
+            typeof window !== "undefined"
+              ? localStorage.getItem("empresa_activa") || localStorage.getItem("empresa_id")
+              : null;
+
+          const empresaIdParaSeleccionar = empresaGuardadaLocal || empresaGuardadaCookie;
+          const existeEmpresa = listaEmpresas.some(
+            (emp: Empresa) => String(emp.id) === String(empresaIdParaSeleccionar)
+          );
+
+          const idFinal =
+            existeEmpresa && empresaIdParaSeleccionar
+              ? String(empresaIdParaSeleccionar)
+              : String(listaEmpresas[0].id);
+
+          setEmpresaId(idFinal);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("empresa_activa", idFinal);
+            localStorage.setItem("empresa_id", idFinal);
+          }
+          document.cookie = `empresa_activa=${idFinal}; path=/; max-age=86400; SameSite=Lax`;
+        } else {
+          setEmpresas([]);
+        }
+      } catch (err) {
+        console.error("Error al cargar empresas asignadas:", err);
+        setEmpresas([]);
+      } finally {
+        setLoadingEmpresas(false);
       }
     }
+
     cargarEmpresas();
   }, [isMounted]);
 
-  // Persistir cambios de empresaId
-  useEffect(() => {
-    if (empresaId && typeof window !== "undefined") {
-      localStorage.setItem("empresa_activa", String(empresaId));
-      document.cookie = `empresa_activa=${empresaId}; path=/; max-age=86400; SameSite=Lax`;
+  // Persistir cambios de empresaId y sincronizar sucursal activa y perfil de usuario
+  const handleCambioEmpresa = async (nuevoId: string) => {
+    setEmpresaId(nuevoId);
+    if (!nuevoId) {
+      setClases([]);
+      return;
     }
-  }, [empresaId]);
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem("empresa_activa", String(nuevoId));
+      localStorage.setItem("empresa_id", String(nuevoId));
+    }
+    document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`;
+
+    try {
+      const { data: authData } = await supabase.auth.getSession();
+      const userId = authData?.session?.user?.id;
+      if (userId) {
+        const { data: sucursalesEmpresa } = await supabase
+          .from("sucursales")
+          .select("id")
+          .eq("empresa_id", nuevoId)
+          .order("id", { ascending: true })
+          .limit(1);
+
+        const payloadUpdate: Record<string, any> = { empresa_activa: nuevoId };
+        if (sucursalesEmpresa && sucursalesEmpresa.length > 0) {
+          const primeraSucursalId = String(sucursalesEmpresa[0].id);
+          payloadUpdate.sucursal_activa = primeraSucursalId;
+          if (typeof window !== "undefined") {
+            localStorage.setItem("sucursal_activa", primeraSucursalId);
+          }
+          document.cookie = `sucursal_activa=${primeraSucursalId}; path=/; max-age=86400; SameSite=Lax`;
+        }
+
+        await supabase
+          .from("usuarios_perfiles")
+          .update(payloadUpdate)
+          .eq("id", userId);
+      }
+    } catch (err) {
+      console.error("Error al sincronizar empresa y sucursal en perfil:", err);
+    }
+  };
 
   const cargarClases = useCallback(async () => {
     if (!empresaId) return;
@@ -198,21 +299,24 @@ export default function ClasesDocumentoPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-5 text-xs bg-slate-50/50 min-h-screen">
-      {/* Encabezado elegante unificado */}
+      {/* Encabezado limpio con botón atrás antes del título */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Link
-              href="/modulos/contabilidad/configuracion"
-              className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold transition"
-            >
-              ← Configuración
-            </Link>
-            <span className="text-slate-300">/</span>
-            <span className="text-[11px] font-semibold text-indigo-600 uppercase tracking-wider">Parámetros Contables</span>
+        <div className="flex items-center gap-3 min-w-0">
+          <Link
+            href="/modulos/contabilidad/configuracion"
+            className="p-2.5 text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-xl transition flex items-center justify-center shrink-0"
+            title="Volver a Configuración"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold text-slate-900 tracking-tight truncate">
+              Clases de Documento
+            </h1>
+            <p className="text-slate-500 text-xs truncate">
+              Administra los tipos, códigos y configuración contable de documentos por empresa.
+            </p>
           </div>
-          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Clases de Documento</h1>
-          <p className="text-slate-500 text-xs">Administra los tipos, códigos y configuración contable de documentos por empresa.</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -220,20 +324,32 @@ export default function ClasesDocumentoPage() {
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Empresa:</span>
             <select
               value={empresaId}
-              onChange={(e) => setEmpresaId(e.target.value)}
-              className="bg-transparent border-none text-xs text-slate-800 font-bold outline-none cursor-pointer max-w-[280px]"
+              onChange={(e) => handleCambioEmpresa(e.target.value)}
+              disabled={!isMounted || loadingEmpresas || empresas.length <= 1}
+              suppressHydrationWarning
+              className="bg-transparent border-none text-xs text-slate-800 font-bold outline-none cursor-pointer max-w-[280px] disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {empresas.map((emp) => (
-                <option key={emp.id} value={emp.id}>
-                  {emp.razon_social || emp.nombre_comercial || emp.nombre} ({emp.nit || emp.nit_identificacion || ""})
-                </option>
-              ))}
+              {!isMounted || loadingEmpresas ? (
+                <option value="">Cargando empresas...</option>
+              ) : empresas.length === 0 ? (
+                <option value="">Sin empresas asignadas</option>
+              ) : (
+                <>
+                  {empresas.length !== 1 && <option value="">-- Seleccione una Empresa --</option>}
+                  {empresas.map((emp) => (
+                    <option key={emp.id} value={String(emp.id)}>
+                      {emp.razon_social || emp.nombre_comercial || emp.nombre} ({emp.nit || emp.nit_identificacion || ""})
+                    </option>
+                  ))}
+                </>
+              )}
             </select>
           </div>
 
           <button
             onClick={abrirModalNuevo}
-            disabled={!empresaId}
+            disabled={!isMounted || !empresaId}
+            suppressHydrationWarning
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-xs shadow-sm shadow-indigo-200 transition cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center gap-1.5"
           >
             <span className="text-sm leading-none">+</span> Nueva Clase

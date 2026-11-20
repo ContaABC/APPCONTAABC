@@ -1,6 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, Suspense } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import XmlUploader from "@/components/xml-uploader";
 import XmlUploaderMasivo from "@/components/xml-uploader-masivo";
@@ -9,6 +12,7 @@ import { validarPeriodoContable } from "@/lib/accounting-validations";
 interface UserType {
   id: string;
   email?: string;
+  tipo_usuario?: string;
 }
 
 interface Company {
@@ -30,14 +34,63 @@ interface DocumentClass {
   nombre?: string;
 }
 
-export default function CargarFacturasPage() {
+export interface TerceroRetencionInfo {
+  id: number | string;
+  numero_identificacion?: string;
+  razon_social?: string;
+  nombre?: string;
+  retencion_renta_id?: number | string | null;
+  retencion_iva_id?: number | string | null;
+  retencion_ica_id?: number | string | null;
+}
+
+export interface ConceptoRetencionItem {
+  id: number | string;
+  empresa_id?: number | string | null;
+  anio?: number;
+  tipo_retencion?: "RENTA" | "IVA" | "ICA" | string;
+  concepto?: string;
+  base_minima?: number;
+  tarifa?: number;
+  activo?: boolean;
+  codigo_municipio?: string | null;
+}
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+function extraerAnioFecha(fechaStr?: string): number {
+  if (fechaStr) {
+    const match = /^(\d{4})/.exec(fechaStr.trim());
+    if (match) {
+      const anioNum = Number(match[1]);
+      if (!Number.isNaN(anioNum) && anioNum > 1900) return anioNum;
+    }
+    const d = new Date(fechaStr);
+    if (!Number.isNaN(d.getTime())) return d.getUTCFullYear();
+  }
+  return new Date().getFullYear();
+}
+
+function CargarFacturasContent() {
+  const searchParams = useSearchParams();
+
   const [mounted, setMounted] = useState<boolean>(false);
+  const [rutaRetorno, setRutaRetorno] = useState<string>("/modulos/proveedores");
+  const [tituloRetorno, setTituloRetorno] = useState<string>("Volver a Proveedores");
+
   const [user, setUser] = useState<UserType | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [documentClasses, setDocumentClasses] = useState<DocumentClass[]>([]);
+  const [tercerosEmpresa, setTercerosEmpresa] = useState<TerceroRetencionInfo[]>([]);
+  const [conceptosRetencion, setConceptosRetencion] = useState<ConceptoRetencionItem[]>([]);
 
-  // Pestaña activa: 'individual' | 'masiva'
   const [activeTab, setActiveTab] = useState<"individual" | "masiva">("individual");
 
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
@@ -48,55 +101,172 @@ export default function CargarFacturasPage() {
     new Date().toISOString().split("T")[0]
   );
 
-  // Estados para Control de Periodo Contable
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
 
   const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Función de validación de periodo en tiempo real
-  const verificarPeriodo = useCallback(async (fecha: string) => {
-    if (!selectedCompanyId || !selectedBranchId || !fecha) {
+  useEffect(() => {
+    const fromParam = searchParams.get("from");
+    if (fromParam && fromParam.startsWith("/")) {
+      setRutaRetorno(fromParam);
+      setTituloRetorno(
+        fromParam.startsWith("/modulos/contabilidad")
+          ? "Volver a Contabilidad"
+          : "Volver a Proveedores"
+      );
+    }
+  }, [searchParams]);
+
+  const persistirContextoUsuario = useCallback(
+    async (empresaIdStr: string, sucursalIdStr?: string) => {
+      if (!empresaIdStr) return;
+
+      const empNum = Number(empresaIdStr);
+      const sucNum =
+        sucursalIdStr && !Number.isNaN(Number(sucursalIdStr)) && Number(sucursalIdStr) > 0
+          ? Number(sucursalIdStr)
+          : null;
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem("empresa_activa", String(empresaIdStr));
+        localStorage.setItem("empresa_id", String(empresaIdStr));
+        document.cookie = `empresa_activa=${encodeURIComponent(
+          String(empresaIdStr)
+        )}; path=/; max-age=86400; SameSite=Lax`;
+
+        if (sucursalIdStr) {
+          localStorage.setItem("sucursal_activa", String(sucursalIdStr));
+          localStorage.setItem("sucursal_id", String(sucursalIdStr));
+          document.cookie = `sucursal_activa=${encodeURIComponent(
+            String(sucursalIdStr)
+          )}; path=/; max-age=86400; SameSite=Lax`;
+        } else {
+          localStorage.removeItem("sucursal_activa");
+          localStorage.removeItem("sucursal_id");
+          document.cookie =
+            "sucursal_activa=; path=/; max-age=0; SameSite=Lax";
+        }
+      }
+
+      const userId = user?.id;
+      if (userId && !Number.isNaN(empNum) && empNum > 0) {
+        const payloadUpdate: {
+          empresa_activa: number;
+          sucursal_activa?: number | null;
+        } = {
+          empresa_activa: empNum,
+        };
+
+        if (sucursalIdStr !== undefined) {
+          payloadUpdate.sucursal_activa = sucNum;
+        }
+
+        const { error: perfilErr } = await supabase
+          .from("usuarios_perfiles")
+          .update(payloadUpdate)
+          .eq("id", userId);
+
+        if (perfilErr) {
+          const { error: perfilErrAlt } = await supabase
+            .from("usuarios_perfiles")
+            .update(payloadUpdate)
+            .eq("usuario_id", userId);
+
+          if (perfilErrAlt) {
+            console.error(
+              "Error al actualizar usuarios_perfiles:",
+              perfilErrAlt.message || perfilErrAlt
+            );
+          }
+        }
+      }
+    },
+    [user?.id]
+  );
+
+  const verificarPeriodo = useCallback(
+    async (fecha: string) => {
+      if (!selectedCompanyId || !selectedBranchId || !fecha) {
+        setErrorPeriodo(null);
+        return;
+      }
+
+      setValidandoPeriodo(true);
       setErrorPeriodo(null);
-      return;
-    }
 
-    setValidandoPeriodo(true);
-    setErrorPeriodo(null);
+      const res = await validarPeriodoContable(selectedCompanyId, selectedBranchId, fecha);
+      if (!res.valido) {
+        setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
+      }
 
-    const res = await validarPeriodoContable(selectedCompanyId, selectedBranchId, fecha);
-    if (!res.valido) {
-      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
-    }
+      setValidandoPeriodo(false);
+    },
+    [selectedCompanyId, selectedBranchId]
+  );
 
-    setValidandoPeriodo(false);
-  }, [selectedCompanyId, selectedBranchId]);
-
-  // Validar automáticamente al cambiar empresa, sucursal o si ya hay fecha cargada
   useEffect(() => {
     if (selectedCompanyId && selectedBranchId && fechaContabilizacion && mounted) {
       verificarPeriodo(fechaContabilizacion);
     }
   }, [selectedCompanyId, selectedBranchId, fechaContabilizacion, mounted, verificarPeriodo]);
 
-  const fetchBranches = useCallback(async (companyId: string) => {
+  const fetchBranches = useCallback(async (companyId: string, userId?: string) => {
     try {
       const { data, error: branchErr } = await supabase
         .from("sucursales")
         .select("*")
-        .eq("empresa_id", companyId)
+        .eq("empresa_id", Number(companyId))
         .order("nombre", { ascending: true });
 
       if (branchErr) throw branchErr;
 
-      const sucursalesList = data || [];
+      const sucursalesList = (data || []) as Branch[];
       setBranches(sucursalesList);
-      if (sucursalesList.length > 0) {
-        setSelectedBranchId(String(sucursalesList[0].id));
-      } else {
+
+      if (sucursalesList.length === 0) {
         setSelectedBranchId("");
+        return;
       }
+
+      let sucursalPreferida =
+        typeof window !== "undefined"
+          ? localStorage.getItem("sucursal_activa") ||
+            localStorage.getItem("sucursal_id") ||
+            getCookieValue("sucursal_activa") ||
+            ""
+          : "";
+
+      if (userId) {
+        const { data: permisosUsrSuc } = await supabase
+          .from("usuario_permisos_tx")
+          .select("sucursal_id")
+          .eq("usuario_id", userId)
+          .eq("empresa_id", Number(companyId))
+          .not("sucursal_id", "is", null);
+
+        const idsSucAsignadas = (permisosUsrSuc || [])
+          .map((r: { sucursal_id?: string | number | null }) =>
+            r.sucursal_id != null ? String(r.sucursal_id) : ""
+          )
+          .filter(Boolean);
+
+        if (idsSucAsignadas.length > 0) {
+          sucursalPreferida = idsSucAsignadas.includes(sucursalPreferida)
+            ? sucursalPreferida
+            : idsSucAsignadas[0];
+        }
+      }
+
+      const existeSuc = sucursalesList.some(
+        (b) => String(b.id) === String(sucursalPreferida)
+      );
+      setSelectedBranchId(
+        existeSuc && sucursalPreferida
+          ? String(sucursalPreferida)
+          : String(sucursalesList[0].id)
+      );
     } catch (err: unknown) {
       console.error("Error al cargar sucursales:", err);
       setBranches([]);
@@ -109,12 +279,12 @@ export default function CargarFacturasPage() {
       const { data, error: classErr } = await supabase
         .from("clases_documento")
         .select("*")
-        .eq("empresa_id", companyId)
+        .eq("empresa_id", Number(companyId))
         .order("codigo_clase", { ascending: true });
 
       if (classErr) throw classErr;
 
-      const clasesList = data || [];
+      const clasesList = (data || []) as DocumentClass[];
       setDocumentClasses(clasesList);
       if (clasesList.length > 0) {
         setSelectedDocumentClassId(String(clasesList[0].id));
@@ -128,35 +298,119 @@ export default function CargarFacturasPage() {
     }
   }, []);
 
+  const fetchTercerosYRetenciones = useCallback(
+    async (companyId: string, fechaStr?: string) => {
+      const empNum = Number(companyId);
+      if (!companyId || Number.isNaN(empNum) || empNum <= 0) {
+        setTercerosEmpresa([]);
+        setConceptosRetencion([]);
+        return;
+      }
+
+      const anioContabilidad = extraerAnioFecha(fechaStr);
+
+      const { data: tercData, error: tercErr } = await supabase
+        .from("terceros")
+        .select(
+          "id, numero_identificacion, razon_social, nombre_comercial, retencion_renta_id, retencion_iva_id, retencion_ica_id"
+        )
+        .eq("empresa_id", empNum);
+
+      if (tercErr) {
+        console.error(
+          "Error al cargar terceros por empresa:",
+          tercErr.message || tercErr.code || JSON.stringify(tercErr)
+        );
+        setTercerosEmpresa([]);
+      } else {
+        const normalizados = (
+          (tercData || []) as Array<
+            TerceroRetencionInfo & { nombre_comercial?: string | null }
+          >
+        ).map((t) => ({
+          ...t,
+          nombre: t.nombre || t.nombre_comercial || t.razon_social || "",
+        }));
+        setTercerosEmpresa(normalizados);
+      }
+
+      const { data: retData, error: retErr } = await supabase
+        .from("conceptos_retencion")
+        .select(
+          "id, empresa_id, anio, tipo_retencion, concepto, base_minima, tarifa, activo, codigo_municipio"
+        )
+        .eq("empresa_id", empNum)
+        .eq("anio", anioContabilidad);
+
+      if (retErr) {
+        console.error(
+          "Error al cargar conceptos_retencion por empresa y año:",
+          retErr.message || retErr.code || JSON.stringify(retErr)
+        );
+        setConceptosRetencion([]);
+      } else {
+        setConceptosRetencion((retData || []) as ConceptoRetencionItem[]);
+      }
+    },
+    []
+  );
+
   const fetchInitialData = useCallback(async () => {
     setLoadingInitial(true);
     setError(null);
     try {
       const { data: userData } = await supabase.auth.getUser();
-      if (userData?.user) {
-        setUser({ id: userData.user.id, email: userData.user.email });
+      const currentUser = userData?.user || null;
+      if (currentUser) {
+        setUser({ id: currentUser.id, email: currentUser.email });
       }
 
-      const { data: compData, error: compErr } = await supabase
+      let idsEmpresasPermitidas: number[] = [];
+      if (currentUser) {
+        const { data: permisosData } = await supabase
+          .from("usuario_permisos_tx")
+          .select("empresa_id")
+          .eq("usuario_id", currentUser.id);
+
+        idsEmpresasPermitidas = Array.from(
+          new Set(
+            (permisosData || [])
+              .map((p: { empresa_id?: string | number | null }) =>
+                p.empresa_id != null ? Number(p.empresa_id) : NaN
+              )
+              .filter((n) => !Number.isNaN(n) && n > 0)
+          )
+        );
+      }
+
+      let empresasQuery = supabase
         .from("empresas")
         .select("id, razon_social, nit_identificacion")
         .order("razon_social", { ascending: true });
 
+      if (idsEmpresasPermitidas.length > 0) {
+        empresasQuery = empresasQuery.in("id", idsEmpresasPermitidas);
+      }
+
+      const { data: compData, error: compErr } = await empresasQuery;
       if (compErr) throw compErr;
 
-      const empresasList = compData || [];
+      const empresasList = (compData || []) as Company[];
       setCompanies(empresasList);
 
       if (empresasList.length > 0) {
-        // Leer la empresa activa de cookies o localStorage corporativo
-        const cookieEmpresa = document.cookie
-          .split('; ')
-          .find((row) => row.startsWith('empresa_activa='));
-        const empresaGuardadaCookie = cookieEmpresa ? cookieEmpresa.split('=')[1] : null;
-        const empresaGuardadaLocal = typeof window !== 'undefined' ? localStorage.getItem('empresa_activa') : null;
+        const empresaGuardadaCookie = getCookieValue("empresa_activa");
+        const empresaGuardadaLocal =
+          typeof window !== "undefined"
+            ? localStorage.getItem("empresa_activa") ||
+              localStorage.getItem("empresa_id")
+            : null;
 
-        const empresaIdParaSeleccionar = empresaGuardadaCookie || empresaGuardadaLocal;
-        const existeEmpresa = empresasList.some((emp: Company) => String(emp.id) === String(empresaIdParaSeleccionar));
+        const empresaIdParaSeleccionar =
+          empresaGuardadaLocal || empresaGuardadaCookie;
+        const existeEmpresa = empresasList.some(
+          (emp: Company) => String(emp.id) === String(empresaIdParaSeleccionar)
+        );
 
         if (existeEmpresa && empresaIdParaSeleccionar) {
           setSelectedCompanyId(String(empresaIdParaSeleccionar));
@@ -165,7 +419,8 @@ export default function CargarFacturasPage() {
         }
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Error al cargar datos iniciales.";
+      const msg =
+        err instanceof Error ? err.message : "Error al cargar datos iniciales.";
       setError(msg);
     } finally {
       setLoadingInitial(false);
@@ -177,24 +432,43 @@ export default function CargarFacturasPage() {
     fetchInitialData();
   }, [fetchInitialData]);
 
-  // Persistir cambios de selectedCompanyId en cookies y localStorage
-  useEffect(() => {
-    if (selectedCompanyId && typeof window !== 'undefined') {
-      localStorage.setItem('empresa_activa', String(selectedCompanyId));
-      document.cookie = `empresa_activa=${selectedCompanyId}; path=/; max-age=86400; SameSite=Lax`;
-    }
-  }, [selectedCompanyId]);
-
   useEffect(() => {
     if (!mounted || !selectedCompanyId) return;
 
     const syncCompanyData = async () => {
-      await fetchBranches(selectedCompanyId);
-      await fetchDocumentClasses(selectedCompanyId);
+      setSelectedBranchId("");
+      setSelectedDocumentClassId("");
+      setErrorPeriodo(null);
+
+      await persistirContextoUsuario(selectedCompanyId, "");
+
+      await Promise.all([
+        fetchBranches(selectedCompanyId, user?.id),
+        fetchDocumentClasses(selectedCompanyId),
+        fetchTercerosYRetenciones(selectedCompanyId, fechaContabilizacion),
+      ]);
     };
 
     syncCompanyData();
-  }, [selectedCompanyId, mounted, fetchBranches, fetchDocumentClasses]);
+  }, [
+    selectedCompanyId,
+    mounted,
+    user?.id,
+    persistirContextoUsuario,
+    fetchBranches,
+    fetchDocumentClasses,
+    fetchTercerosYRetenciones,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!mounted || !selectedCompanyId) return;
+    fetchTercerosYRetenciones(selectedCompanyId, fechaContabilizacion);
+  }, [mounted, selectedCompanyId, fechaContabilizacion, fetchTercerosYRetenciones]);
+
+  useEffect(() => {
+    if (!mounted || !selectedCompanyId || !selectedBranchId) return;
+    persistirContextoUsuario(selectedCompanyId, selectedBranchId);
+  }, [mounted, selectedCompanyId, selectedBranchId, persistirContextoUsuario]);
 
   if (!mounted || loadingInitial) {
     return (
@@ -207,8 +481,15 @@ export default function CargarFacturasPage() {
   return (
     <div className="max-w-6xl mx-auto p-3 space-y-3 text-xs">
       {/* Header */}
-      <div className="flex justify-between items-center border-b border-gray-200 pb-1.5">
-        <div className="flex items-center gap-2">
+      <div className="flex justify-between items-center border-b border-gray-200 pb-2">
+        <div className="flex items-center gap-2.5">
+          <Link
+            href={rutaRetorno}
+            title={tituloRetorno}
+            className="p-2 text-gray-600 hover:text-blue-600 bg-gray-50 hover:bg-blue-50 border border-gray-200 rounded-lg transition flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
           <h1 className="text-base font-bold text-gray-900 leading-none">
             Carga de Facturas XML
           </h1>
@@ -234,7 +515,7 @@ export default function CargarFacturasPage() {
         <button
           type="button"
           onClick={() => setActiveTab("individual")}
-          className={`py-1.5 px-4 text-xs font-semibold rounded-t border-t border-l border-r transition-colors ${
+          className={`py-1.5 px-4 text-xs font-semibold rounded-t border-t border-l border-r transition-colors cursor-pointer ${
             activeTab === "individual"
               ? "bg-white border-gray-300 text-blue-600 border-b-transparent -mb-px"
               : "bg-gray-50 border-transparent text-gray-500 hover:text-gray-700"
@@ -245,7 +526,7 @@ export default function CargarFacturasPage() {
         <button
           type="button"
           onClick={() => setActiveTab("masiva")}
-          className={`py-1.5 px-4 text-xs font-semibold rounded-t border-t border-l border-r transition-colors ${
+          className={`py-1.5 px-4 text-xs font-semibold rounded-t border-t border-l border-r transition-colors cursor-pointer ${
             activeTab === "masiva"
               ? "bg-white border-gray-300 text-blue-600 border-b-transparent -mb-px"
               : "bg-gray-50 border-transparent text-gray-500 hover:text-gray-700"
@@ -256,15 +537,15 @@ export default function CargarFacturasPage() {
       </div>
 
       {/* Selectores Parámetros */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-2 rounded border border-gray-200">
-        <div>
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-2 bg-gray-50 p-2 rounded border border-gray-200 items-start">
+        <div className="md:col-span-3">
           <label className="block text-[9px] font-bold text-gray-600 uppercase mb-0.5">
             Empresa *
           </label>
           <select
             value={selectedCompanyId}
             onChange={(e) => setSelectedCompanyId(e.target.value)}
-            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 truncate"
+            className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 truncate"
           >
             <option value="">-- Seleccione --</option>
             {companies.map((comp) => (
@@ -275,7 +556,7 @@ export default function CargarFacturasPage() {
           </select>
         </div>
 
-        <div>
+        <div className="md:col-span-3">
           <label className="block text-[9px] font-bold text-gray-600 uppercase mb-0.5">
             Sucursal *
           </label>
@@ -283,7 +564,7 @@ export default function CargarFacturasPage() {
             value={selectedBranchId}
             onChange={(e) => setSelectedBranchId(e.target.value)}
             disabled={!selectedCompanyId || branches.length === 0}
-            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 truncate"
+            className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 truncate"
           >
             <option value="">
               {branches.length === 0 ? "Sin sucursales" : "-- Seleccione --"}
@@ -296,7 +577,7 @@ export default function CargarFacturasPage() {
           </select>
         </div>
 
-        <div>
+        <div className="md:col-span-4">
           <label className="block text-[9px] font-bold text-gray-600 uppercase mb-0.5">
             Clase Documento *
           </label>
@@ -304,7 +585,7 @@ export default function CargarFacturasPage() {
             value={selectedDocumentClassId}
             onChange={(e) => setSelectedDocumentClassId(e.target.value)}
             disabled={!selectedCompanyId || documentClasses.length === 0}
-            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 truncate"
+            className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 truncate"
           >
             <option value="">
               {documentClasses.length === 0 ? "Sin clases" : "-- Seleccione --"}
@@ -318,7 +599,7 @@ export default function CargarFacturasPage() {
           </select>
         </div>
 
-        <div>
+        <div className="md:col-span-2">
           <label className="block text-[9px] font-bold text-gray-600 uppercase mb-0.5">
             Fecha Contabilidad *
           </label>
@@ -331,10 +612,12 @@ export default function CargarFacturasPage() {
               if (errorPeriodo) setErrorPeriodo(null);
             }}
             onBlur={() => verificarPeriodo(fechaContabilizacion)}
-            className="w-full bg-white border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 text-center"
+            className="w-full bg-white border border-gray-300 rounded px-1.5 py-1 text-[11px] text-gray-800 focus:ring-1 focus:ring-blue-500"
           />
           {validandoPeriodo && (
-            <p className="text-[9px] text-blue-500 mt-0.5 animate-pulse">Verificando periodo...</p>
+            <p className="text-[9px] text-blue-500 mt-0.5 animate-pulse">
+              Verificando...
+            </p>
           )}
           {errorPeriodo && (
             <p className="text-[10px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1 rounded mt-0.5">
@@ -344,28 +627,42 @@ export default function CargarFacturasPage() {
         </div>
       </div>
 
-      {/* Alerta global preventiva si el periodo contable no es válido */}
       {errorPeriodo ? (
         <div className="p-3 bg-rose-50 border border-rose-300 text-rose-800 rounded text-xs font-semibold flex items-center justify-between">
-          <span>🛑 No es posible realizar la carga de facturas XML porque el periodo contable seleccionado no se encuentra habilitado o está cerrado.</span>
+          <span>
+            🛑 No es posible realizar la carga de facturas XML porque el periodo
+            contable seleccionado no se encuentra habilitado o está cerrado.
+          </span>
         </div>
+      ) : activeTab === "individual" ? (
+        <XmlUploader
+          selectedCompanyId={selectedCompanyId}
+          selectedBranchId={selectedBranchId}
+          selectedDocumentClassId={selectedDocumentClassId}
+          fechaContabilizacion={fechaContabilizacion}
+        />
       ) : (
-        activeTab === "individual" ? (
-          <XmlUploader
-            selectedCompanyId={selectedCompanyId}
-            selectedBranchId={selectedBranchId}
-            selectedDocumentClassId={selectedDocumentClassId}
-            fechaContabilizacion={fechaContabilizacion}
-          />
-        ) : (
-          <XmlUploaderMasivo
-            selectedCompanyId={selectedCompanyId}
-            selectedBranchId={selectedBranchId}
-            selectedDocumentClassId={selectedDocumentClassId}
-            fechaContabilizacion={fechaContabilizacion}
-          />
-        )
+        <XmlUploaderMasivo
+          selectedCompanyId={selectedCompanyId}
+          selectedBranchId={selectedBranchId}
+          selectedDocumentClassId={selectedDocumentClassId}
+          fechaContabilizacion={fechaContabilizacion}
+        />
       )}
     </div>
+  );
+}
+
+export default function CargarFacturasPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="max-w-6xl mx-auto p-4 text-center text-xs font-medium text-gray-500">
+          Cargando interfaz...
+        </div>
+      }
+    >
+      <CargarFacturasContent />
+    </Suspense>
   );
 }
