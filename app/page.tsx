@@ -3,16 +3,18 @@
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import { UserCheck, LogOut, Building2, MapPin } from 'lucide-react';
+import { registrarSalidaUsuario } from '@/lib/auditoria';
 
 interface UsuarioPerfil {
+  id?: string;
   nombres?: string;
   apellidos?: string;
   tipo_usuario?: string;
-  empresa_activa?: number | string; // <-- Actualizado al nuevo campo de la BD
+  empresa_activa?: number | string;
   sucursal_id?: number | string;
   [key: string]: unknown;
 }
@@ -27,27 +29,35 @@ interface ModuloItem {
   color: string;
 }
 
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
 export default function ModulosMayoresPage() {
   const router = useRouter();
   const [usuarioActual, setUsuarioActual] = useState<UsuarioPerfil | null>(null);
   const [verificando, setVerificando] = useState<boolean>(true);
-  
-  // Estados para empresa y sucursal activa
+
   const [empresaActivaNombre, setEmpresaActivaNombre] = useState<string>("Seleccione Empresa");
   const [sucursalActivaNombre, setSucursalActivaNombre] = useState<string>("Seleccione Sucursal");
 
+  const contextoAuditoriaRef = useRef<{
+    usuarioId: string | null;
+    empresaId: string | null;
+    sucursalId: string | null;
+  }>({
+    usuarioId: null,
+    empresaId: null,
+    sucursalId: null,
+  });
+
   useEffect(() => {
     async function verificarSesionYContexto() {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      
       if (!supabaseUrl || !supabaseAnonKey) {
         router.replace('/login');
         return;
       }
 
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
-      
       // 1. Consultar sesión activa
       const { data: { session }, error } = await supabase.auth.getSession();
 
@@ -63,19 +73,36 @@ export default function ModulosMayoresPage() {
         .eq("id", session.user.id)
         .single();
 
-      // Tomamos estrictamente la empresa_activa del perfil de la BD
-      let empresaActivaId = perfil?.empresa_activa || null;
-      let sucursalIdAsignada = perfil?.sucursal_id || null;
+      const empresaActivaId =
+        perfil?.empresa_activa ||
+        (typeof window !== 'undefined' ? localStorage.getItem("empresa_activa") : null) ||
+        null;
+
+      const sucursalIdAsignada =
+        (typeof window !== 'undefined' ? localStorage.getItem("sucursal_activa") : null) ||
+        perfil?.sucursal_id ||
+        null;
+
+      contextoAuditoriaRef.current = {
+        usuarioId: session.user.id,
+        empresaId: empresaActivaId ? String(empresaActivaId) : null,
+        sucursalId: sucursalIdAsignada ? String(sucursalIdAsignada) : null,
+      };
 
       if (perfil) {
-        setUsuarioActual(perfil as UsuarioPerfil);
+        setUsuarioActual({ id: session.user.id, ...(perfil as UsuarioPerfil) });
       } else {
-        setUsuarioActual({ nombres: session.user.email, tipo_usuario: "Operador" });
+        setUsuarioActual({
+          id: session.user.id,
+          nombres: session.user.email,
+          tipo_usuario: "Operador",
+        });
       }
 
-      // 3. Obtener el nombre de la empresa activa consultando directamente la tabla 'empresas' usando el ID de la BD
-      let nombreEmpresa = null;
-      let nombreSucursal = typeof window !== 'undefined' ? localStorage.getItem("sucursal_activa_nombre") : null;
+      // 3. Obtener el nombre de la empresa activa consultando directamente la tabla 'empresas'
+      let nombreEmpresa: string | null = null;
+      let nombreSucursal: string | null =
+        typeof window !== 'undefined' ? localStorage.getItem("sucursal_activa_nombre") : null;
 
       if (empresaActivaId) {
         const { data: empData } = await supabase
@@ -89,7 +116,6 @@ export default function ModulosMayoresPage() {
         }
       }
 
-      // Si por alguna razón no viniera en el perfil, intentamos respaldar con localStorage
       if (!nombreEmpresa && typeof window !== 'undefined') {
         nombreEmpresa = localStorage.getItem("empresa_activa_nombre");
       }
@@ -109,44 +135,112 @@ export default function ModulosMayoresPage() {
 
       setEmpresaActivaNombre(nombreEmpresa || "Empresa Principal NIIF");
       setSucursalActivaNombre(nombreSucursal || "Sucursal Principal");
-      
+
       setVerificando(false);
     }
 
     verificarSesionYContexto();
   }, [router]);
 
+  // Registrar salida al cerrar pestaña, ventana o salir de la página
+  useEffect(() => {
+    let enviadaEnDescarga = false;
+
+    const handlePageHide = () => {
+      if (enviadaEnDescarga || typeof window === 'undefined') return;
+      if (window.location.pathname === '/login') return;
+      if (window.sessionStorage.getItem("salida_registrada") === "1") return;
+
+      const ctx = contextoAuditoriaRef.current;
+      const empresaId =
+        window.localStorage.getItem("empresa_activa") || ctx.empresaId;
+      const sucursalId =
+        window.localStorage.getItem("sucursal_activa") || ctx.sucursalId;
+      const usuarioId = ctx.usuarioId;
+
+      if (!usuarioId) return;
+
+      enviadaEnDescarga = true;
+      window.sessionStorage.setItem("salida_registrada", "1");
+
+      const payload = JSON.stringify({
+        usuarioId,
+        empresaId: empresaId ? Number(empresaId) : null,
+        sucursalId: sucursalId ? Number(sucursalId) : null,
+      });
+
+      if (navigator.sendBeacon) {
+        const blob = new Blob([payload], { type: "application/json" });
+        navigator.sendBeacon("/api/auditoria/salida", blob);
+      } else {
+        fetch("/api/auditoria/salida", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, []);
+
   const handleLogout = async () => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    
-    if (supabaseUrl && supabaseAnonKey) {
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
-      await supabase.auth.signOut({ scope: 'global' });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const ctx = contextoAuditoriaRef.current;
+
+      const usuarioId = session?.user?.id || ctx.usuarioId;
+      const empresaId =
+        (typeof window !== 'undefined' ? window.localStorage.getItem("empresa_activa") : null) ||
+        ctx.empresaId;
+      const sucursalId =
+        (typeof window !== 'undefined' ? window.localStorage.getItem("sucursal_activa") : null) ||
+        ctx.sucursalId;
 
       if (typeof window !== 'undefined') {
-        window.sessionStorage.clear();
-        window.localStorage.clear();
-        document.cookie.split(";").forEach((c) => {
-          document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
-        });
+        window.sessionStorage.setItem("salida_registrada", "1");
       }
 
-      window.location.href = "/login";
+      if (usuarioId) {
+        await registrarSalidaUsuario({
+          usuarioId,
+          empresaId: empresaId || null,
+          sucursalId: sucursalId || null,
+        });
+      }
+    } catch (auditErr) {
+      console.error("Error al registrar salida de auditoría:", auditErr);
     }
+
+    await supabase.auth.signOut({ scope: 'global' });
+
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.clear();
+      window.localStorage.clear();
+      document.cookie.split(";").forEach((c) => {
+        document.cookie = c
+          .replace(/^ +/, "")
+          .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+      });
+    }
+
+    window.location.href = "/login";
   };
 
   const tipoUsuarioLower = usuarioActual?.tipo_usuario?.toLowerCase() || "";
   const esAdministrador = tipoUsuarioLower === 'administrador';
 
-  // Definición base de módulos mayores
   const modulosDisponibles: ModuloItem[] = [
     {
       id: 'contabilidad',
       titulo: 'Contabilidad y Finanzas',
       descripcion: 'Gestión de NIIF, PUC, clientes, proveedores, transacciones contables y tesorería.',
       icono: '📊',
-      activo: true, 
+      activo: true,
       ruta: '/modulos/contabilidad',
       color: 'border-blue-500 bg-blue-50/30 text-blue-900 hover:bg-blue-50'
     },
@@ -230,10 +324,10 @@ export default function ModulosMayoresPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-      
+
       {/* BARRA SUPERIOR ORGANIZADA */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-3xl shadow-sm flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-        
+
         {/* BLOQUE IZQUIERDA: TÍTULO */}
         <div>
           <div className="flex items-center gap-2">
@@ -247,7 +341,7 @@ export default function ModulosMayoresPage() {
 
         {/* BLOQUE DERECHA: EMPRESA, SUCURSAL Y USUARIO */}
         <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto justify-start lg:justify-end">
-          
+
           {/* CÁPSULA DE EMPRESA Y SUCURSAL ACTIVA */}
           <div className="flex items-center gap-2.5 bg-zinc-50 dark:bg-zinc-800/60 px-3.5 py-2 rounded-2xl border border-zinc-200/80 dark:border-zinc-700 text-xs">
             <div className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400 font-bold">

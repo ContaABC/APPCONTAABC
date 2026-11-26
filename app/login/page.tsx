@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import { Lock, Mail, Building2, MapPin, XCircle, RefreshCw } from "lucide-react";
+import { registrarEntradaUsuario } from "@/lib/auditoria";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -262,6 +263,10 @@ export default function LoginPage() {
     localStorage.setItem("empresa_activa_nombre", nombreEmpresaVal);
     localStorage.setItem("sucursal_activa_nombre", nombreSucursalVal);
 
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.removeItem("salida_registrada");
+    }
+
     document.cookie = `empresa_activa=${empId}; path=/; max-age=86400; SameSite=Lax`;
     document.cookie = `sucursal_activa=${sucId}; path=/; max-age=86400; SameSite=Lax`;
     document.cookie = `empresa_activa_nombre=${encodeURIComponent(
@@ -270,6 +275,23 @@ export default function LoginPage() {
     document.cookie = `sucursal_activa_nombre=${encodeURIComponent(
       nombreSucursalVal
     )}; path=/; max-age=86400; SameSite=Lax`;
+
+    // Registrar entrada (LOGIN) con empresa y sucursal confirmadas
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const uidFinal = session?.user?.id || userId;
+      if (uidFinal) {
+        await registrarEntradaUsuario({
+          usuarioId: uidFinal,
+          empresaId: empId || null,
+          sucursalId: sucId || null,
+        });
+      }
+    } catch (auditErr) {
+      console.error("Error registrando entrada de auditoría:", auditErr);
+    }
 
     router.push("/");
     router.refresh();
