@@ -5,7 +5,9 @@ import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error(
@@ -18,11 +20,17 @@ function getSupabaseAdmin() {
   });
 }
 
-async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
-  if (empresaId) return Number(empresaId);
+async function resolverEmpresaId(
+  empresaId?: number | string | null
+): Promise<number> {
+  if (empresaId !== undefined && empresaId !== null && String(empresaId).trim() !== "") {
+    const parsed = Number(empresaId);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
   const cookieStore = await cookies();
   const idCookie = cookieStore.get("empresa_activa")?.value;
-  return Number(idCookie || 0);
+  const parsedCookie = Number(idCookie || 0);
+  return Number.isNaN(parsedCookie) ? 0 : parsedCookie;
 }
 
 export async function obtenerEmpresas() {
@@ -36,7 +44,10 @@ export async function obtenerEmpresas() {
     if (error) return { success: false, data: [], error: error.message };
     return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener empresas.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener empresas.";
     return { success: false, data: [], error: mensaje };
   }
 }
@@ -56,7 +67,10 @@ export async function obtenerSucursales(empresaId?: number | string | null) {
     if (error) return { success: false, data: [], error: error.message };
     return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener sucursales.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener sucursales.";
     return { success: false, data: [], error: mensaje };
   }
 }
@@ -69,7 +83,8 @@ export async function consultarMovimientosTransacciones(
 ) {
   try {
     const idEmpresa = await resolverEmpresaId(empresaId);
-    if (!idEmpresa) throw new Error("Debe especificar o tener activa una empresa válida.");
+    if (!idEmpresa)
+      throw new Error("Debe especificar o tener activa una empresa válida.");
 
     const parsedSucursalId = sucursalId ? Number(sucursalId) : null;
     const parsedAnio = anio ? Number(anio) : null;
@@ -77,12 +92,15 @@ export async function consultarMovimientosTransacciones(
 
     const supabase = getSupabaseAdmin();
 
-    const { data, error } = await supabase.rpc("obtener_movimientos_transacciones", {
-      p_empresa_id: idEmpresa,
-      p_sucursal_id: parsedSucursalId,
-      p_anio: parsedAnio,
-      p_mes: parsedMes,
-    });
+    const { data, error } = await supabase.rpc(
+      "obtener_movimientos_transacciones",
+      {
+        p_empresa_id: idEmpresa,
+        p_sucursal_id: parsedSucursalId,
+        p_anio: parsedAnio,
+        p_mes: parsedMes,
+      }
+    );
 
     if (error) throw new Error(`Error en RPC: ${error.message}`);
 
@@ -92,7 +110,10 @@ export async function consultarMovimientosTransacciones(
       error: null,
     };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error al consultar los movimientos contables.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error al consultar los movimientos contables.";
     console.error("Error en consultarMovimientosTransacciones:", mensaje);
     return {
       success: false,
@@ -102,15 +123,20 @@ export async function consultarMovimientosTransacciones(
   }
 }
 
-export async function obtenerComprobanteTransaccion(transaccionId: number | string) {
+export async function obtenerComprobanteTransaccion(
+  transaccionId: number | string
+) {
   try {
     const parsedId = Number(transaccionId);
     if (!parsedId) throw new Error("ID de transacción inválido.");
 
     const supabase = getSupabaseAdmin();
-    const { data, error } = await supabase.rpc("obtener_comprobante_transaccion", {
-      p_transaccion_id: parsedId,
-    });
+    const { data, error } = await supabase.rpc(
+      "obtener_comprobante_transaccion",
+      {
+        p_transaccion_id: parsedId,
+      }
+    );
 
     if (error) throw new Error(`Error en RPC: ${error.message}`);
 
@@ -120,7 +146,10 @@ export async function obtenerComprobanteTransaccion(transaccionId: number | stri
       error: null,
     };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error al obtener el comprobante contable.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error al obtener el comprobante contable.";
     console.error("Error en obtenerComprobanteTransaccion:", mensaje);
     return {
       success: false,

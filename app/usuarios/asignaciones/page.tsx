@@ -1,466 +1,1055 @@
 "use client";
 
-import { useState, useEffect, ChangeEvent, FormEvent } from "react";
-import Link from "next/link";
-import { ArrowLeft, Building2, Link2, PlusCircle, CheckCircle2, XCircle, Trash2, Search } from "lucide-react";
+import React, { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { createClient } from "@supabase/supabase-js";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 
-// ==========================================
-// INTERFACES Y TIPOS
-// ==========================================
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+interface Empresa {
+  id: string | number;
+  razon_social?: string;
+  nombre_comercial?: string;
+  nombre?: string;
+  nit?: string;
+}
+
+interface Sucursal {
+  id: string | number;
+  empresa_id: string | number;
+  nombre?: string;
+  nombre_sucursal?: string;
+}
+
 interface UsuarioPerfil {
   id: string;
   nombres: string;
   apellidos: string;
   cedula: string;
-  tipo_usuario: string;
-  activo: boolean;
+  email: string;
 }
 
-interface Empresa {
-  id: number | string;
-  razon_social?: string;
-  nombre_comercial?: string;
-}
-
-interface Sucursal {
+interface TransaccionSistema {
   id: number;
+  ruta_acceso: string;
+  modulo: string;
+  layout: string;
+  es_modulo_padre: boolean;
+}
+
+interface PermisoTxRow {
   empresa_id: number | string;
-  nombre: string;
-  codigo_sucursal?: string;
-  estado?: string;
+  sucursal_id: number | string | null;
+  transaccion_id: number | string | null;
 }
 
-interface UsuarioAsignacion {
-  id: number;
-  usuario_id: string;
-  empresa_id: number | string;
-  sucursal_id: number;
-  rol: string;
-  usuarios_perfiles?: {
-    nombres: string;
-    apellidos: string;
-    cedula: string;
-  } | null;
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
 }
 
-interface MensajeEstado {
-  texto: string;
-  tipo: "success" | "error" | "";
+function quitarTildes(texto: string): string {
+  return texto
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
 }
 
-export default function AsignacionesPage() {
-  const [usuarios, setUsuarios] = useState<UsuarioPerfil[]>([]);
+function normalizarModuloKey(modulo?: string | null): string {
+  const limpio = quitarTildes(String(modulo || "GENERAL"))
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+  return limpio || "GENERAL";
+}
+
+function PermisosUsuariosContent() {
+  const searchParams = useSearchParams();
+
+  const [isMounted, setIsMounted] = useState<boolean>(false);
+  const [rutaRetorno, setRutaRetorno] = useState<string>(
+    "/modulos/contabilidad/configuracion"
+  );
+  const [tituloRetorno, setTituloRetorno] = useState<string>(
+    "Volver a Configuración"
+  );
+
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
-  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
-  const [asignaciones, setAsignaciones] = useState<UsuarioAsignacion[]>([]);
-  
-  const [loading, setLoading] = useState<boolean>(false);
-  const [cargandoDatos, setCargandoDatos] = useState<boolean>(true);
+  const [empresaIdSeleccionada, setEmpresaIdSeleccionada] =
+    useState<string>("");
 
-  // Estados del formulario
-  const [usuarioIdSeleccionado, setUsuarioIdSeleccionado] = useState<string>("");
-  const [sucursalesSeleccionadas, setSucursalesSeleccionadas] = useState<{ [key: number]: boolean }>({});
-  const [rol, setRol] = useState<string>("Operador");
-  
-  // Filtros panel izquierdo
-  const [busquedaUsuarioIzquierda, setBusquedaUsuarioIzquierda] = useState<string>("");
-  const [filtroEstadoUsuario, setFiltroEstadoUsuario] = useState<string>("");
-  const [busquedaEmpresaIzquierda, setBusquedaEmpresaIzquierda] = useState<string>("");
+  const [sucursalesLista, setSucursalesLista] = useState<Sucursal[]>([]);
+  const [sucursalIdSeleccionada, setSucursalIdSeleccionada] =
+    useState<string>("");
 
-  // Filtros panel derecho
-  const [busquedaAsignacion, setBusquedaAsignacion] = useState<string>("");
-  const [filtroEmpresaAsignacion, setFiltroEmpresaAsignacion] = useState<string>("");
+  const [usuarios, setUsuarios] = useState<UsuarioPerfil[]>([]);
+  const [busquedaUsuario, setBusquedaUsuario] = useState<string>("");
+  const [usuarioIdSeleccionado, setUsuarioIdSeleccionado] =
+    useState<string>("");
 
-  const [mensaje, setMensaje] = useState<MensajeEstado>({ texto: "", tipo: "" });
+  const [transacciones, setTransacciones] = useState<TransaccionSistema[]>([]);
+  const [modulosSeleccionados, setModulosSeleccionados] = useState<string[]>(
+    []
+  );
+  const [permisosActuales, setPermisosActuales] = useState<number[]>([]);
+
+  const [cargandoTx, setCargandoTx] = useState<boolean>(true);
+  const [guardando, setGuardando] = useState<boolean>(false);
+
+  const empresasRef = useRef<Empresa[]>([]);
+  const transaccionesRef = useRef<TransaccionSistema[]>([]);
+  const inicializadoRef = useRef<boolean>(false);
 
   useEffect(() => {
-    cargarDatosIniciales();
-  }, []);
+    empresasRef.current = empresas;
+  }, [empresas]);
 
-  const cargarDatosIniciales = async () => {
-    setCargandoDatos(true);
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  useEffect(() => {
+    transaccionesRef.current = transacciones;
+  }, [transacciones]);
 
-    if (supabaseUrl && supabaseAnonKey) {
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+  useEffect(() => {
+    setIsMounted(true);
 
-      // 1. Usuarios
-      const { data: usuariosData } = await supabase.from("usuarios_perfiles").select("id, nombres, apellidos, cedula, tipo_usuario, activo");
-      if (usuariosData) setUsuarios(usuariosData as UsuarioPerfil[]);
-
-      // 2. Empresas
-      const { data: empresasData } = await supabase.from("empresas").select("*");
-      if (empresasData) setEmpresas(empresasData as Empresa[]);
-
-      // 3. Sucursales
-      const { data: sucursalesData } = await supabase.from("sucursales").select("*").eq("estado", "Activa");
-      if (sucursalesData) setSucursales(sucursalesData as Sucursal[]);
-
-      // 4. Asignaciones con mapeo seguro para aplanar la relación de Supabase
-      const { data: asignacionesData } = await supabase
-        .from("usuario_asignaciones")
-        .select(`
-          id,
-          usuario_id,
-          empresa_id,
-          sucursal_id,
-          rol,
-          usuarios_perfiles (nombres, apellidos, cedula)
-        `)
-        .order("created_at", { ascending: false });
-
-      if (asignacionesData) {
-        const asignacionesMapeadas: UsuarioAsignacion[] = asignacionesData.map((item: any) => ({
-          ...item,
-          usuarios_perfiles: Array.isArray(item.usuarios_perfiles) 
-            ? (item.usuarios_perfiles[0] || null) 
-            : item.usuarios_perfiles
-        }));
-        setAsignaciones(asignacionesMapeadas);
+    const fromParam = searchParams.get("from");
+    if (fromParam && fromParam.startsWith("/")) {
+      setRutaRetorno(fromParam);
+      setTituloRetorno(
+        fromParam.startsWith("/usuarios")
+          ? "Volver a Gestión de Usuarios"
+          : "Volver a Configuración"
+      );
+    } else if (typeof document !== "undefined" && document.referrer) {
+      try {
+        const refUrl = new URL(document.referrer);
+        if (
+          refUrl.origin === window.location.origin &&
+          refUrl.pathname.startsWith("/")
+        ) {
+          setRutaRetorno(refUrl.pathname);
+          setTituloRetorno(
+            refUrl.pathname.startsWith("/usuarios")
+              ? "Volver a Gestión de Usuarios"
+              : "Volver a Configuración"
+          );
+        }
+      } catch {
+        // Mantener ruta por defecto
       }
     }
-    setCargandoDatos(false);
+  }, [searchParams]);
+
+  const calcularModulosDesdeIds = useCallback(
+    (idsTx: number[], txsBase?: TransaccionSistema[]) => {
+      const listaTx = txsBase ?? transaccionesRef.current;
+      if (!idsTx || idsTx.length === 0) return [];
+      return Array.from(
+        new Set(
+          listaTx
+            .filter((tx) => idsTx.includes(Number(tx.id)))
+            .map((tx) => normalizarModuloKey(tx.modulo))
+            .filter(Boolean)
+        )
+      );
+    },
+    []
+  );
+
+  const cargarSucursalesDeEmpresa = useCallback(
+    async (empId: string, sucursalPreferida?: string): Promise<Sucursal[]> => {
+      if (!empId) {
+        setSucursalesLista([]);
+        setSucursalIdSeleccionada("");
+        return [];
+      }
+
+      const { data } = await supabase
+        .from("sucursales")
+        .select("*")
+        .eq("empresa_id", Number(empId));
+
+      const lista = (data || []) as Sucursal[];
+      setSucursalesLista(lista);
+
+      if (
+        sucursalPreferida &&
+        lista.some((s) => String(s.id) === String(sucursalPreferida))
+      ) {
+        setSucursalIdSeleccionada(String(sucursalPreferida));
+      } else {
+        setSucursalIdSeleccionada("");
+      }
+
+      return lista;
+    },
+    []
+  );
+
+  const cargarPermisosContextoActual = useCallback(
+    async (
+      usrId: string,
+      empId: string,
+      sucId: string,
+      txsBase?: TransaccionSistema[]
+    ) => {
+      if (!usrId || !empId) {
+        setPermisosActuales([]);
+        setModulosSeleccionados([]);
+        return;
+      }
+
+      const listaTx = txsBase ?? transaccionesRef.current;
+
+      if (sucId) {
+        const { data } = await supabase
+          .from("usuario_permisos_tx")
+          .select("transaccion_id")
+          .eq("usuario_id", usrId)
+          .eq("empresa_id", Number(empId))
+          .eq("sucursal_id", Number(sucId));
+
+        let idsPermitidos = Array.from(
+          new Set(
+            (data || [])
+              .map((p: { transaccion_id?: number | string | null }) =>
+                p.transaccion_id != null ? Number(p.transaccion_id) : NaN
+              )
+              .filter((id) => !Number.isNaN(id))
+          )
+        );
+
+        // Si en la sucursal específica no hay filas de TX, revisar permisos generales (sucursal_id IS NULL) de esa empresa
+        if (idsPermitidos.length === 0) {
+          const { data: dataGeneral } = await supabase
+            .from("usuario_permisos_tx")
+            .select("transaccion_id")
+            .eq("usuario_id", usrId)
+            .eq("empresa_id", Number(empId))
+            .is("sucursal_id", null);
+
+          idsPermitidos = Array.from(
+            new Set(
+              (dataGeneral || [])
+                .map((p: { transaccion_id?: number | string | null }) =>
+                  p.transaccion_id != null ? Number(p.transaccion_id) : NaN
+                )
+                .filter((id) => !Number.isNaN(id))
+            )
+          );
+        }
+
+        setPermisosActuales(idsPermitidos);
+        setModulosSeleccionados(calcularModulosDesdeIds(idsPermitidos, listaTx));
+        return;
+      }
+
+      const { data: dataGeneral } = await supabase
+        .from("usuario_permisos_tx")
+        .select("transaccion_id")
+        .eq("usuario_id", usrId)
+        .eq("empresa_id", Number(empId))
+        .is("sucursal_id", null);
+
+      let idsPermitidos = Array.from(
+        new Set(
+          (dataGeneral || [])
+            .map((p: { transaccion_id?: number | string | null }) =>
+              p.transaccion_id != null ? Number(p.transaccion_id) : NaN
+            )
+            .filter((id) => !Number.isNaN(id))
+        )
+      );
+
+      if (idsPermitidos.length === 0) {
+        const { data: dataEmpresa } = await supabase
+          .from("usuario_permisos_tx")
+          .select("transaccion_id")
+          .eq("usuario_id", usrId)
+          .eq("empresa_id", Number(empId));
+
+        idsPermitidos = Array.from(
+          new Set(
+            (dataEmpresa || [])
+              .map((p: { transaccion_id?: number | string | null }) =>
+                p.transaccion_id != null ? Number(p.transaccion_id) : NaN
+              )
+              .filter((id) => !Number.isNaN(id))
+          )
+        );
+      }
+
+      setPermisosActuales(idsPermitidos);
+      setModulosSeleccionados(calcularModulosDesdeIds(idsPermitidos, listaTx));
+    },
+    [calcularModulosDesdeIds]
+  );
+
+  const aplicarContextoYPermisosUsuario = useCallback(
+    async (
+      usrId: string,
+      empresaActualReferencia?: string,
+      listaEmpresasBase?: Empresa[],
+      listaTxBase?: TransaccionSistema[]
+    ) => {
+      const empresasDisponibles = listaEmpresasBase ?? empresasRef.current;
+      const txsDisponibles = listaTxBase ?? transaccionesRef.current;
+
+      if (!usrId) {
+        setPermisosActuales([]);
+        setModulosSeleccionados([]);
+        return;
+      }
+
+      const idsPermitidosSet = new Set(
+        empresasDisponibles.map((e) => String(e.id))
+      );
+
+      const { data: asignacionesUsr } = await supabase
+        .from("usuario_permisos_tx")
+        .select("empresa_id, sucursal_id, transaccion_id")
+        .eq("usuario_id", usrId);
+
+      const filasUsuario = ((asignacionesUsr || []) as PermisoTxRow[]).filter(
+        (row) => idsPermitidosSet.has(String(row.empresa_id))
+      );
+
+      let empresaObjetivo = empresaActualReferencia || "";
+      let sucursalObjetivo = "";
+
+      if (filasUsuario.length > 0) {
+        const empresasAsignadasUsr = Array.from(
+          new Set(filasUsuario.map((f) => String(f.empresa_id)))
+        );
+        if (!empresasAsignadasUsr.includes(String(empresaObjetivo))) {
+          empresaObjetivo = empresasAsignadasUsr[0];
+        }
+
+        const filasDeEmpresa = filasUsuario.filter(
+          (f) => String(f.empresa_id) === String(empresaObjetivo)
+        );
+        const sucursalesAsignadas = Array.from(
+          new Set(
+            filasDeEmpresa
+              .map((f) =>
+                f.sucursal_id != null ? String(f.sucursal_id).trim() : ""
+              )
+              .filter(Boolean)
+          )
+        );
+
+        if (sucursalesAsignadas.length > 0) {
+          sucursalObjetivo = sucursalesAsignadas[0];
+        }
+      } else if (!empresaObjetivo && empresasDisponibles.length > 0) {
+        empresaObjetivo = String(empresasDisponibles[0].id);
+      }
+
+      if (empresaObjetivo) {
+        setEmpresaIdSeleccionada(String(empresaObjetivo));
+      }
+
+      const listaSuc = await cargarSucursalesDeEmpresa(
+        String(empresaObjetivo || ""),
+        sucursalObjetivo
+      );
+      const sucFinal =
+        sucursalObjetivo &&
+        listaSuc.some((s) => String(s.id) === String(sucursalObjetivo))
+          ? String(sucursalObjetivo)
+          : "";
+
+      await cargarPermisosContextoActual(
+        usrId,
+        String(empresaObjetivo || ""),
+        sucFinal,
+        txsDisponibles
+      );
+    },
+    [cargarSucursalesDeEmpresa, cargarPermisosContextoActual]
+  );
+
+  useEffect(() => {
+    if (!isMounted || inicializadoRef.current) return;
+    inicializadoRef.current = true;
+
+    async function cargarDatosIniciales() {
+      try {
+        setCargandoTx(true);
+
+        const usuarioParam = searchParams.get("usuarioId");
+        const usuarioStorage =
+          typeof window !== "undefined"
+            ? sessionStorage.getItem("nuevo_usuario_permisos_id")
+            : null;
+        const usuarioObjetivo = (usuarioParam || usuarioStorage || "").trim();
+
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          setEmpresas([]);
+          setEmpresaIdSeleccionada("");
+          setUsuarios([]);
+          setUsuarioIdSeleccionado("");
+          return;
+        }
+
+        const { data: permisosAdmin } = await supabase
+          .from("usuario_permisos_tx")
+          .select("empresa_id")
+          .eq("usuario_id", user.id);
+
+        const idsEmpresasAdmin = Array.from(
+          new Set(
+            (permisosAdmin || [])
+              .map((p: { empresa_id?: string | number | null }) =>
+                p.empresa_id != null ? String(p.empresa_id).trim() : ""
+              )
+              .filter(Boolean)
+          )
+        );
+
+        let listaEmp: Empresa[] = [];
+        let empresaInicial = "";
+
+        if (idsEmpresasAdmin.length > 0) {
+          const { data: empData } = await supabase
+            .from("empresas")
+            .select("*")
+            .in(
+              "id",
+              idsEmpresasAdmin
+                .map((id) => Number(id))
+                .filter((n) => !Number.isNaN(n))
+            )
+            .order("razon_social", { ascending: true });
+
+          listaEmp = empData || [];
+          empresasRef.current = listaEmp;
+          setEmpresas(listaEmp);
+
+          if (listaEmp.length > 0) {
+            const cookieEmpresa = getCookieValue("empresa_activa");
+            const empresaGuardadaLocal =
+              typeof window !== "undefined"
+                ? localStorage.getItem("empresa_activa") ||
+                  localStorage.getItem("empresa_id")
+                : null;
+
+            const empresaIdParaSeleccionar =
+              empresaGuardadaLocal || cookieEmpresa;
+            const existeEmpresa = listaEmp.some(
+              (emp: Empresa) => String(emp.id) === String(empresaIdParaSeleccionar)
+            );
+
+            empresaInicial =
+              existeEmpresa && empresaIdParaSeleccionar
+                ? String(empresaIdParaSeleccionar)
+                : String(listaEmp[0].id);
+
+            setEmpresaIdSeleccionada(empresaInicial);
+          }
+        } else {
+          setEmpresas([]);
+          setEmpresaIdSeleccionada("");
+        }
+
+        let listaTx: TransaccionSistema[] = [];
+        const { data: txData, error: txError } = await supabase
+          .from("transacciones_sistema")
+          .select("*")
+          .order("modulo", { ascending: true });
+
+        if (!txError && txData) {
+          listaTx = txData as TransaccionSistema[];
+          transaccionesRef.current = listaTx;
+          setTransacciones(listaTx);
+        }
+
+        if (idsEmpresasAdmin.length > 0) {
+          const { data: permisosAlcance } = await supabase
+            .from("usuario_permisos_tx")
+            .select("usuario_id")
+            .in(
+              "empresa_id",
+              idsEmpresasAdmin
+                .map((id) => Number(id))
+                .filter((n) => !Number.isNaN(n))
+            );
+
+          const { data: todosPermisosUsuarios } = await supabase
+            .from("usuario_permisos_tx")
+            .select("usuario_id");
+
+          const usuariosConAlgunaAsignacion = new Set(
+            (todosPermisosUsuarios || [])
+              .map((p: { usuario_id?: string | null }) =>
+                p.usuario_id ? String(p.usuario_id).trim() : ""
+              )
+              .filter(Boolean)
+          );
+
+          const usuariosEnEmpresasAdmin = new Set(
+            (permisosAlcance || [])
+              .map((p: { usuario_id?: string | null }) =>
+                p.usuario_id ? String(p.usuario_id).trim() : ""
+              )
+              .filter(Boolean)
+          );
+
+          const { data: usrData, error: usrError } = await supabase
+            .from("usuarios_perfiles")
+            .select("id, nombres, apellidos, cedula, email")
+            .eq("activo", true)
+            .order("nombres", { ascending: true });
+
+          if (!usrError && usrData) {
+            const filtradosAlcance = (usrData as UsuarioPerfil[]).filter(
+              (u) => {
+                const uid = String(u.id);
+                const sinAsignaciones = !usuariosConAlgunaAsignacion.has(uid);
+                const enEmpresasAdmin = usuariosEnEmpresasAdmin.has(uid);
+                const esUsuarioObjetivo = Boolean(
+                  usuarioObjetivo && uid === usuarioObjetivo
+                );
+                return sinAsignaciones || enEmpresasAdmin || esUsuarioObjetivo;
+              }
+            );
+
+            setUsuarios(filtradosAlcance);
+
+            let usuarioElegido = "";
+            if (
+              usuarioObjetivo &&
+              filtradosAlcance.some((u) => String(u.id) === usuarioObjetivo)
+            ) {
+              usuarioElegido = usuarioObjetivo;
+              if (typeof window !== "undefined") {
+                sessionStorage.removeItem("nuevo_usuario_permisos_id");
+              }
+            } else if (filtradosAlcance.length > 0) {
+              usuarioElegido = filtradosAlcance[0].id;
+            }
+
+            setUsuarioIdSeleccionado(usuarioElegido);
+
+            if (usuarioElegido) {
+              await aplicarContextoYPermisosUsuario(
+                usuarioElegido,
+                empresaInicial,
+                listaEmp,
+                listaTx
+              );
+            } else if (empresaInicial) {
+              await cargarSucursalesDeEmpresa(empresaInicial);
+            }
+          }
+        } else {
+          setUsuarios([]);
+          setUsuarioIdSeleccionado("");
+        }
+      } catch (err) {
+        console.error("Error en carga inicial:", err);
+      } finally {
+        setCargandoTx(false);
+      }
+    }
+    cargarDatosIniciales();
+  }, [
+    isMounted,
+    searchParams,
+    aplicarContextoYPermisosUsuario,
+    cargarSucursalesDeEmpresa,
+  ]);
+
+  useEffect(() => {
+    if (empresaIdSeleccionada && typeof window !== "undefined") {
+      localStorage.setItem("empresa_activa", String(empresaIdSeleccionada));
+      localStorage.setItem("empresa_id", String(empresaIdSeleccionada));
+      document.cookie = `empresa_activa=${empresaIdSeleccionada}; path=/; max-age=86400; SameSite=Lax`;
+    }
+  }, [empresaIdSeleccionada]);
+
+  const handleSeleccionarUsuario = async (nuevoUsuarioId: string) => {
+    setUsuarioIdSeleccionado(nuevoUsuarioId);
+    setModulosSeleccionados([]);
+    setPermisosActuales([]);
+    await aplicarContextoYPermisosUsuario(nuevoUsuarioId, empresaIdSeleccionada);
   };
 
-  const handleUsuarioChange = (e: ChangeEvent<HTMLSelectElement>) => {
-    const id = e.target.value;
-    setUsuarioIdSeleccionado(id);
-    const usuarioEncontrado = usuarios.find((u) => u.id === id);
-    if (usuarioEncontrado && usuarioEncontrado.tipo_usuario) {
-      setRol(usuarioEncontrado.tipo_usuario);
+  const handleCambioEmpresaManual = async (nuevaEmpId: string) => {
+    setEmpresaIdSeleccionada(nuevaEmpId);
+    setSucursalIdSeleccionada("");
+    await cargarSucursalesDeEmpresa(nuevaEmpId);
+    if (usuarioIdSeleccionado && nuevaEmpId) {
+      await cargarPermisosContextoActual(usuarioIdSeleccionado, nuevaEmpId, "");
     }
   };
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!usuarioIdSeleccionado) {
-      setMensaje({ texto: "Seleccione un usuario.", tipo: "error" });
+  const handleCambioSucursalManual = async (nuevaSucId: string) => {
+    setSucursalIdSeleccionada(nuevaSucId);
+    if (usuarioIdSeleccionado && empresaIdSeleccionada) {
+      await cargarPermisosContextoActual(
+        usuarioIdSeleccionado,
+        empresaIdSeleccionada,
+        nuevaSucId
+      );
+    }
+  };
+
+  const handleTogglePermiso = (tx: TransaccionSistema) => {
+    const txId = Number(tx.id);
+    const estaMarcado = permisosActuales.includes(txId);
+    const modKey = normalizarModuloKey(tx.modulo);
+
+    if (tx.es_modulo_padre) {
+      const txsDelModulo = transacciones.filter(
+        (t) => normalizarModuloKey(t.modulo) === modKey
+      );
+      const idsDelModulo = txsDelModulo.map((t) => Number(t.id));
+
+      if (!estaMarcado) {
+        setPermisosActuales((prev) =>
+          Array.from(new Set([...prev, ...idsDelModulo]))
+        );
+      } else {
+        setPermisosActuales((prev) =>
+          prev.filter((id) => !idsDelModulo.includes(id))
+        );
+      }
+    } else {
+      setPermisosActuales((prev) =>
+        prev.includes(txId)
+          ? prev.filter((id) => id !== txId)
+          : [...prev, txId]
+      );
+    }
+  };
+
+  const toggleModuloFiltro = (moduloNombre: string) => {
+    const modKey = normalizarModuloKey(moduloNombre);
+    setModulosSeleccionados((prev) =>
+      prev.includes(modKey)
+        ? prev.filter((m) => m !== modKey)
+        : [...prev, modKey]
+    );
+  };
+
+  const guardarPermisos = async () => {
+    if (!usuarioIdSeleccionado || !empresaIdSeleccionada) {
+      alert("Selecciona un usuario y una empresa obligatoriamente.");
       return;
     }
 
-    setLoading(true);
-    setMensaje({ texto: "", tipo: "" });
+    const empresaPermitida = empresas.some(
+      (e) => String(e.id) === String(empresaIdSeleccionada)
+    );
+    if (!empresaPermitida) {
+      alert(
+        "No tienes autorización para asignar permisos en la empresa seleccionada."
+      );
+      return;
+    }
 
+    setGuardando(true);
     try {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      if (!supabaseUrl || !supabaseAnonKey) throw new Error("Faltan variables de entorno.");
+      if (sucursalIdSeleccionada) {
+        const { error: deleteGenError } = await supabase
+          .from("usuario_permisos_tx")
+          .delete()
+          .eq("usuario_id", usuarioIdSeleccionado)
+          .eq("empresa_id", Number(empresaIdSeleccionada))
+          .is("sucursal_id", null);
 
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+        if (deleteGenError) throw deleteGenError;
 
-      const sucursalesIdsList = Object.keys(sucursalesSeleccionadas)
-        .filter((id) => sucursalesSeleccionadas[Number(id)])
-        .map((id) => Number(id));
+        const { error: deleteSucError } = await supabase
+          .from("usuario_permisos_tx")
+          .delete()
+          .eq("usuario_id", usuarioIdSeleccionado)
+          .eq("empresa_id", Number(empresaIdSeleccionada))
+          .eq("sucursal_id", Number(sucursalIdSeleccionada));
 
-      if (sucursalesIdsList.length === 0) {
-        throw new Error("Seleccione al menos una sucursal.");
+        if (deleteSucError) throw deleteSucError;
+      } else {
+        const { error: deleteError } = await supabase
+          .from("usuario_permisos_tx")
+          .delete()
+          .eq("usuario_id", usuarioIdSeleccionado)
+          .eq("empresa_id", Number(empresaIdSeleccionada));
+
+        if (deleteError) throw deleteError;
       }
 
-      // Limpiar asignaciones previas del usuario
-      const { error: deleteError } = await supabase
-        .from("usuario_asignaciones")
-        .delete()
-        .eq("usuario_id", usuarioIdSeleccionado);
-
-      if (deleteError) throw deleteError;
-
-      const batchInserts = sucursalesIdsList.map((sucId) => {
-        const sucEncontrada = sucursales.find((s) => s.id === sucId);
-        return {
+      if (permisosActuales.length > 0) {
+        const registrosNuevos = permisosActuales.map((txId) => ({
           usuario_id: usuarioIdSeleccionado,
-          empresa_id: sucEncontrada ? sucEncontrada.empresa_id : null,
-          sucursal_id: sucId,
-          rol: rol,
-        };
-      });
+          empresa_id: Number(empresaIdSeleccionada),
+          sucursal_id: sucursalIdSeleccionada
+            ? Number(sucursalIdSeleccionada)
+            : null,
+          transaccion_id: txId,
+        }));
 
-      const { error: insertError } = await supabase.from("usuario_asignaciones").insert(batchInserts);
-      if (insertError) throw insertError;
+        const { error: insertError } = await supabase
+          .from("usuario_permisos_tx")
+          .insert(registrosNuevos);
+        if (insertError) throw insertError;
+      } else {
+        // Dejar al menos el vínculo de empresa/sucursal si no seleccionó TX puntuales
+        const { error: insertBaseError } = await supabase
+          .from("usuario_permisos_tx")
+          .insert([
+            {
+              usuario_id: usuarioIdSeleccionado,
+              empresa_id: Number(empresaIdSeleccionada),
+              sucursal_id: sucursalIdSeleccionada
+                ? Number(sucursalIdSeleccionada)
+                : null,
+              transaccion_id: null,
+            },
+          ]);
+        if (insertBaseError) throw insertBaseError;
+      }
 
-      setMensaje({ texto: "¡Asignaciones por sucursal actualizadas exitosamente!", tipo: "success" });
-      
-      // Limpiar campos correctamente
-      setSucursalesSeleccionadas({});
-      setUsuarioIdSeleccionado("");
-      setBusquedaEmpresaIzquierda("");
-      
-      cargarDatosIniciales();
-    } catch (error: any) {
-      setMensaje({ texto: error.message || "Error al guardar las asignaciones.", tipo: "error" });
+      await cargarPermisosContextoActual(
+        usuarioIdSeleccionado,
+        empresaIdSeleccionada,
+        sucursalIdSeleccionada
+      );
+      alert("¡Permisos y alcances de sucursal actualizados exitosamente!");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert("Error al guardar permisos: " + msg);
     } finally {
-      setLoading(false);
+      setGuardando(false);
     }
   };
 
-  const handleEliminarAsignacion = async (idAsignacion: number) => {
-    if (!confirm("¿Está seguro de eliminar esta asignación de acceso?")) return;
+  // Colocar siempre primero al usuario seleccionado si coincide con la búsqueda
+  const usuariosFiltrados = usuarios
+    .filter((u) => {
+      const texto = busquedaUsuario.toLowerCase();
+      return (
+        u.nombres?.toLowerCase().includes(texto) ||
+        u.apellidos?.toLowerCase().includes(texto) ||
+        u.cedula?.toLowerCase().includes(texto) ||
+        u.email?.toLowerCase().includes(texto)
+      );
+    })
+    .sort((a, b) => {
+      const aSel = String(a.id) === String(usuarioIdSeleccionado) ? 0 : 1;
+      const bSel = String(b.id) === String(usuarioIdSeleccionado) ? 0 : 1;
+      return aSel - bSel;
+    });
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !supabaseAnonKey) return;
+  const listaModulosDisponibles = Array.from(
+    new Set(transacciones.map((t) => normalizarModuloKey(t.modulo)))
+  ).sort();
 
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-    const { error } = await supabase.from("usuario_asignaciones").delete().eq("id", idAsignacion);
+  const transaccionesPorModulo = transacciones.reduce<
+    Record<string, TransaccionSistema[]>
+  >((acc, tx) => {
+    const moduloKey = normalizarModuloKey(tx.modulo);
+    if (!acc[moduloKey]) acc[moduloKey] = [];
+    acc[moduloKey].push(tx);
+    return acc;
+  }, {});
 
-    if (!error) cargarDatosIniciales();
-  };
-
-  const usuariosFiltradosIzquierda = usuarios.filter((u) => {
-    const textoMatch = `${u.nombres} ${u.apellidos} ${u.cedula}`.toLowerCase().includes(busquedaUsuarioIzquierda.toLowerCase());
-    const estadoMatch = filtroEstadoUsuario !== "" ? String(u.activo) === filtroEstadoUsuario : true;
-    return textoMatch && estadoMatch;
-  });
-
-  const empresasFiltradasIzquierda = empresas.filter((emp) => {
-    const nombre = (emp.razon_social || emp.nombre_comercial || "").toLowerCase();
-    return nombre.includes(busquedaEmpresaIzquierda.toLowerCase());
-  });
-
-  const asignacionesFiltradasDerecha = asignaciones.filter((asig) => {
-    const nombreCompleto = `${asig.usuarios_perfiles?.nombres || ""} ${asig.usuarios_perfiles?.apellidos || ""} ${asig.usuarios_perfiles?.cedula || ""}`.toLowerCase();
-    const textoMatch = nombreCompleto.includes(busquedaAsignacion.toLowerCase());
-    const empresaMatch = filtroEmpresaAsignacion ? String(asig.empresa_id) === filtroEmpresaAsignacion : true;
-    return textoMatch && empresaMatch;
-  });
+  if (!isMounted) return null;
 
   return (
-    <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 md:p-12">
-      <div className="max-w-7xl mx-auto">
-        
-        <Link href="/usuarios" className="inline-flex items-center gap-2 text-sm text-zinc-500 hover:text-blue-600 mb-6 transition">
-          <ArrowLeft className="w-4 h-4" /> Volver a Gestión de Usuarios
-        </Link>
-
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8 bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-indigo-50 dark:bg-indigo-950/50 rounded-xl text-indigo-600">
-              <Building2 className="w-7 h-7" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold">Asignación por Sucursales y Empresas</h1>
-              <p className="text-sm text-zinc-500">Asigne accesos específicos a nivel de sucursal heredando el rol</p>
-            </div>
+    <div className="p-3 md:p-4 max-w-7xl mx-auto space-y-3 text-xs bg-slate-50/50 min-h-screen">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 bg-white px-3.5 py-2.5 rounded-2xl border border-slate-200/80 shadow-sm">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Link
+            href={rutaRetorno}
+            title={tituloRetorno}
+            className="p-2 text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-xl transition flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div className="min-w-0">
+            <h1 className="text-base font-bold text-slate-900 truncate">
+              Control de Acceso por Transacciones (TX)
+            </h1>
+            <p className="text-slate-500 text-[11px] truncate">
+              Asigna permisos granulares filtrando por usuario y módulos
+              corporativos.
+            </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
-          {/* PANEL IZQUIERDO: Formulario */}
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm lg:col-span-5 h-fit">
-            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <PlusCircle className="w-5 h-5 text-indigo-600" /> Gestionar Accesos
+        <button
+          onClick={guardarPermisos}
+          disabled={
+            guardando || !usuarioIdSeleccionado || !empresaIdSeleccionada
+          }
+          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-xs shadow-sm shadow-indigo-200 transition cursor-pointer disabled:opacity-50 shrink-0"
+        >
+          {guardando ? "Guardando..." : "💾 Guardar Permisos"}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+        <div className="lg:col-span-5 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm space-y-2">
+          <div>
+            <h2 className="font-bold text-slate-900 text-xs">
+              1. Seleccionar Usuario
             </h2>
+            <p className="text-slate-400 text-[10px]">
+              Busca por nombre, cédula o correo electrónico.
+            </p>
+          </div>
 
-            {mensaje.texto && (
-              <div className={`p-3 mb-4 rounded-xl text-xs font-semibold flex items-center gap-2 ${
-                mensaje.tipo === 'success' ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-red-50 text-red-600 border border-red-200'
-              }`}>
-                {mensaje.tipo === 'success' ? <CheckCircle2 className="w-4 h-4 flex-shrink-0" /> : <XCircle className="w-4 h-4 flex-shrink-0" />}
-                <span>{mensaje.texto}</span>
+          <input
+            type="text"
+            placeholder="🔍 Filtrar usuarios..."
+            value={busquedaUsuario}
+            onChange={(e) => setBusquedaUsuario(e.target.value)}
+            className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs outline-none bg-slate-50/50 font-medium focus:ring-2 focus:ring-indigo-500/20"
+          />
+
+          <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+            {usuariosFiltrados.length === 0 ? (
+              <div className="p-2.5 text-center text-slate-400">
+                No se encontraron usuarios en el alcance de sus empresas.
               </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="space-y-4 text-sm">
-              
-              <div className="space-y-2 bg-zinc-50 dark:bg-zinc-950/50 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800">
-                <label className="block text-xs font-semibold text-zinc-500">Filtrar Usuario</label>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" />
-                    <input 
-                      type="text"
-                      placeholder="Buscar por nombre o cédula..."
-                      value={busquedaUsuarioIzquierda}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setBusquedaUsuarioIzquierda(e.target.value)}
-                      className="w-full pl-8 pr-2 py-1.5 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
-                    />
+            ) : (
+              usuariosFiltrados.map((usr) => {
+                const seleccionado =
+                  String(usuarioIdSeleccionado) === String(usr.id);
+                return (
+                  <div
+                    key={usr.id}
+                    onClick={() => handleSeleccionarUsuario(usr.id)}
+                    className={`px-2.5 py-1.5 rounded-xl border transition cursor-pointer flex flex-col ${
+                      seleccionado
+                        ? "bg-indigo-50/80 border-indigo-300 text-indigo-950 font-bold shadow-2xs"
+                        : "bg-white border-slate-200 hover:bg-slate-50 text-slate-700"
+                    }`}
+                  >
+                    <div className="flex justify-between items-center gap-2">
+                      <span className="text-xs font-bold truncate">
+                        {seleccionado ? "★ " : ""}
+                        {usr.nombres} {usr.apellidos}
+                      </span>
+                      <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 shrink-0">
+                        C.C. {usr.cedula}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 truncate">
+                      {usr.email}
+                    </span>
                   </div>
-                  <select
-                    value={filtroEstadoUsuario}
-                    onChange={(e: ChangeEvent<HTMLSelectElement>) => setFiltroEstadoUsuario(e.target.value)}
-                    className="px-2 py-1.5 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600 cursor-pointer"
-                  >
-                    <option value="" className="dark:bg-zinc-900">Todos</option>
-                    <option value="true" className="dark:bg-zinc-900">Activos</option>
-                    <option value="false" className="dark:bg-zinc-900">Inactivos</option>
-                  </select>
-                </div>
+                );
+              })
+            )}
+          </div>
+        </div>
 
-                <div>
-                  <select 
-                    required
-                    value={usuarioIdSeleccionado}
-                    onChange={handleUsuarioChange}
-                    className="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600 mt-1 cursor-pointer"
-                  >
-                    <option value="" className="dark:bg-zinc-900">Seleccione un usuario...</option>
-                    {usuariosFiltradosIzquierda.map((u) => (
-                      <option key={u.id} value={u.id} className="dark:bg-zinc-900">
-                        {u.nombres} {u.apellidos} ({u.tipo_usuario}) {u.activo ? '' : '[Inactivo]'}
+        <div className="lg:col-span-7 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm space-y-2.5 flex flex-col justify-between">
+          <div className="space-y-2.5">
+            <div>
+              <h2 className="font-bold text-slate-900 text-xs">
+                2. Empresa Activa y Sucursal
+              </h2>
+              <p className="text-slate-400 text-[10px]">
+                Define el ámbito corporativo de los permisos.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  Empresa Activa *
+                </label>
+                <select
+                  value={empresaIdSeleccionada}
+                  onChange={(e) => handleCambioEmpresaManual(e.target.value)}
+                  disabled={!isMounted || empresas.length === 0}
+                  suppressHydrationWarning
+                  className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs outline-none bg-slate-50/50 font-bold text-slate-800 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {empresas.length === 0 ? (
+                    <option value="">Sin empresas asignadas</option>
+                  ) : (
+                    empresas.map((emp) => (
+                      <option key={emp.id} value={String(emp.id)}>
+                        {emp.razon_social || emp.nombre}
                       </option>
-                    ))}
-                  </select>
-                </div>
+                    ))
+                  )}
+                </select>
               </div>
 
               <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="block text-xs font-semibold text-zinc-500">Seleccionar Sucursales (Múltiple)</label>
-                </div>
-                
-                <div className="relative mb-2">
-                  <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" />
-                  <input 
-                    type="text"
-                    placeholder="Filtrar empresas..."
-                    value={busquedaEmpresaIzquierda}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setBusquedaEmpresaIzquierda(e.target.value)}
-                    className="w-full pl-8 pr-2 py-1.5 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
-                  />
-                </div>
-
-                <div className="max-h-56 overflow-y-auto space-y-3 border border-zinc-200 dark:border-zinc-800 p-3 rounded-xl">
-                  {empresasFiltradasIzquierda.length === 0 ? (
-                    <p className="text-xs text-zinc-400 text-center py-2">No hay empresas que coincidan.</p>
-                  ) : (
-                    empresasFiltradasIzquierda.map((emp) => {
-                      const sucursalesDeEmpresa = sucursales.filter((s) => s.empresa_id === emp.id);
-                      if (sucursalesDeEmpresa.length === 0) return null;
-
-                      return (
-                        <div key={emp.id} className="space-y-1">
-                          <p className="text-[11px] font-bold text-indigo-600 uppercase tracking-wide border-b border-zinc-100 dark:border-zinc-800 pb-0.5">
-                            {emp.razon_social || emp.nombre_comercial}
-                          </p>
-                          <div className="pl-2 space-y-1 pt-1">
-                            {sucursalesDeEmpresa.map((suc) => {
-                              const checked = !!sucursalesSeleccionadas[suc.id];
-                              return (
-                                <label key={suc.id} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 p-1 rounded-lg">
-                                  <input 
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={(e: ChangeEvent<HTMLInputElement>) => setSucursalesSeleccionadas({...sucursalesSeleccionadas, [suc.id]: e.target.checked})}
-                                    className="rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
-                                  />
-                                  <span>{suc.nombre} <span className="text-zinc-400 text-[10px]">({suc.codigo_sucursal})</span></span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              <button 
-                type="submit" 
-                disabled={loading}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl font-semibold transition shadow-sm mt-2 disabled:opacity-50 cursor-pointer"
-              >
-                {loading ? "Guardando..." : "Actualizar Asignaciones"}
-              </button>
-            </form>
-          </div>
-
-          {/* PANEL DERECHO: Permisos Asignados */}
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm lg:col-span-7">
-            
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-              <h2 className="text-lg font-bold flex items-center gap-2">
-                <Link2 className="w-5 h-5 text-indigo-600" /> Permisos Asignados ({asignacionesFiltradasDerecha.length})
-              </h2>
-
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                <div className="relative flex-1 sm:w-60">
-                  <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    placeholder="Buscar usuario o cédula..."
-                    value={busquedaAsignacion}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setBusquedaAsignacion(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600"
-                  />
-                </div>
-
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Sucursal (Opcional)
+                </label>
                 <select
-                  value={filtroEmpresaAsignacion}
-                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFiltroEmpresaAsignacion(e.target.value)}
-                  className="px-3 py-2 text-xs rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-indigo-600 cursor-pointer"
+                  value={sucursalIdSeleccionada}
+                  onChange={(e) => handleCambioSucursalManual(e.target.value)}
+                  disabled={!isMounted || sucursalesLista.length === 0}
+                  suppressHydrationWarning
+                  className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs outline-none bg-slate-50/50 font-bold text-slate-800 disabled:opacity-60 cursor-pointer"
                 >
-                  <option value="" className="dark:bg-zinc-900">Todas las Empresas</option>
-                  {empresas.map((emp) => (
-                    <option key={emp.id} value={emp.id} className="dark:bg-zinc-900">
-                      {emp.razon_social || emp.nombre_comercial}
+                  <option value="">-- Todas (General) --</option>
+                  {sucursalesLista.map((suc) => (
+                    <option key={suc.id} value={String(suc.id)}>
+                      {suc.nombre || suc.nombre_sucursal}
                     </option>
                   ))}
                 </select>
               </div>
             </div>
 
-            {cargandoDatos ? (
-              <p className="text-sm text-zinc-400 py-8 text-center">Cargando asignaciones...</p>
-            ) : asignacionesFiltradasDerecha.length === 0 ? (
-              <p className="text-sm text-zinc-400 py-8 text-center">No se encontraron asignaciones con los filtros aplicados.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-400 text-xs uppercase">
-                      <th className="pb-3 font-semibold">Usuario</th>
-                      <th className="pb-3 font-semibold">Empresa / Sucursal</th>
-                      <th className="pb-3 font-semibold">Rol</th>
-                      <th className="pb-3 font-semibold text-right">Acción</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
-                    {asignacionesFiltradasDerecha.map((asig) => {
-                      const empresaEncontrada = empresas.find((e) => String(e.id) === String(asig.empresa_id));
-                      const sucursalEncontrada = sucursales.find((s) => s.id === asig.sucursal_id);
-
-                      return (
-                        <tr key={asig.id}>
-                          <td className="py-3 font-medium">
-                            {asig.usuarios_perfiles?.nombres} {asig.usuarios_perfiles?.apellidos}
-                            <span className="block text-xs text-zinc-400">CC: {asig.usuarios_perfiles?.cedula}</span>
-                          </td>
-                          <td className="py-3">
-                            <p className="font-medium text-xs">{empresaEncontrada?.razon_social || empresaEncontrada?.nombre_comercial || `Empresa ID: ${asig.empresa_id}`}</p>
-                            <span className="text-[11px] text-indigo-600 font-semibold">
-                              Sucursal: {sucursalEncontrada?.nombre || 'General'} {sucursalEncontrada?.codigo_sucursal ? `(${sucursalEncontrada.codigo_sucursal})` : ''}
-                            </span>
-                          </td>
-                          <td className="py-3">
-                            <span className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 px-2 py-1 rounded-lg text-xs font-semibold">
-                              {asig.rol}
-                            </span>
-                          </td>
-                          <td className="py-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleEliminarAsignacion(asig.id)}
-                              className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition cursor-pointer"
-                              title="Eliminar asignación"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+            <div className="pt-2 border-t border-slate-100">
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                3. Filtrar por Módulos Mayores
+              </label>
+              <div className="flex flex-wrap gap-1">
+                {listaModulosDisponibles.map((mod) => {
+                  const activo = modulosSeleccionados.includes(mod);
+                  return (
+                    <button
+                      key={mod}
+                      type="button"
+                      onClick={() => toggleModuloFiltro(mod)}
+                      className={`px-2 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer border ${
+                        activo
+                          ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs"
+                          : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200"
+                      }`}
+                    >
+                      {activo ? "✓ " : "+ "} {mod}
+                    </button>
+                  );
+                })}
               </div>
-            )}
+            </div>
           </div>
-
         </div>
-
       </div>
-    </main>
+
+      <div className="bg-white border border-slate-200/80 rounded-2xl p-3.5 shadow-sm">
+        <h3 className="font-bold text-slate-900 text-xs mb-2.5 border-b border-slate-100 pb-1.5">
+          Matriz de Transacciones (TX) para los Módulos Seleccionados
+        </h3>
+
+        {cargandoTx ? (
+          <div className="p-6 text-center text-slate-400 text-xs">
+            Cargando transacciones...
+          </div>
+        ) : modulosSeleccionados.length === 0 ? (
+          <div className="p-6 text-center text-slate-400 text-xs">
+            No hay módulos activos para el usuario seleccionado o no has
+            encendido ninguno en el filtro superior.
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {modulosSeleccionados.map((moduloNombre) => {
+              const txsDelModulo = transaccionesPorModulo[moduloNombre] || [];
+              if (txsDelModulo.length === 0) return null;
+
+              const modulosPadre = txsDelModulo.filter(
+                (t: TransaccionSistema) => Boolean(t.es_modulo_padre)
+              );
+              const txsHijas = txsDelModulo.filter(
+                (t: TransaccionSistema) => !Boolean(t.es_modulo_padre)
+              );
+
+              return (
+                <div
+                  key={moduloNombre}
+                  className="border border-slate-200/60 rounded-xl p-2.5 bg-slate-50/40 space-y-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/60 pb-1.5">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <h4 className="font-bold text-slate-800 text-xs flex items-center gap-1">
+                        📂 Módulo:{" "}
+                        <span className="text-indigo-600 font-extrabold">
+                          {moduloNombre}
+                        </span>
+                      </h4>
+
+                      {modulosPadre.map((padre: TransaccionSistema) => {
+                        const isPadreChecked = permisosActuales.includes(
+                          Number(padre.id)
+                        );
+                        return (
+                          <label
+                            key={padre.id}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-amber-50 border border-amber-200 hover:bg-amber-100/70 transition cursor-pointer select-none"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isPadreChecked}
+                              onChange={() => handleTogglePermiso(padre)}
+                              className="rounded border-amber-300 text-amber-600 focus:ring-amber-500 h-3.5 w-3.5 cursor-pointer"
+                            />
+                            <span className="text-[11px] font-extrabold text-amber-950">
+                              {padre.layout} (Módulo Padre)
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {txsHijas.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5">
+                      {txsHijas.map((tx: TransaccionSistema) => {
+                        const isChecked = permisosActuales.includes(
+                          Number(tx.id)
+                        );
+
+                        return (
+                          <label
+                            key={tx.id}
+                            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border bg-white border-slate-200 hover:bg-slate-50 transition cursor-pointer select-none"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => handleTogglePermiso(tx)}
+                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer shrink-0"
+                            />
+                            <span className="text-[11px] text-slate-800 font-semibold truncate">
+                              {tx.layout}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function PermisosUsuariosPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-6 text-center text-xs text-zinc-400">
+          Cargando permisos...
+        </div>
+      }
+    >
+      <PermisosUsuariosContent />
+    </Suspense>
   );
 }

@@ -1,11 +1,25 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, ChangeEvent, FormEvent } from "react";
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+  ChangeEvent,
+  FormEvent,
+} from "react";
+import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
+import { supabase } from "@/lib/supabaseClient";
 import {
-  obtenerEmpresas,
-  obtenerSucursales,
-} from "@/app/consultas/movimientos/movimientos-actions";
+  getEmpresasPermitidas,
+  getSucursalesPermitidas,
+  getEmpresaActivaUsuario,
+  setEmpresaActivaUsuario,
+  type Empresa as EmpresaPermitida,
+  type Sucursal as SucursalPermitida,
+} from "@/app/actions/accionesEmpresas";
 import {
   obtenerFacturasPendientes,
   obtenerProveedoresConSaldo,
@@ -21,21 +35,66 @@ import {
 } from "./pagos-actions";
 import { validarPeriodoContable } from "@/lib/accounting-validations";
 
-interface Empresa {
-  id: number | string;
-  razon_social?: string;
+type EmpresaItem = EmpresaPermitida & {
+  nombre?: string;
   nombre_comercial?: string;
+};
+
+type SucursalItem = SucursalPermitida & {
+  nombre_sucursal?: string;
+};
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
 }
 
-interface Sucursal {
-  id: number | string;
-  nombre?: string;
+function obtenerNombreEmpresa(emp: EmpresaItem): string {
+  return String(
+    emp.razon_social || emp.nombre_comercial || emp.nombre || "Empresa"
+  );
+}
+
+function obtenerUsuarioIdDesdeLocalStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  for (const clave of ["usuario_id", "user_id", "uid"]) {
+    const val = localStorage.getItem(clave);
+    if (val && val.trim()) return val.trim();
+  }
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.includes("auth-token") || k.includes("supabase")) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const idEncontrado =
+          parsed?.user?.id ||
+          parsed?.currentSession?.user?.id ||
+          parsed?.session?.user?.id ||
+          null;
+        if (idEncontrado && typeof idEncontrado === "string") {
+          return idEncontrado;
+        }
+      } catch {
+        // Ignorar
+      }
+    }
+  }
+  return null;
 }
 
 export default function PagosProveedoresPage() {
+  const router = useRouter();
+  const usuarioIdRef = useRef<string | null>(null);
+
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [empresas, setEmpresas] = useState<Empresa[]>([]);
-  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [empresas, setEmpresas] = useState<EmpresaItem[]>([]);
+  const [sucursales, setSucursales] = useState<SucursalItem[]>([]);
   const [empresaId, setEmpresaId] = useState<string>("");
   const [sucursalId, setSucursalId] = useState<string>("");
 
@@ -47,7 +106,9 @@ export default function PagosProveedoresPage() {
   const [clasesDoc, setClasesDoc] = useState<ClaseDocumento[]>([]);
   const [cuentasBancos, setCuentasBancos] = useState<CuentaFinanciera[]>([]);
   const [conceptosRet, setConceptosRet] = useState<ConceptoRetencion[]>([]);
-  const [conceptosAuxiliares, setConceptosAuxiliares] = useState<ConceptoAuxiliar[]>([]);
+  const [conceptosAuxiliares, setConceptosAuxiliares] = useState<
+    ConceptoAuxiliar[]
+  >([]);
 
   // Filtro de proveedor seleccionado
   const [filtroProveedorId, setFiltroProveedorId] = useState<string>("");
@@ -58,23 +119,35 @@ export default function PagosProveedoresPage() {
   const [retencionIcaId, setRetencionIcaId] = useState<string>("");
 
   // Tipos de Pago Masivo
-  const [tipoPagoMasivo, setTipoPagoMasivo] = useState<"MANUAL_INDIVIDUAL" | "EXCEL" | "AUTOMATICO_VALOR">("MANUAL_INDIVIDUAL");
+  const [tipoPagoMasivo, setTipoPagoMasivo] = useState<
+    "MANUAL_INDIVIDUAL" | "EXCEL" | "AUTOMATICO_VALOR"
+  >("MANUAL_INDIVIDUAL");
 
   // Estados para Pago Automático por Valor y Excel
   const [valorNetoObjetivo, setValorNetoObjetivo] = useState<number>(0);
   const [excelCargado, setExcelCargado] = useState<boolean>(false);
 
   // Estados para Selección y Retenciones
-  const [facturasSeleccionadas, setFacturasSeleccionadas] = useState<{ [key: string]: boolean }>({});
-  const [retencionesFactura, setRetencionesFactura] = useState<{ [key: string]: { [key: string]: number } }>({});
-  const [valoresPersonalizadosPago, setValoresPersonalizadosPago] = useState<{ [key: string]: number }>({});
+  const [facturasSeleccionadas, setFacturasSeleccionadas] = useState<{
+    [key: string]: boolean;
+  }>({});
+  const [retencionesFactura, setRetencionesFactura] = useState<{
+    [key: string]: { [key: string]: number };
+  }>({});
+  const [valoresPersonalizadosPago, setValoresPersonalizadosPago] = useState<{
+    [key: string]: number;
+  }>({});
 
   const [claseDocId, setClaseDocId] = useState<string>("");
-  const [formaPago, setFormaPago] = useState<string>("Transferencia / Consignación");
+  const [formaPago, setFormaPago] = useState<string>(
+    "Transferencia / Consignación"
+  );
   const [cuentaBancoId, setCuentaBancoId] = useState<string>("");
   const [conceptoAuxiliarId, setConceptoAuxiliarId] = useState<string>("");
   const [fechaContable, setFechaContable] = useState<string>("");
-  const [glosa, setGlosa] = useState<string>("Pago masivo de facturas a proveedores");
+  const [glosa, setGlosa] = useState<string>(
+    "Pago masivo de facturas a proveedores"
+  );
   const [procesando, setProcesando] = useState<boolean>(false);
 
   // Estados para Control de Periodo Contable
@@ -86,80 +159,175 @@ export default function PagosProveedoresPage() {
     setFechaContable(new Date().toISOString().split("T")[0]);
   }, []);
 
-  // Función de validación de periodo en tiempo real
-  const verificarPeriodo = async (fecha: string) => {
-    if (!empresaId || !sucursalId || !fecha) {
+  const verificarPeriodo = useCallback(
+    async (fecha: string) => {
+      if (!empresaId || !sucursalId || !fecha) {
+        setErrorPeriodo(null);
+        return;
+      }
+
+      setValidandoPeriodo(true);
       setErrorPeriodo(null);
-      return;
-    }
 
-    setValidandoPeriodo(true);
-    setErrorPeriodo(null);
+      try {
+        const res = await validarPeriodoContable(empresaId, sucursalId, fecha);
+        if (!res.valido) {
+          setErrorPeriodo(
+            res.mensaje || "Periodo no habilitado para transacciones."
+          );
+        }
+      } finally {
+        setValidandoPeriodo(false);
+      }
+    },
+    [empresaId, sucursalId]
+  );
 
-    const res = await validarPeriodoContable(empresaId, sucursalId, fecha);
-    if (!res.valido) {
-      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
-    }
-
-    setValidandoPeriodo(false);
-  };
-
-  // Validar automáticamente al cambiar empresa, sucursal o fecha contable
   useEffect(() => {
     if (empresaId && sucursalId && fechaContable) {
       verificarPeriodo(fechaContable);
     }
-  }, [empresaId, sucursalId, fechaContable]);
+  }, [empresaId, sucursalId, fechaContable, verificarPeriodo]);
 
-  // Carga inicial y lectura de la cookie corporativa empresa_activa / localStorage
   useEffect(() => {
+    let cancelado = false;
+
     async function init() {
-      const res = await obtenerEmpresas();
-      if (res.success && res.data && res.data.length > 0) {
-        const listaEmpresas: Empresa[] = res.data;
-        setEmpresas(listaEmpresas);
-
-        // 1. Leer cookie corporativa 'empresa_activa'
-        const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'));
-        let empresaIdAUsar = String(listaEmpresas[0].id);
-
-        if (match && listaEmpresas.some((e) => String(e.id) === match[2])) {
-          empresaIdAUsar = match[2];
-        } else {
-          // 2. Buscar en localStorage
-          const idGuardado = localStorage.getItem('empresa_id');
-          if (idGuardado && listaEmpresas.some((e) => String(e.id) === idGuardado)) {
-            empresaIdAUsar = idGuardado;
-          }
-        }
-
-        setEmpresaId(empresaIdAUsar);
-        localStorage.setItem('empresa_id', empresaIdAUsar);
-        document.cookie = `empresa_activa=${empresaIdAUsar}; path=/; max-age=86400; SameSite=Lax`;
+      let uid: string | null = null;
+      try {
+        const { data } = await supabase.auth.getUser();
+        if (data?.user?.id) uid = data.user.id;
+      } catch {
+        // Ignorar
       }
+      if (!uid) {
+        uid = obtenerUsuarioIdDesdeLocalStorage();
+      }
+      usuarioIdRef.current = uid;
+
+      const permitidas = await getEmpresasPermitidas(uid);
+      if (cancelado) return;
+
+      const listaEmpresas: EmpresaItem[] = Array.isArray(permitidas)
+        ? (permitidas as EmpresaItem[])
+        : [];
+
+      setEmpresas(listaEmpresas);
+
+      if (listaEmpresas.length === 0) {
+        setEmpresaId("");
+        return;
+      }
+
+      let empBD: string | null = null;
+      try {
+        const valBD = await getEmpresaActivaUsuario(uid);
+        if (
+          valBD !== null &&
+          valBD !== undefined &&
+          String(valBD).trim() !== ""
+        ) {
+          empBD = String(valBD).trim();
+        }
+      } catch {
+        // Ignorar
+      }
+
+      const empCookie = getCookieValue("empresa_activa");
+      const empLocal =
+        typeof window !== "undefined"
+          ? localStorage.getItem("empresa_activa") ||
+            localStorage.getItem("empresa_id")
+          : null;
+
+      let empresaIdAUsar = String(listaEmpresas[0].id);
+      const candidata = empBD || empCookie || empLocal;
+      if (
+        candidata &&
+        listaEmpresas.some((e) => String(e.id) === String(candidata))
+      ) {
+        empresaIdAUsar = String(candidata);
+      }
+
+      const empElegida =
+        listaEmpresas.find((e) => String(e.id) === empresaIdAUsar) ||
+        listaEmpresas[0];
+
+      setEmpresaId(empresaIdAUsar);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("empresa_activa", empresaIdAUsar);
+        localStorage.setItem("empresa_id", empresaIdAUsar);
+        localStorage.setItem(
+          "empresa_activa_nombre",
+          obtenerNombreEmpresa(empElegida)
+        );
+      }
+      document.cookie = `empresa_activa=${encodeURIComponent(
+        empresaIdAUsar
+      )}; path=/; max-age=86400; SameSite=Lax`;
     }
+
     init();
+    return () => {
+      cancelado = true;
+    };
   }, []);
+
+  const recargarProveedoresYFacturas = useCallback(async () => {
+    if (!empresaId) return;
+    const parsedEmpresaId = Number(empresaId);
+    const parsedSucursalId = sucursalId ? Number(sucursalId) : undefined;
+
+    const provRes = await obtenerProveedoresConSaldo(
+      parsedEmpresaId,
+      parsedSucursalId
+    );
+    if (provRes.success) {
+      setProveedores(provRes.data || []);
+    }
+
+    if (filtroProveedorId) {
+      setLoading(true);
+      const facRes = await obtenerFacturasPendientes(
+        parsedEmpresaId,
+        parsedSucursalId,
+        Number(filtroProveedorId)
+      );
+      if (facRes.success) {
+        setFacturas(facRes.data || []);
+      } else {
+        setFacturas([]);
+      }
+      setLoading(false);
+    } else {
+      setFacturas([]);
+    }
+  }, [empresaId, sucursalId, filtroProveedorId]);
 
   useEffect(() => {
     if (!empresaId) return;
+    let cancelado = false;
+
     async function cargarDatosBase() {
       const parsedEmpresaId = Number(empresaId);
       const parsedSucursalId = sucursalId ? Number(sucursalId) : undefined;
 
-      const [sucRes, auxRes, provRes] = await Promise.all([
-        obtenerSucursales(parsedEmpresaId),
+      const [sucPermitidas, auxRes, provRes] = await Promise.all([
+        getSucursalesPermitidas(String(empresaId), usuarioIdRef.current),
         obtenerDatosAuxiliaresPago(parsedEmpresaId),
         obtenerProveedoresConSaldo(parsedEmpresaId, parsedSucursalId),
       ]);
 
-      if (sucRes.success) {
-        const listaSuc: Sucursal[] = sucRes.data || [];
-        setSucursales(listaSuc);
-        if (listaSuc.length > 0 && !sucursalId) {
-          setSucursalId(String(listaSuc[0].id));
-        }
+      if (cancelado) return;
+
+      const listaSuc: SucursalItem[] = Array.isArray(sucPermitidas)
+        ? (sucPermitidas as SucursalItem[])
+        : [];
+      setSucursales(listaSuc);
+      if (listaSuc.length > 0 && !sucursalId) {
+        setSucursalId(String(listaSuc[0].id));
       }
+
       if (auxRes.success) {
         setClasesDoc(auxRes.clasesDocumento || []);
         setCuentasBancos(auxRes.cuentasFinancieras || []);
@@ -172,7 +340,10 @@ export default function PagosProveedoresPage() {
         if (auxRes.cuentasFinancieras && auxRes.cuentasFinancieras.length > 0) {
           setCuentaBancoId(String(auxRes.cuentasFinancieras[0].id));
         }
-        if (auxRes.conceptosAuxiliares && auxRes.conceptosAuxiliares.length > 0) {
+        if (
+          auxRes.conceptosAuxiliares &&
+          auxRes.conceptosAuxiliares.length > 0
+        ) {
           setConceptoAuxiliarId(String(auxRes.conceptosAuxiliares[0].id));
         }
       }
@@ -180,6 +351,7 @@ export default function PagosProveedoresPage() {
         setProveedores(provRes.data || []);
       }
     }
+
     cargarDatosBase();
     setFiltroProveedorId("");
     setFacturas([]);
@@ -188,23 +360,40 @@ export default function PagosProveedoresPage() {
     setValoresPersonalizadosPago({});
     setValorNetoObjetivo(0);
     setExcelCargado(false);
+
+    return () => {
+      cancelado = true;
+    };
   }, [empresaId, sucursalId]);
 
-  // EFECTO: Actualizar conceptos auxiliares según la Forma de Pago seleccionada
   useEffect(() => {
     if (!empresaId) return;
+    let cancelado = false;
+
     async function actualizarConceptosPorFormaPago() {
-      const res = await obtenerConceptosAuxiliaresPorFormaPago(empresaId, formaPago);
+      const res = await obtenerConceptosAuxiliaresPorFormaPago(
+        empresaId,
+        formaPago
+      );
+      if (cancelado) return;
+
       if (res.success) {
         setConceptosAuxiliares(res.conceptosAuxiliares || []);
-        if (res.conceptosAuxiliares && res.conceptosAuxiliares.length > 0) {
+        if (
+          res.conceptosAuxiliares &&
+          res.conceptosAuxiliares.length > 0
+        ) {
           setConceptoAuxiliarId(String(res.conceptosAuxiliares[0].id));
         } else {
           setConceptoAuxiliarId("");
         }
       }
     }
+
     actualizarConceptosPorFormaPago();
+    return () => {
+      cancelado = true;
+    };
   }, [formaPago, empresaId]);
 
   useEffect(() => {
@@ -218,6 +407,8 @@ export default function PagosProveedoresPage() {
       return;
     }
 
+    let cancelado = false;
+
     async function cargarFacturasProveedor() {
       setLoading(true);
       const res = await obtenerFacturasPendientes(
@@ -225,6 +416,8 @@ export default function PagosProveedoresPage() {
         sucursalId ? Number(sucursalId) : undefined,
         Number(filtroProveedorId)
       );
+      if (cancelado) return;
+
       if (res.success) {
         setFacturas(res.data || []);
       } else {
@@ -237,10 +430,16 @@ export default function PagosProveedoresPage() {
       setExcelCargado(false);
       setLoading(false);
     }
+
     cargarFacturasProveedor();
+    return () => {
+      cancelado = true;
+    };
   }, [empresaId, sucursalId, filtroProveedorId]);
 
-  const handleCambioModo = (modo: "MANUAL_INDIVIDUAL" | "EXCEL" | "AUTOMATICO_VALOR") => {
+  const handleCambioModo = (
+    modo: "MANUAL_INDIVIDUAL" | "EXCEL" | "AUTOMATICO_VALOR"
+  ) => {
     setTipoPagoMasivo(modo);
     setFacturasSeleccionadas({});
     setRetencionesFactura({});
@@ -253,46 +452,65 @@ export default function PagosProveedoresPage() {
     `$ ${Math.round(Number(v || 0)).toLocaleString("es-CO")}`;
 
   const saldoMaximoProveedor = useMemo(() => {
-    return facturas.reduce((acc, fac) => acc + Number(fac.saldo_pendiente || 0), 0);
+    return facturas.reduce(
+      (acc, fac) => acc + Number(fac.saldo_pendiente || 0),
+      0
+    );
   }, [facturas]);
 
   useEffect(() => {
     if (tipoPagoMasivo !== "MANUAL_INDIVIDUAL") return;
-    const idsActivos = Object.keys(facturasSeleccionadas).filter((id) => facturasSeleccionadas[id]);
+    const idsActivos = Object.keys(facturasSeleccionadas).filter(
+      (id) => facturasSeleccionadas[id]
+    );
     if (idsActivos.length === 0) return;
 
-    const nuevasRetenciones = { ...retencionesFactura };
+    const nuevasRetenciones: { [key: string]: { [key: string]: number } } = {
+      ...retencionesFactura,
+    };
 
     idsActivos.forEach((facId) => {
       const fac = facturas.find((f) => String(f.id) === facId);
       if (!fac) return;
-      
+
       const subtotalFac = Number(fac.subtotal || 0);
       const ivaFac = Number(fac.impuestos || 0);
       const retsObj: { [key: string]: number } = {};
 
       if (retencionRentaId) {
-        const concepto = conceptosRet.find((c) => String(c.id) === retencionRentaId);
+        const concepto = conceptosRet.find(
+          (c) => String(c.id) === retencionRentaId
+        );
         if (concepto && subtotalFac >= Number(concepto.base_minima || 0)) {
-          retsObj[retencionRentaId] = Math.round(subtotalFac * Number(concepto.porcentaje || 0));
+          retsObj[retencionRentaId] = Math.round(
+            subtotalFac * Number(concepto.porcentaje || 0)
+          );
         } else {
           retsObj[retencionRentaId] = 0;
         }
       }
 
       if (retencionIvaId) {
-        const concepto = conceptosRet.find((c) => String(c.id) === retencionIvaId);
+        const concepto = conceptosRet.find(
+          (c) => String(c.id) === retencionIvaId
+        );
         if (concepto && ivaFac >= Number(concepto.base_minima || 0)) {
-          retsObj[retencionIvaId] = Math.round(ivaFac * Number(concepto.porcentaje || 0));
+          retsObj[retencionIvaId] = Math.round(
+            ivaFac * Number(concepto.porcentaje || 0)
+          );
         } else {
           retsObj[retencionIvaId] = 0;
         }
       }
 
       if (retencionIcaId) {
-        const concepto = conceptosRet.find((c) => String(c.id) === retencionIcaId);
+        const concepto = conceptosRet.find(
+          (c) => String(c.id) === retencionIcaId
+        );
         if (concepto && subtotalFac >= Number(concepto.base_minima || 0)) {
-          retsObj[retencionIcaId] = Math.round(subtotalFac * Number(concepto.porcentaje || 0));
+          retsObj[retencionIcaId] = Math.round(
+            subtotalFac * Number(concepto.porcentaje || 0)
+          );
         } else {
           retsObj[retencionIcaId] = 0;
         }
@@ -302,10 +520,23 @@ export default function PagosProveedoresPage() {
     });
 
     setRetencionesFactura(nuevasRetenciones);
-  }, [retencionRentaId, retencionIvaId, retencionIcaId, facturasSeleccionadas, facturas, conceptosRet, tipoPagoMasivo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    retencionRentaId,
+    retencionIvaId,
+    retencionIcaId,
+    facturasSeleccionadas,
+    facturas,
+    conceptosRet,
+    tipoPagoMasivo,
+  ]);
 
   useEffect(() => {
-    if (tipoPagoMasivo !== "AUTOMATICO_VALOR" || valorNetoObjetivo <= 0 || facturas.length === 0) {
+    if (
+      tipoPagoMasivo !== "AUTOMATICO_VALOR" ||
+      valorNetoObjetivo <= 0 ||
+      facturas.length === 0
+    ) {
       if (tipoPagoMasivo !== "AUTOMATICO_VALOR") return;
       setFacturasSeleccionadas({});
       setRetencionesFactura({});
@@ -332,21 +563,27 @@ export default function PagosProveedoresPage() {
       const retsObj: { [key: string]: number } = {};
 
       if (retencionRentaId) {
-        const c = conceptosRet.find((item) => String(item.id) === retencionRentaId);
+        const c = conceptosRet.find(
+          (item) => String(item.id) === retencionRentaId
+        );
         if (c && subtotalFac >= Number(c.base_minima || 0)) {
           retRentaVal = Math.round(subtotalFac * Number(c.porcentaje || 0));
           retsObj[retencionRentaId] = retRentaVal;
         }
       }
       if (retencionIvaId) {
-        const c = conceptosRet.find((item) => String(item.id) === retencionIvaId);
+        const c = conceptosRet.find(
+          (item) => String(item.id) === retencionIvaId
+        );
         if (c && ivaFac >= Number(c.base_minima || 0)) {
           retIvaVal = Math.round(ivaFac * Number(c.porcentaje || 0));
           retsObj[retencionIvaId] = retIvaVal;
         }
       }
       if (retencionIcaId) {
-        const c = conceptosRet.find((item) => String(item.id) === retencionIcaId);
+        const c = conceptosRet.find(
+          (item) => String(item.id) === retencionIcaId
+        );
         if (c && subtotalFac >= Number(c.base_minima || 0)) {
           retIcaVal = Math.round(subtotalFac * Number(c.porcentaje || 0));
           retsObj[retencionIcaId] = retIcaVal;
@@ -363,7 +600,10 @@ export default function PagosProveedoresPage() {
         nuevosValoresPago[facIdStr] = netoFacturaCompleta;
         acumuladorRestante -= netoFacturaCompleta;
       } else {
-        nuevosValoresPago[facIdStr] = Math.min(netoFacturaCompleta, acumuladorRestante);
+        nuevosValoresPago[facIdStr] = Math.min(
+          netoFacturaCompleta,
+          acumuladorRestante
+        );
         acumuladorRestante = 0;
       }
     }
@@ -371,7 +611,15 @@ export default function PagosProveedoresPage() {
     setFacturasSeleccionadas(nuevasSelecciones);
     setRetencionesFactura(nuevasRetenciones);
     setValoresPersonalizadosPago(nuevosValoresPago);
-  }, [valorNetoObjetivo, tipoPagoMasivo, facturas, retencionRentaId, retencionIvaId, retencionIcaId, conceptosRet]);
+  }, [
+    valorNetoObjetivo,
+    tipoPagoMasivo,
+    facturas,
+    retencionRentaId,
+    retencionIvaId,
+    retencionIcaId,
+    conceptosRet,
+  ]);
 
   const handleFileUploadExcel = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -384,59 +632,78 @@ export default function PagosProveedoresPage() {
         const wb = XLSX.read(bstr, { type: "binary" });
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json(ws) as any[];
+        const data = XLSX.utils.sheet_to_json(ws) as Record<
+          string,
+          string | number
+        >[];
 
         if (!data || data.length === 0) {
-          alert("El archivo Excel está vacío o no tiene un formato válido.");
+          alert(
+            "El archivo Excel está vacío o no tiene un formato válido."
+          );
           return;
         }
 
         const nuevasSelecciones: { [key: string]: boolean } = {};
         const nuevosValoresPago: { [key: string]: number } = {};
-        const nuevasRetenciones: { [key: string]: { [key: string]: number } } = {};
+        const nuevasRetenciones: {
+          [key: string]: { [key: string]: number };
+        } = {};
 
         let encontradas = 0;
 
         data.forEach((row) => {
-          const rowNormalizada: { [key: string]: any } = {};
+          const rowNormalizada: { [key: string]: string | number } = {};
           Object.keys(row).forEach((k) => {
-            const keyClean = k.toLowerCase().trim().replace(/[\s_-]+/g, "");
+            const keyClean = k
+              .toLowerCase()
+              .trim()
+              .replace(/[\s_-]+/g, "");
             rowNormalizada[keyClean] = row[k];
           });
 
-          const numFacRaw = 
-            rowNormalizada["numerofactura"] || 
-            rowNormalizada["factura"] || 
-            rowNormalizada["nrofactura"] || 
+          const numFacRaw =
+            rowNormalizada["numerofactura"] ||
+            rowNormalizada["factura"] ||
+            rowNormalizada["nrofactura"] ||
             rowNormalizada["numfactura"] ||
-            rowNormalizada["documento"] || "";
+            rowNormalizada["documento"] ||
+            "";
 
-          const valPagoRaw = 
-            rowNormalizada["valorpagado"] || 
-            rowNormalizada["valor"] || 
-            rowNormalizada["totalapagar"] || 
-            rowNormalizada["netopagar"] || 
-            rowNormalizada["monto"] || 0;
+          const valPagoRaw =
+            rowNormalizada["valorpagado"] ||
+            rowNormalizada["valor"] ||
+            rowNormalizada["totalapagar"] ||
+            rowNormalizada["netopagar"] ||
+            rowNormalizada["monto"] ||
+            0;
 
           const numFac = String(numFacRaw).trim();
           const valPago = Number(valPagoRaw) || 0;
 
           if (numFac) {
             const facEncontrada = facturas.find(
-              (f) => String(f.numero_factura).trim().toLowerCase() === numFac.toLowerCase()
+              (f) =>
+                String(f.numero_factura).trim().toLowerCase() ===
+                numFac.toLowerCase()
             );
 
             if (facEncontrada) {
               const facIdStr = String(facEncontrada.id);
               nuevasSelecciones[facIdStr] = true;
-              nuevosValoresPago[facIdStr] = valPago > 0 ? valPago : Number(facEncontrada.saldo_pendiente || 0);
+              nuevosValoresPago[facIdStr] =
+                valPago > 0
+                  ? valPago
+                  : Number(facEncontrada.saldo_pendiente || 0);
               encontradas++;
             }
           }
         });
 
         if (encontradas === 0) {
-          alert("No se pudo asociar ninguna factura. Verifique que los números de factura en el Excel coincidan exactamente con las pendientes del proveedor seleccionado.");
+          alert(
+            "No se pudo asociar ninguna factura. Verifique que los números de factura en el Excel coincidan exactamente con las pendientes del proveedor seleccionado."
+          );
           return;
         }
 
@@ -444,9 +711,12 @@ export default function PagosProveedoresPage() {
         setValoresPersonalizadosPago(nuevosValoresPago);
         setRetencionesFactura(nuevasRetenciones);
         setExcelCargado(true);
-        alert(`¡Archivo procesado con éxito! Se asociaron y validaron ${encontradas} facturas desde el Excel.`);
-      } catch (err: any) {
-        alert("Error al leer el archivo Excel: " + err.message);
+        alert(
+          `¡Archivo procesado con éxito! Se asociaron y validaron ${encontradas} facturas desde el Excel.`
+        );
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        alert("Error al leer el archivo Excel: " + message);
       }
     };
     reader.readAsBinaryString(file);
@@ -454,7 +724,10 @@ export default function PagosProveedoresPage() {
 
   const handleToggleSelect = (facId: string) => {
     if (tipoPagoMasivo !== "MANUAL_INDIVIDUAL") return;
-    const newState = { ...facturasSeleccionadas, [facId]: !facturasSeleccionadas[facId] };
+    const newState = {
+      ...facturasSeleccionadas,
+      [facId]: !facturasSeleccionadas[facId],
+    };
     setFacturasSeleccionadas(newState);
 
     if (newState[facId]) {
@@ -465,21 +738,33 @@ export default function PagosProveedoresPage() {
       const retsObj: { [key: string]: number } = {};
 
       if (retencionRentaId) {
-        const c = conceptosRet.find((item) => String(item.id) === retencionRentaId);
+        const c = conceptosRet.find(
+          (item) => String(item.id) === retencionRentaId
+        );
         if (c && subtotalFac >= Number(c.base_minima || 0)) {
-          retsObj[retencionRentaId] = Math.round(subtotalFac * Number(c.porcentaje || 0));
+          retsObj[retencionRentaId] = Math.round(
+            subtotalFac * Number(c.porcentaje || 0)
+          );
         }
       }
       if (retencionIvaId) {
-        const c = conceptosRet.find((item) => String(item.id) === retencionIvaId);
+        const c = conceptosRet.find(
+          (item) => String(item.id) === retencionIvaId
+        );
         if (c && ivaFac >= Number(c.base_minima || 0)) {
-          retsObj[retencionIvaId] = Math.round(ivaFac * Number(c.porcentaje || 0));
+          retsObj[retencionIvaId] = Math.round(
+            ivaFac * Number(c.porcentaje || 0)
+          );
         }
       }
       if (retencionIcaId) {
-        const c = conceptosRet.find((item) => String(item.id) === retencionIcaId);
+        const c = conceptosRet.find(
+          (item) => String(item.id) === retencionIcaId
+        );
         if (c && subtotalFac >= Number(c.base_minima || 0)) {
-          retsObj[retencionIcaId] = Math.round(subtotalFac * Number(c.porcentaje || 0));
+          retsObj[retencionIcaId] = Math.round(
+            subtotalFac * Number(c.porcentaje || 0)
+          );
         }
       }
 
@@ -505,7 +790,10 @@ export default function PagosProveedoresPage() {
 
   const obtenerValorAPagar = (fac: FacturaPendiente) => {
     const facIdStr = String(fac.id);
-    if (tipoPagoMasivo === "EXCEL" || tipoPagoMasivo === "AUTOMATICO_VALOR") {
+    if (
+      tipoPagoMasivo === "EXCEL" ||
+      tipoPagoMasivo === "AUTOMATICO_VALOR"
+    ) {
       return Number(valoresPersonalizadosPago[facIdStr] || 0);
     }
     const saldoReal = Number(fac.saldo_pendiente || 0);
@@ -524,17 +812,29 @@ export default function PagosProveedoresPage() {
         if (!fac) return acc;
         return acc + obtenerValorAPagar(fac);
       }, 0);
-  }, [facturasSeleccionadas, facturas, retencionesFactura, valoresPersonalizadosPago, tipoPagoMasivo, valorNetoObjetivo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    facturasSeleccionadas,
+    facturas,
+    retencionesFactura,
+    valoresPersonalizadosPago,
+    tipoPagoMasivo,
+    valorNetoObjetivo,
+  ]);
 
   const handleSubmitPago = async (e: FormEvent) => {
     e.preventDefault();
 
     if (errorPeriodo) {
-      alert("No se puede procesar el pago porque el periodo contable no es válido o está cerrado.");
+      alert(
+        "No se puede procesar el pago porque el periodo contable no es válido o está cerrado."
+      );
       return;
     }
 
-    const idsActivos = Object.keys(facturasSeleccionadas).filter((id) => facturasSeleccionadas[id]);
+    const idsActivos = Object.keys(facturasSeleccionadas).filter(
+      (id) => facturasSeleccionadas[id]
+    );
 
     if (idsActivos.length === 0) {
       alert("Seleccione o cargue al menos una factura para pagar.");
@@ -545,7 +845,9 @@ export default function PagosProveedoresPage() {
       return;
     }
     if (formaPago === "Efectivo" && !conceptoAuxiliarId) {
-      alert("Seleccione el concepto auxiliar contable para el pago en efectivo.");
+      alert(
+        "Seleccione el concepto auxiliar contable para el pago en efectivo."
+      );
       return;
     }
     if (formaPago !== "Efectivo" && !cuentaBancoId) {
@@ -554,67 +856,91 @@ export default function PagosProveedoresPage() {
     }
 
     setProcesando(true);
-    const pagosJson = idsActivos.map((id) => {
-      const fac = facturas.find((f) => String(f.id) === id);
-      const valorNetoPagar = fac ? obtenerValorAPagar(fac) : 0;
-      const retsObj = retencionesFactura[id] || {};
-      const retsArray = Object.keys(retsObj)
-        .filter((retId) => Number(retsObj[retId]) > 0)
-        .map((retId) => ({
-          retencion_id: Number(retId),
-          base: Number(fac?.subtotal || 0),
-          porcentaje: 0,
-          valor: Number(retsObj[retId]),
-        }));
+    try {
+      const pagosJson = idsActivos.map((id) => {
+        const fac = facturas.find((f) => String(f.id) === id);
+        const valorNetoPagar = fac ? obtenerValorAPagar(fac) : 0;
+        const retsObj = retencionesFactura[id] || {};
+        const retsArray = Object.keys(retsObj)
+          .filter((retId) => Number(retsObj[retId]) > 0)
+          .map((retId) => ({
+            retencion_id: Number(retId),
+            base: Number(fac?.subtotal || 0),
+            porcentaje: 0,
+            valor: Number(retsObj[retId]),
+          }));
 
-      return {
-        factura_id: Number(id),
-        tercero_id: Number(fac?.tercero_id || filtroProveedorId),
-        monto_pago: valorNetoPagar,
-        retenciones: retsArray,
-      };
-    });
+        return {
+          factura_id: Number(id),
+          tercero_id: Number(fac?.tercero_id || filtroProveedorId),
+          monto_pago: valorNetoPagar,
+          retenciones: retsArray,
+        };
+      });
 
-    const res = await ejecutarPagoFacturas({
-      empresa_id: Number(empresaId),
-      sucursal_id: Number(sucursalId || (sucursales[0] as any)?.id || 1),
-      clase_documento_id: Number(claseDocId),
-      fecha_contable: fechaContable,
-      glosa_concepto: glosa,
-      cuenta_financiera_id: formaPago !== "Efectivo" ? Number(cuentaBancoId) : null,
-      forma_pago: formaPago,
-      concepto_auxiliar_id: formaPago === "Efectivo" ? Number(conceptoAuxiliarId) : null,
-      pagos_json: pagosJson,
-    });
+      const res = await ejecutarPagoFacturas({
+        empresa_id: Number(empresaId),
+        sucursal_id: Number(sucursalId || sucursales[0]?.id || 1),
+        clase_documento_id: Number(claseDocId),
+        fecha_contable: fechaContable,
+        glosa_concepto: glosa,
+        cuenta_financiera_id:
+          formaPago !== "Efectivo" ? Number(cuentaBancoId) : null,
+        forma_pago: formaPago,
+        concepto_auxiliar_id:
+          formaPago === "Efectivo" ? Number(conceptoAuxiliarId) : null,
+        pagos_json: pagosJson,
+      });
 
-    if (res.success) {
-      alert(`¡Pago procesado con éxito! Comprobante N°: ${res.data.numero_documento}`);
-      window.location.reload();
-    } else {
-      alert("Error al procesar el pago: " + res.error);
+      if (res.success) {
+        alert(
+          `¡Pago procesado con éxito! Comprobante N°: ${res.data.numero_documento}`
+        );
+        setFacturasSeleccionadas({});
+        setRetencionesFactura({});
+        setValoresPersonalizadosPago({});
+        setValorNetoObjetivo(0);
+        setExcelCargado(false);
+        await recargarProveedoresYFacturas();
+      } else {
+        alert("Error al procesar el pago: " + res.error);
+      }
+    } finally {
+      setProcesando(false);
     }
-    setProcesando(false);
   };
 
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-4 text-xs font-sans">
-      <div className="border-b pb-2 flex justify-between items-center">
-        <div>
-          <h1 className="text-base font-bold text-slate-800">
-            Módulo de Pagos a Proveedores (Egresos Masivos)
-          </h1>
-          <p className="text-[11px] text-slate-500">
-            Gestión de pagos manuales por Excel y asignación automática FIFO por valor neto.
-          </p>
+      <div className="border-b pb-2 flex flex-col md:flex-row md:justify-between md:items-center gap-2">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded text-xs transition border border-slate-200 cursor-pointer shrink-0"
+          >
+            ← Atrás
+          </button>
+          <div>
+            <h1 className="text-base font-bold text-slate-800">
+              Módulo de Pagos a Proveedores (Egresos Masivos)
+            </h1>
+            <p className="text-[11px] text-slate-500">
+              Gestión de pagos manuales por Excel y asignación automática FIFO por
+              valor neto.
+            </p>
+          </div>
         </div>
 
         {/* SELECTOR DE TIPO DE PAGO MASIVO */}
-        <div className="flex gap-1 bg-slate-200 p-1 rounded">
+        <div className="flex gap-1 bg-slate-200 p-1 rounded self-start md:self-auto">
           <button
             type="button"
             onClick={() => handleCambioModo("MANUAL_INDIVIDUAL")}
             className={`px-3 py-1 font-bold rounded text-[11px] transition cursor-pointer ${
-              tipoPagoMasivo === "MANUAL_INDIVIDUAL" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-700 hover:bg-slate-300"
+              tipoPagoMasivo === "MANUAL_INDIVIDUAL"
+                ? "bg-indigo-600 text-white shadow-sm"
+                : "text-slate-700 hover:bg-slate-300"
             }`}
           >
             Manual / Selectivo
@@ -623,7 +949,9 @@ export default function PagosProveedoresPage() {
             type="button"
             onClick={() => handleCambioModo("EXCEL")}
             className={`px-3 py-1 font-bold rounded text-[11px] transition cursor-pointer ${
-              tipoPagoMasivo === "EXCEL" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-700 hover:bg-slate-300"
+              tipoPagoMasivo === "EXCEL"
+                ? "bg-indigo-600 text-white shadow-sm"
+                : "text-slate-700 hover:bg-slate-300"
             }`}
           >
             📁 Carga por Excel
@@ -632,7 +960,9 @@ export default function PagosProveedoresPage() {
             type="button"
             onClick={() => handleCambioModo("AUTOMATICO_VALOR")}
             className={`px-3 py-1 font-bold rounded text-[11px] transition cursor-pointer ${
-              tipoPagoMasivo === "AUTOMATICO_VALOR" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-700 hover:bg-slate-300"
+              tipoPagoMasivo === "AUTOMATICO_VALOR"
+                ? "bg-indigo-600 text-white shadow-sm"
+                : "text-slate-700 hover:bg-slate-300"
             }`}
           >
             ⚡ Automático por Valor
@@ -643,59 +973,95 @@ export default function PagosProveedoresPage() {
       {/* CONTROLES / FILTROS */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
         <div className="md:col-span-3">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Empresa *</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Empresa *
+          </label>
           <select
             value={empresaId}
             onChange={(e) => {
               const nuevoId = e.target.value;
               setEmpresaId(nuevoId);
-              if (nuevoId) {
-                localStorage.setItem("empresa_id", nuevoId);
-                document.cookie = `empresa_activa=${nuevoId}; path=/; max-age=86400; SameSite=Lax`;
+              setSucursalId("");
+              if (typeof window !== "undefined") {
+                if (nuevoId) {
+                  const empSel = empresas.find(
+                    (emp) => String(emp.id) === nuevoId
+                  );
+                  localStorage.setItem("empresa_activa", nuevoId);
+                  localStorage.setItem("empresa_id", nuevoId);
+                  if (empSel) {
+                    localStorage.setItem(
+                      "empresa_activa_nombre",
+                      obtenerNombreEmpresa(empSel)
+                    );
+                  }
+                  document.cookie = `empresa_activa=${encodeURIComponent(
+                    nuevoId
+                  )}; path=/; max-age=86400; SameSite=Lax`;
+                  setEmpresaActivaUsuario(
+                    nuevoId,
+                    usuarioIdRef.current,
+                    null
+                  ).catch(() => {});
+                }
               }
             }}
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate cursor-pointer"
           >
             {empresas.map((emp) => (
-              <option key={emp.id} value={emp.id}>{emp.razon_social || emp.nombre_comercial}</option>
+              <option key={emp.id} value={emp.id}>
+                {obtenerNombreEmpresa(emp)}
+              </option>
             ))}
           </select>
         </div>
 
         <div className="md:col-span-2">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Sucursal</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Sucursal
+          </label>
           <select
             value={sucursalId}
             onChange={(e) => setSucursalId(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none cursor-pointer"
           >
             {sucursales.map((suc) => (
-              <option key={suc.id} value={suc.id}>{suc.nombre}</option>
+              <option key={suc.id} value={suc.id}>
+                {suc.nombre || suc.nombre_sucursal}
+              </option>
             ))}
           </select>
         </div>
 
         <div className="md:col-span-2">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Clase de Documento</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Clase de Documento
+          </label>
           <select
             value={claseDocId}
             onChange={(e) => setClaseDocId(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none cursor-pointer"
           >
             {clasesDoc.map((cd) => (
-              <option key={cd.id} value={cd.id}>{cd.nombre_clase}</option>
+              <option key={cd.id} value={cd.id}>
+                {cd.nombre_clase}
+              </option>
             ))}
           </select>
         </div>
 
         <div className="md:col-span-3">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Forma de Pago</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Forma de Pago
+          </label>
           <select
             value={formaPago}
             onChange={(e) => setFormaPago(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none cursor-pointer"
           >
-            <option value="Transferencia / Consignación">Transferencia / Consignación</option>
+            <option value="Transferencia / Consignación">
+              Transferencia / Consignación
+            </option>
             <option value="Cheque">Cheque</option>
             <option value="Efectivo">Efectivo</option>
           </select>
@@ -703,7 +1069,9 @@ export default function PagosProveedoresPage() {
 
         {/* Fecha del Pago con Validación en Tiempo Real */}
         <div className="md:col-span-2">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Fecha del Pago *</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Fecha del Pago *
+          </label>
           <input
             type="date"
             value={fechaContable}
@@ -716,7 +1084,9 @@ export default function PagosProveedoresPage() {
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 outline-none"
           />
           {validandoPeriodo && (
-            <p className="text-[9px] text-blue-600 mt-0.5 animate-pulse">Verificando periodo...</p>
+            <p className="text-[9px] text-blue-600 mt-0.5 animate-pulse">
+              Verificando periodo...
+            </p>
           )}
           {errorPeriodo && (
             <p className="text-[10px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1 rounded mt-0.5">
@@ -727,40 +1097,52 @@ export default function PagosProveedoresPage() {
 
         {formaPago !== "Efectivo" ? (
           <div className="md:col-span-4">
-            <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Cuenta Financiera (Bancos)</label>
+            <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+              Cuenta Financiera (Bancos)
+            </label>
             <select
               value={cuentaBancoId}
               onChange={(e) => setCuentaBancoId(e.target.value)}
               className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate cursor-pointer"
             >
               {cuentasBancos.map((cta) => (
-                <option key={cta.id} value={cta.id}>{cta.nombre_cuenta} ({cta.numero_cuenta})</option>
+                <option key={cta.id} value={cta.id}>
+                  {cta.nombre_cuenta} ({cta.numero_cuenta})
+                </option>
               ))}
             </select>
           </div>
         ) : (
           <div className="md:col-span-4">
-            <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Concepto Auxiliar Contable (Egreso / Caja)</label>
+            <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+              Concepto Auxiliar Contable (Egreso / Caja)
+            </label>
             <select
               value={conceptoAuxiliarId}
               onChange={(e) => setConceptoAuxiliarId(e.target.value)}
               className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate cursor-pointer"
             >
               {conceptosAuxiliares.map((ca) => (
-                <option key={ca.id} value={ca.id}>[{ca.codigo_auxiliar}] {ca.nombre}</option>
+                <option key={ca.id} value={ca.id}>
+                  [{ca.codigo_auxiliar}] {ca.nombre}
+                </option>
               ))}
             </select>
           </div>
         )}
 
         <div className="md:col-span-8">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Seleccionar Proveedor (Carga Facturas por Vencimiento)</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Seleccionar Proveedor (Carga Facturas por Vencimiento)
+          </label>
           <select
             value={filtroProveedorId}
             onChange={(e) => setFiltroProveedorId(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate cursor-pointer"
           >
-            <option value="">-- Seleccione un Proveedor para ver sus facturas --</option>
+            <option value="">
+              -- Seleccione un Proveedor para ver sus facturas --
+            </option>
             {proveedores.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.razon_social} [{p.numero_identificacion}]
@@ -772,8 +1154,13 @@ export default function PagosProveedoresPage() {
         {tipoPagoMasivo === "EXCEL" && (
           <div className="md:col-span-12 bg-indigo-50 p-3 rounded border border-indigo-200 flex items-center justify-between">
             <div>
-              <span className="font-bold text-indigo-900 block">Carga Masiva por Excel:</span>
-              <span className="text-[10px] text-indigo-700">Seleccione el archivo con columnas `numero_factura` y `valor_pagado` para cruzar y procesar.</span>
+              <span className="font-bold text-indigo-900 block">
+                Carga Masiva por Excel:
+              </span>
+              <span className="text-[10px] text-indigo-700">
+                Seleccione el archivo con columnas `numero_factura` y
+                `valor_pagado` para cruzar y procesar.
+              </span>
             </div>
             <input
               type="file"
@@ -788,11 +1175,20 @@ export default function PagosProveedoresPage() {
           <div className="md:col-span-12 bg-emerald-50 p-3 rounded border border-emerald-200 flex flex-col gap-1">
             <div className="flex items-center justify-between">
               <div>
-                <span className="font-bold text-emerald-900 block">Pago Automático por Valor Neto (FIFO):</span>
-                <span className="text-[10px] text-emerald-700">Digite el valor total a desembolsar. Máximo adeudado: <strong className="font-mono">{fmt(saldoMaximoProveedor)}</strong></span>
+                <span className="font-bold text-emerald-900 block">
+                  Pago Automático por Valor Neto (FIFO):
+                </span>
+                <span className="text-[10px] text-emerald-700">
+                  Digite el valor total a desembolsar. Máximo adeudado:{" "}
+                  <strong className="font-mono">
+                    {fmt(saldoMaximoProveedor)}
+                  </strong>
+                </span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-emerald-900 text-xs">Valor Neto a Pagar:</span>
+                <span className="font-bold text-emerald-900 text-xs">
+                  Valor Neto a Pagar:
+                </span>
                 <input
                   type="number"
                   placeholder="Ej: 5500000"
@@ -802,17 +1198,22 @@ export default function PagosProveedoresPage() {
                 />
               </div>
             </div>
-            {valorNetoObjetivo > saldoMaximoProveedor && saldoMaximoProveedor > 0 && (
-              <div className="text-[10px] text-red-600 font-bold bg-red-50 p-1 rounded border border-red-200 mt-1">
-                ⚠️ El valor digitado ({fmt(valorNetoObjetivo)}) excede lo adeudado al proveedor. El saldo máximo pendiente es {fmt(saldoMaximoProveedor)}.
-              </div>
-            )}
+            {valorNetoObjetivo > saldoMaximoProveedor &&
+              saldoMaximoProveedor > 0 && (
+                <div className="text-[10px] text-red-600 font-bold bg-red-50 p-1 rounded border border-red-200 mt-1">
+                  ⚠️ El valor digitado ({fmt(valorNetoObjetivo)}) excede lo
+                  adeudado al proveedor. El saldo máximo pendiente es{" "}
+                  {fmt(saldoMaximoProveedor)}.
+                </div>
+              )}
           </div>
         )}
 
         {/* SELECTORES GLOBALES DE RETENCIÓN */}
         <div className="md:col-span-4">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Retención Renta (Global)</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Retención Renta (Global)
+          </label>
           <select
             value={retencionRentaId}
             onChange={(e) => setRetencionRentaId(e.target.value)}
@@ -822,7 +1223,10 @@ export default function PagosProveedoresPage() {
             {conceptosRet
               .filter((cr) => cr.tipo_retencion === "RENTA")
               .map((cr) => {
-                const textoCorto = cr.nombre.length > 55 ? cr.nombre.substring(0, 55) + "..." : cr.nombre;
+                const textoCorto =
+                  cr.nombre.length > 55
+                    ? cr.nombre.substring(0, 55) + "..."
+                    : cr.nombre;
                 const porcentajeMostrado = Number(cr.porcentaje || 0) * 100;
                 return (
                   <option key={cr.id} value={cr.id}>
@@ -834,7 +1238,9 @@ export default function PagosProveedoresPage() {
         </div>
 
         <div className="md:col-span-4">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Retención IVA (Global)</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Retención IVA (Global)
+          </label>
           <select
             value={retencionIvaId}
             onChange={(e) => setRetencionIvaId(e.target.value)}
@@ -844,7 +1250,10 @@ export default function PagosProveedoresPage() {
             {conceptosRet
               .filter((cr) => cr.tipo_retencion === "IVA")
               .map((cr) => {
-                const textoCorto = cr.nombre.length > 55 ? cr.nombre.substring(0, 55) + "..." : cr.nombre;
+                const textoCorto =
+                  cr.nombre.length > 55
+                    ? cr.nombre.substring(0, 55) + "..."
+                    : cr.nombre;
                 const porcentajeMostrado = Number(cr.porcentaje || 0) * 100;
                 return (
                   <option key={cr.id} value={cr.id}>
@@ -856,7 +1265,9 @@ export default function PagosProveedoresPage() {
         </div>
 
         <div className="md:col-span-4">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Retención ICA (Global)</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Retención ICA (Global)
+          </label>
           <select
             value={retencionIcaId}
             onChange={(e) => setRetencionIcaId(e.target.value)}
@@ -866,7 +1277,10 @@ export default function PagosProveedoresPage() {
             {conceptosRet
               .filter((cr) => cr.tipo_retencion === "ICA")
               .map((cr) => {
-                const textoCorto = cr.nombre.length > 55 ? cr.nombre.substring(0, 55) + "..." : cr.nombre;
+                const textoCorto =
+                  cr.nombre.length > 55
+                    ? cr.nombre.substring(0, 55) + "..."
+                    : cr.nombre;
                 const porMilMostrado = Number(cr.porcentaje || 0) * 1000;
                 return (
                   <option key={cr.id} value={cr.id}>
@@ -881,7 +1295,9 @@ export default function PagosProveedoresPage() {
       {/* BARRA DE GLOSA Y EJECUCIÓN */}
       <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 flex flex-col md:flex-row gap-3 items-center justify-between">
         <div className="w-full md:w-1/2">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Glosa / Concepto General</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Glosa / Concepto General
+          </label>
           <input
             type="text"
             value={glosa}
@@ -892,32 +1308,49 @@ export default function PagosProveedoresPage() {
 
         <div className="flex items-center gap-4">
           <div className="text-right">
-            <span className="text-slate-500 uppercase text-[10px] block font-bold">Total Neto a Pagar:</span>
-            <span className="font-mono font-bold text-emerald-700 text-base">{fmt(totalGeneralPago)}</span>
+            <span className="text-slate-500 uppercase text-[10px] block font-bold">
+              Total Neto a Pagar:
+            </span>
+            <span className="font-mono font-bold text-emerald-700 text-base">
+              {fmt(totalGeneralPago)}
+            </span>
           </div>
 
           <button
             type="button"
             onClick={handleSubmitPago}
-            disabled={!isMounted || procesando || totalGeneralPago <= 0 || (tipoPagoMasivo === "AUTOMATICO_VALOR" && valorNetoObjetivo > saldoMaximoProveedor) || Boolean(errorPeriodo)}
+            disabled={
+              !isMounted ||
+              procesando ||
+              totalGeneralPago <= 0 ||
+              (tipoPagoMasivo === "AUTOMATICO_VALOR" &&
+                valorNetoObjetivo > saldoMaximoProveedor) ||
+              Boolean(errorPeriodo)
+            }
             suppressHydrationWarning
             className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded shadow transition text-xs cursor-pointer"
           >
-            {procesando ? "Procesando Egreso..." : "💾 Ejecutar Pago y Contabilizar"}
+            {procesando
+              ? "Procesando Egreso..."
+              : "💾 Ejecutar Pago y Contabilizar"}
           </button>
         </div>
       </div>
 
       {/* TABLA DE FACTURAS PENDIENTES */}
       {loading ? (
-        <div className="p-8 text-center text-slate-400">Cargando facturas pendientes del proveedor...</div>
+        <div className="p-8 text-center text-slate-400">
+          Cargando facturas pendientes del proveedor...
+        </div>
       ) : !filtroProveedorId ? (
         <div className="p-8 text-center text-slate-400 italic bg-white border rounded-lg">
-          Seleccione un proveedor en el filtro superior para visualizar sus facturas pendientes.
+          Seleccione un proveedor en el filtro superior para visualizar sus
+          facturas pendientes.
         </div>
       ) : tipoPagoMasivo === "EXCEL" && !excelCargado ? (
         <div className="p-8 text-center text-indigo-600 italic bg-indigo-50/50 border border-indigo-200 rounded-lg font-medium">
-          📁 Por favor cargue el archivo Excel en la barra superior para procesar y validar las facturas correspondientes.
+          📁 Por favor cargue el archivo Excel en la barra superior para procesar
+          y validar las facturas correspondientes.
         </div>
       ) : facturas.length === 0 ? (
         <div className="p-8 text-center text-slate-400 italic bg-white border rounded-lg">
@@ -937,14 +1370,20 @@ export default function PagosProveedoresPage() {
                 <th className="p-2 text-right">ReteRenta</th>
                 <th className="p-2 text-right">ReteIVA</th>
                 <th className="p-2 text-right">ReteICA</th>
-                <th className="p-2 text-right w-28 font-bold text-emerald-800">Valor a Pagar</th>
+                <th className="p-2 text-right w-28 font-bold text-emerald-800">
+                  Valor a Pagar
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y text-[10px]">
               {facturas.map((fac) => {
                 const facIdStr = String(fac.id);
                 const seleccionada = !!facturasSeleccionadas[facIdStr];
-                if ((tipoPagoMasivo === "EXCEL" || tipoPagoMasivo === "AUTOMATICO_VALOR") && !seleccionada) {
+                if (
+                  (tipoPagoMasivo === "EXCEL" ||
+                    tipoPagoMasivo === "AUTOMATICO_VALOR") &&
+                  !seleccionada
+                ) {
                   return null;
                 }
 
@@ -955,12 +1394,23 @@ export default function PagosProveedoresPage() {
                 const notas = fac.notas || [];
 
                 const rets = retencionesFactura[facIdStr] || {};
-                const valRenta = retencionRentaId ? Number(rets[retencionRentaId] || 0) : 0;
-                const valIva = retencionIvaId ? Number(rets[retencionIvaId] || 0) : 0;
-                const valIca = retencionIcaId ? Number(rets[retencionIcaId] || 0) : 0;
+                const valRenta = retencionRentaId
+                  ? Number(rets[retencionRentaId] || 0)
+                  : 0;
+                const valIva = retencionIvaId
+                  ? Number(rets[retencionIvaId] || 0)
+                  : 0;
+                const valIca = retencionIcaId
+                  ? Number(rets[retencionIcaId] || 0)
+                  : 0;
 
                 return (
-                  <tr key={fac.id} className={seleccionada ? "bg-indigo-50/40" : "hover:bg-slate-50"}>
+                  <tr
+                    key={fac.id}
+                    className={
+                      seleccionada ? "bg-indigo-50/40" : "hover:bg-slate-50"
+                    }
+                  >
                     <td className="p-2 text-center align-middle">
                       <input
                         type="checkbox"
@@ -972,27 +1422,37 @@ export default function PagosProveedoresPage() {
                     </td>
                     <td className="p-2 align-middle">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-slate-900">{fac.numero_factura}</span>
+                        <span className="font-bold text-slate-900">
+                          {fac.numero_factura}
+                        </span>
                         {notas.map((n) => (
-                          <span 
-                            key={n.id} 
+                          <span
+                            key={n.id}
                             className={`text-[9px] px-1.5 py-0.5 rounded border font-medium ${
-                              n.tipo_nota === 'CREDITO' 
-                                ? 'bg-amber-50 text-amber-800 border-amber-200' 
-                                : 'bg-blue-50 text-blue-800 border-blue-200'
+                              n.tipo_nota === "CREDITO"
+                                ? "bg-amber-50 text-amber-800 border-amber-200"
+                                : "bg-blue-50 text-blue-800 border-blue-200"
                             }`}
-                            title={`Motivo: ${n.motivo || 'Sin motivo'}`}
+                            title={`Motivo: ${n.motivo || "Sin motivo"}`}
                           >
                             {n.tipo_nota}: {n.numero_nota} ({fmt(n.monto_total)})
                           </span>
                         ))}
                       </div>
                     </td>
-                    <td className="p-2 text-slate-600 align-middle">{fac.fecha_vencimiento || "N/A"}</td>
-                    <td className="p-2 text-right font-mono text-slate-700 align-middle">{fmt(subtotalFac)}</td>
-                    <td className="p-2 text-right font-mono text-slate-700 align-middle">{fmt(ivaFac)}</td>
-                    <td className="p-2 text-right font-mono font-bold text-slate-900 align-middle">{fmt(saldoReal)}</td>
-                    
+                    <td className="p-2 text-slate-600 align-middle">
+                      {fac.fecha_vencimiento || "N/A"}
+                    </td>
+                    <td className="p-2 text-right font-mono text-slate-700 align-middle">
+                      {fmt(subtotalFac)}
+                    </td>
+                    <td className="p-2 text-right font-mono text-slate-700 align-middle">
+                      {fmt(ivaFac)}
+                    </td>
+                    <td className="p-2 text-right font-mono font-bold text-slate-900 align-middle">
+                      {fmt(saldoReal)}
+                    </td>
+
                     <td className="p-2 text-right font-mono text-slate-600 align-middle">
                       {retencionRentaId && seleccionada ? fmt(valRenta) : "—"}
                     </td>

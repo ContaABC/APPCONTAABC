@@ -3,9 +3,48 @@
 import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
+interface CatalogoRow {
+  id: string | number;
+  empresa_id?: number | string | null;
+  codigo_concepto?: string;
+  codigo?: string;
+  codigo_subconcepto?: string;
+  codigo_auxiliar?: string;
+  elemento?: string;
+  clasificacion_balance?: string;
+  nombre?: string;
+  [key: string]: unknown;
+}
+
+interface ConsolidadoConcepto {
+  concepto_niif_id: string;
+  total_debito: number;
+  total_credito: number;
+  saldo_final: number;
+  conceptos_niif: CatalogoRow | null;
+}
+
+interface ConsolidadoSubconcepto {
+  subconcepto_niif_id: string;
+  total_debito: number;
+  total_credito: number;
+  saldo_final: number;
+  subconceptos_niif: CatalogoRow | null;
+}
+
+interface ConsolidadoAuxiliar {
+  concepto_auxiliar_id: string;
+  total_debito: number;
+  total_credito: number;
+  saldo_final: number;
+  conceptos_auxiliares: CatalogoRow | null;
+}
+
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error(
@@ -18,11 +57,35 @@ function getSupabaseAdmin() {
   });
 }
 
-async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
+async function resolverEmpresaId(
+  empresaId?: number | string | null
+): Promise<number> {
   if (empresaId) return Number(empresaId);
   const cookieStore = await cookies();
   const idCookie = cookieStore.get("empresa_activa")?.value;
   return Number(idCookie || 0);
+}
+
+async function consultarCatalogoSeguro(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  tabla: "conceptos_niif" | "subconceptos_niif" | "conceptos_auxiliares",
+  idEmpresa: number
+): Promise<CatalogoRow[]> {
+  const { data: conEmpresa, error: errEmpresa } = await supabase
+    .from(tabla)
+    .select("*")
+    .eq("empresa_id", idEmpresa);
+
+  if (!errEmpresa && Array.isArray(conEmpresa)) {
+    return conEmpresa as CatalogoRow[];
+  }
+
+  // Fallback si el catálogo es global (no tiene columna empresa_id)
+  const { data: todos, error: errTodos } = await supabase.from(tabla).select("*");
+  if (errTodos) {
+    throw new Error(`Error consultando ${tabla}: ${errTodos.message}`);
+  }
+  return (todos || []) as CatalogoRow[];
 }
 
 export async function obtenerEmpresas() {
@@ -36,7 +99,10 @@ export async function obtenerEmpresas() {
     if (error) return { success: false, data: [], error: error.message };
     return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener empresas.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener empresas.";
     return { success: false, data: [], error: mensaje };
   }
 }
@@ -56,7 +122,10 @@ export async function obtenerSucursales(empresaId?: number | string | null) {
     if (error) return { success: false, data: [], error: error.message };
     return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener sucursales.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener sucursales.";
     return { success: false, data: [], error: mensaje };
   }
 }
@@ -69,7 +138,8 @@ export async function obtenerResumenBalanceYDetalle(
 ) {
   try {
     const idEmpresa = await resolverEmpresaId(empresaId);
-    if (!idEmpresa) throw new Error("Debe especificar o tener activa una empresa válida.");
+    if (!idEmpresa)
+      throw new Error("Debe especificar o tener activa una empresa válida.");
 
     const parsedSucursalId = sucursalId ? Number(sucursalId) : null;
     const parsedAnio = anio ? Number(anio) : null;
@@ -122,29 +192,39 @@ export async function obtenerResumenBalanceYDetalle(
       qAux = qAux.eq("mes", parsedMes);
     }
 
-    const [resConc, resSub, resAux, resCatConc, resCatSub, resCatAux] = await Promise.all([
-      qConc,
-      qSub,
-      qAux,
-      supabase.from("conceptos_niif").select("*"),
-      supabase.from("subconceptos_niif").select("*"),
-      supabase.from("conceptos_auxiliares").select("*"),
-    ]);
+    const [resConc, resSub, resAux, catConc, catSub, catAux] =
+      await Promise.all([
+        qConc,
+        qSub,
+        qAux,
+        consultarCatalogoSeguro(supabase, "conceptos_niif", idEmpresa),
+        consultarCatalogoSeguro(supabase, "subconceptos_niif", idEmpresa),
+        consultarCatalogoSeguro(supabase, "conceptos_auxiliares", idEmpresa),
+      ]);
 
-    if (resConc.error) throw new Error(`Error en Conceptos: ${resConc.error.message}`);
-    if (resSub.error) throw new Error(`Error en Subconceptos: ${resSub.error.message}`);
-    if (resAux.error) throw new Error(`Error en Auxiliares: ${resAux.error.message}`);
+    if (resConc.error)
+      throw new Error(`Error en Conceptos: ${resConc.error.message}`);
+    if (resSub.error)
+      throw new Error(`Error en Subconceptos: ${resSub.error.message}`);
+    if (resAux.error)
+      throw new Error(`Error en Auxiliares: ${resAux.error.message}`);
 
     // Mapas de catálogos con llaves en minúsculas y sin espacios
-    const mapCatConceptos = new Map((resCatConc.data || []).map((c: any) => [String(c.id).toLowerCase().trim(), c]));
-    const mapCatSubconceptos = new Map((resCatSub.data || []).map((s: any) => [String(s.id).toLowerCase().trim(), s]));
-    const mapCatAuxiliares = new Map((resCatAux.data || []).map((a: any) => [String(a.id).toLowerCase().trim(), a]));
+    const mapCatConceptos = new Map<string, CatalogoRow>(
+      catConc.map((c) => [String(c.id).toLowerCase().trim(), c])
+    );
+    const mapCatSubconceptos = new Map<string, CatalogoRow>(
+      catSub.map((s) => [String(s.id).toLowerCase().trim(), s])
+    );
+    const mapCatAuxiliares = new Map<string, CatalogoRow>(
+      catAux.map((a) => [String(a.id).toLowerCase().trim(), a])
+    );
 
     // ---------------------------------------------------------------------
     // CONSOLIDACIÓN ESTRICTA DE CONCEPTOS NIIF
     // ---------------------------------------------------------------------
-    const mapGroupConc = new Map<string, any>();
-    (resConc.data || []).forEach((row: any) => {
+    const mapGroupConc = new Map<string, ConsolidadoConcepto>();
+    (resConc.data || []).forEach((row) => {
       const key = String(row.concepto_niif_id).toLowerCase().trim();
       if (!mapGroupConc.has(key)) {
         mapGroupConc.set(key, {
@@ -155,36 +235,38 @@ export async function obtenerResumenBalanceYDetalle(
           conceptos_niif: mapCatConceptos.get(key) || null,
         });
       }
-      const item = mapGroupConc.get(key);
+      const item = mapGroupConc.get(key)!;
       item.total_debito += Number(row.total_debito || 0);
       item.total_credito += Number(row.total_credito || 0);
       item.saldo_final += Number(row.saldo_final || 0);
     });
 
     // ---------------------------------------------------------------------
-    // CONSOLIDACIÓN ESTRICTA DE SUBCONCEPTOS NIIF (UUID)
+    // CONSOLIDACIÓN ESTRICTA DE SUBCONCEPTOS NIIF
     // ---------------------------------------------------------------------
-    const mapGroupSub = new Map<string, any>();
-    (resSub.data || []).forEach((row: any) => {
+    const mapGroupSub = new Map<string, ConsolidadoSubconcepto>();
+    (resSub.data || []).forEach((row) => {
       const key = String(row.subconcepto_niif_id).toLowerCase().trim();
       if (!mapGroupSub.has(key)) {
         mapGroupSub.set(key, {
           subconcepto_niif_id: key,
           total_debito: 0,
           total_credito: 0,
+          saldo_final: 0,
           subconceptos_niif: mapCatSubconceptos.get(key) || null,
         });
       }
-      const item = mapGroupSub.get(key);
+      const item = mapGroupSub.get(key)!;
       item.total_debito += Number(row.total_debito || 0);
       item.total_credito += Number(row.total_credito || 0);
+      item.saldo_final = item.total_debito - item.total_credito;
     });
 
     // ---------------------------------------------------------------------
     // CONSOLIDACIÓN ESTRICTA DE CONCEPTOS AUXILIARES
     // ---------------------------------------------------------------------
-    const mapGroupAux = new Map<string, any>();
-    (resAux.data || []).forEach((row: any) => {
+    const mapGroupAux = new Map<string, ConsolidadoAuxiliar>();
+    (resAux.data || []).forEach((row) => {
       const key = String(row.concepto_auxiliar_id).toLowerCase().trim();
       if (!mapGroupAux.has(key)) {
         mapGroupAux.set(key, {
@@ -195,7 +277,7 @@ export async function obtenerResumenBalanceYDetalle(
           conceptos_auxiliares: mapCatAuxiliares.get(key) || null,
         });
       }
-      const item = mapGroupAux.get(key);
+      const item = mapGroupAux.get(key)!;
       item.total_debito += Number(row.total_debito || 0);
       item.total_credito += Number(row.total_credito || 0);
       item.saldo_final += Number(row.saldo_final || 0);
@@ -207,24 +289,44 @@ export async function obtenerResumenBalanceYDetalle(
       const elemB = String(b.conceptos_niif?.elemento || "").toLowerCase();
       if (elemA !== elemB) return elemA.localeCompare(elemB);
 
-      const clasifA = String(a.conceptos_niif?.clasificacion_balance || "").toLowerCase();
-      const clasifB = String(b.conceptos_niif?.clasificacion_balance || "").toLowerCase();
+      const clasifA = String(
+        a.conceptos_niif?.clasificacion_balance || ""
+      ).toLowerCase();
+      const clasifB = String(
+        b.conceptos_niif?.clasificacion_balance || ""
+      ).toLowerCase();
       if (clasifA !== clasifB) return clasifA.localeCompare(clasifB);
 
-      const codA = String(a.conceptos_niif?.codigo_concepto || a.conceptos_niif?.codigo || "").toLowerCase();
-      const codB = String(b.conceptos_niif?.codigo_concepto || b.conceptos_niif?.codigo || "").toLowerCase();
+      const codA = String(
+        a.conceptos_niif?.codigo_concepto || a.conceptos_niif?.codigo || ""
+      ).toLowerCase();
+      const codB = String(
+        b.conceptos_niif?.codigo_concepto || b.conceptos_niif?.codigo || ""
+      ).toLowerCase();
       return codA.localeCompare(codB);
     });
 
     const listaSubconceptos = Array.from(mapGroupSub.values()).sort((a, b) => {
-      const codA = String(a.subconceptos_niif?.codigo_subconcepto || a.subconceptos_niif?.codigo || "").toLowerCase();
-      const codB = String(b.subconceptos_niif?.codigo_subconcepto || b.subconceptos_niif?.codigo || "").toLowerCase();
+      const codA = String(
+        a.subconceptos_niif?.codigo_subconcepto ||
+          a.subconceptos_niif?.codigo ||
+          ""
+      ).toLowerCase();
+      const codB = String(
+        b.subconceptos_niif?.codigo_subconcepto ||
+          b.subconceptos_niif?.codigo ||
+          ""
+      ).toLowerCase();
       return codA.localeCompare(codB);
     });
 
     const listaAuxiliares = Array.from(mapGroupAux.values()).sort((a, b) => {
-      const codA = String(a.conceptos_auxiliares?.codigo_auxiliar || "").toLowerCase();
-      const codB = String(b.conceptos_auxiliares?.codigo_auxiliar || "").toLowerCase();
+      const codA = String(
+        a.conceptos_auxiliares?.codigo_auxiliar || ""
+      ).toLowerCase();
+      const codB = String(
+        b.conceptos_auxiliares?.codigo_auxiliar || ""
+      ).toLowerCase();
       return codA.localeCompare(codB);
     });
 
@@ -239,7 +341,10 @@ export async function obtenerResumenBalanceYDetalle(
       error: null,
     };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al consultar saldos.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al consultar saldos.";
     console.error("Error en obtenerResumenBalanceYDetalle:", mensaje);
     return {
       success: false,

@@ -1,8 +1,16 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { supabase } from "@/lib/supabaseClient";
 import {
-  obtenerSucursales,
+  getEmpresasPermitidas,
+  getSucursalesPermitidas,
+  getEmpresaActivaUsuario,
+  getSucursalActivaUsuario,
+  setEmpresaActivaUsuario,
+  setSucursalActivaUsuario,
+} from "@/app/actions/accionesEmpresas";
+import {
   obtenerItemsPorEmpresaYSucursal,
   guardarItemFacturacion,
   cambiarEstadoItemFacturacion,
@@ -54,89 +62,349 @@ const INITIAL_FORM = {
   porcentaje_descuento_max: "0",
 };
 
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+function setCookieValue(name: string, value: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=86400; SameSite=Lax`;
+}
+
+function clearCookieValue(name: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`;
+}
+
+function obtenerUsuarioIdDesdeLocalStorage(): string | null {
+  if (typeof window === "undefined") return null;
+
+  for (const clave of ["usuario_id", "user_id", "uid"]) {
+    const val = localStorage.getItem(clave);
+    if (val && val.trim()) return val.trim();
+  }
+
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.includes("auth-token") || k.includes("supabase")) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const idEncontrado =
+          parsed?.user?.id ||
+          parsed?.currentSession?.user?.id ||
+          parsed?.session?.user?.id ||
+          null;
+        if (idEncontrado && typeof idEncontrado === "string") {
+          return idEncontrado;
+        }
+      } catch {
+        // Ignorar
+      }
+    }
+  }
+  return null;
+}
+
 export default function ItemForm({
   empresasIniciales,
   empresaActivaCookie,
   sucursalesIniciales = [],
   itemsIniciales = [],
 }: ItemFormProps) {
-  // Evitar error de Hidratación en Next.js
   const [isMounted, setIsMounted] = useState(false);
+  const usuarioIdRef = useRef<string | null>(null);
+  const primeraCargaRef = useRef<boolean>(true);
 
-  // Filtros contextuales (inicializados con la cookie corporativa si existe)
+  const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(
+    !empresasIniciales || empresasIniciales.length === 0
+  );
+
+  const [empresas, setEmpresas] = useState<Empresa[]>(empresasIniciales || []);
   const [empresaId, setEmpresaId] = useState<string>(empresaActivaCookie || "");
+  const [sucursales, setSucursales] = useState<Sucursal[]>(sucursalesIniciales);
   const [sucursalId, setSucursalId] = useState<string>(
     sucursalesIniciales.length > 0 ? String(sucursalesIniciales[0].id) : ""
   );
-  const [sucursales, setSucursales] = useState<Sucursal[]>(sucursalesIniciales);
   const [items, setItems] = useState<ItemFacturacion[]>(itemsIniciales);
 
-  // Estados UI y Subformulario
   const [loading, setLoading] = useState(false);
   const [loadingTabla, setLoadingTabla] = useState(false);
   const [mostrarModal, setMostrarModal] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
-  // Formulario de ítem
   const [formData, setFormData] = useState(INITIAL_FORM);
+
+  const cargarItems = useCallback(async (empTarget: string, sucTarget: string) => {
+    if (!empTarget || !sucTarget) {
+      setItems([]);
+      return;
+    }
+    setLoadingTabla(true);
+    try {
+      const res = await obtenerItemsPorEmpresaYSucursal(empTarget, sucTarget);
+      if (res.success) {
+        setItems(res.data || []);
+      } else {
+        setErrorMsg(res.error || null);
+        setItems([]);
+      }
+    } finally {
+      setLoadingTabla(false);
+    }
+  }, []);
 
   useEffect(() => {
     setIsMounted(true);
   }, []);
 
-  // 1. Cargar sucursales cuando cambia Empresa (siempre que no sea el valor inicial precargado)
   useEffect(() => {
-    if (!isMounted) return;
+    if (!isMounted || !primeraCargaRef.current) return;
+    primeraCargaRef.current = false;
 
-    async function cargarSucursales() {
-      // Si cambiamos manualmente de empresa, reseteamos la sucursal y los ítems
-      setSucursalId("");
-      setItems([]);
-      if (!empresaId) {
-        setSucursales([]);
-        return;
+    async function init() {
+      setLoadingEmpresas(true);
+      try {
+        let uid: string | null = null;
+        try {
+          const { data } = await supabase.auth.getUser();
+          if (data?.user?.id) uid = data.user.id;
+        } catch {
+          // Ignorar
+        }
+        if (!uid) {
+          uid = obtenerUsuarioIdDesdeLocalStorage();
+        }
+        usuarioIdRef.current = uid;
+
+        let listaEmp: Empresa[] = Array.isArray(empresasIniciales)
+          ? [...empresasIniciales]
+          : [];
+        if (listaEmp.length === 0) {
+          const permitidas = await getEmpresasPermitidas(uid);
+          listaEmp = Array.isArray(permitidas) ? permitidas : [];
+        }
+
+        if (listaEmp.length === 0) {
+          setEmpresas([]);
+          setEmpresaId("");
+          setSucursales([]);
+          setSucursalId("");
+          setItems([]);
+          return;
+        }
+
+        const ordenadas = [...listaEmp].sort((a, b) =>
+          (a.razon_social || "").localeCompare(b.razon_social || "", "es", {
+            sensitivity: "base",
+          })
+        );
+        setEmpresas(ordenadas);
+
+        let empBD: string | null = null;
+        try {
+          const valBD = await getEmpresaActivaUsuario(uid);
+          if (valBD !== null && valBD !== undefined && String(valBD).trim() !== "") {
+            empBD = String(valBD).trim();
+          }
+        } catch {
+          // Ignorar
+        }
+
+        const empLocal =
+          typeof window !== "undefined"
+            ? localStorage.getItem("empresa_activa") ||
+              localStorage.getItem("empresa_id")
+            : null;
+        const empCookie = getCookieValue("empresa_activa");
+
+        const candidata = empBD || empresaActivaCookie || empLocal || empCookie;
+        const empElegida = candidata
+          ? ordenadas.find((e) => String(e.id) === String(candidata)) ||
+            ordenadas[0]
+          : ordenadas[0];
+
+        const idEmpFinal = String(empElegida.id);
+        setEmpresaId(idEmpFinal);
+
+        if (typeof window !== "undefined") {
+          localStorage.setItem("empresa_activa", idEmpFinal);
+          localStorage.setItem("empresa_id", idEmpFinal);
+          if (empElegida.razon_social) {
+            localStorage.setItem("empresa_activa_nombre", empElegida.razon_social);
+          }
+        }
+        setCookieValue("empresa_activa", idEmpFinal);
+
+        // Si ya vienen sucursales e ítems iniciales desde el servidor para esa empresa
+        if (
+          empresaActivaCookie &&
+          idEmpFinal === String(empresaActivaCookie) &&
+          sucursalesIniciales.length > 0
+        ) {
+          const sucDefecto = String(sucursalesIniciales[0].id);
+          setSucursales(sucursalesIniciales);
+          setSucursalId(sucDefecto);
+          if (itemsIniciales.length > 0) {
+            setItems(itemsIniciales);
+          } else {
+            await cargarItems(idEmpFinal, sucDefecto);
+          }
+          return;
+        }
+
+        // Consultar sucursales permitidas desde accionesEmpresas.ts
+        const resSuc = await getSucursalesPermitidas(idEmpFinal, uid);
+        const listaSuc: Sucursal[] = Array.isArray(resSuc) ? resSuc : [];
+        setSucursales(listaSuc);
+
+        if (listaSuc.length > 0) {
+          let sucBD: string | null = null;
+          try {
+            const valSuc = await getSucursalActivaUsuario(uid);
+            if (valSuc !== null && valSuc !== undefined && String(valSuc).trim() !== "") {
+              sucBD = String(valSuc).trim();
+            }
+          } catch {
+            // Ignorar
+          }
+
+          const sucLocal =
+            typeof window !== "undefined"
+              ? localStorage.getItem("sucursal_activa") ||
+                localStorage.getItem("sucursal_id")
+              : null;
+          const sucCookie = getCookieValue("sucursal_activa");
+          const candidataSuc = sucBD || sucLocal || sucCookie;
+
+          const sucElegida = candidataSuc
+            ? listaSuc.find((s) => String(s.id) === String(candidataSuc)) ||
+              listaSuc[0]
+            : listaSuc[0];
+
+          const idSucFinal = String(sucElegida.id);
+          setSucursalId(idSucFinal);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("sucursal_activa", idSucFinal);
+            localStorage.setItem("sucursal_id", idSucFinal);
+            const nomSuc = sucElegida.nombre_sucursal || sucElegida.nombre || "";
+            if (nomSuc) {
+              localStorage.setItem("sucursal_activa_nombre", nomSuc);
+            }
+          }
+          setCookieValue("sucursal_activa", idSucFinal);
+          await cargarItems(idEmpFinal, idSucFinal);
+        } else {
+          setSucursalId("");
+          setItems([]);
+        }
+      } finally {
+        setLoadingEmpresas(false);
       }
-      const res = await obtenerSucursales(empresaId);
-      if (res.success) {
-        setSucursales(res.data);
+    }
+
+    init();
+  }, [
+    isMounted,
+    empresasIniciales,
+    empresaActivaCookie,
+    sucursalesIniciales,
+    itemsIniciales,
+    cargarItems,
+  ]);
+
+  const handleCambioEmpresa = async (nuevaEmp: string) => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setEmpresaId(nuevaEmp);
+    setSucursalId("");
+    setSucursales([]);
+    setItems([]);
+
+    if (typeof window !== "undefined") {
+      if (nuevaEmp) {
+        const empSel = empresas.find((e) => String(e.id) === String(nuevaEmp));
+        localStorage.setItem("empresa_activa", nuevaEmp);
+        localStorage.setItem("empresa_id", nuevaEmp);
+        if (empSel?.razon_social) {
+          localStorage.setItem("empresa_activa_nombre", empSel.razon_social);
+        }
+        setCookieValue("empresa_activa", nuevaEmp);
       } else {
-        setSucursales([]);
+        localStorage.removeItem("empresa_activa");
+        localStorage.removeItem("empresa_id");
+        localStorage.removeItem("empresa_activa_nombre");
+        clearCookieValue("empresa_activa");
+      }
+
+      localStorage.removeItem("sucursal_activa");
+      localStorage.removeItem("sucursal_id");
+      localStorage.removeItem("sucursal_activa_nombre");
+      clearCookieValue("sucursal_activa");
+    }
+
+    if (!nuevaEmp) return;
+
+    setEmpresaActivaUsuario(nuevaEmp, usuarioIdRef.current, null).catch(() => {});
+
+    const resSuc = await getSucursalesPermitidas(nuevaEmp, usuarioIdRef.current);
+    const listaSuc: Sucursal[] = Array.isArray(resSuc) ? resSuc : [];
+    setSucursales(listaSuc);
+
+    if (listaSuc.length > 0) {
+      const idSucNueva = String(listaSuc[0].id);
+      setSucursalId(idSucNueva);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("sucursal_activa", idSucNueva);
+        localStorage.setItem("sucursal_id", idSucNueva);
+        const nomSuc = listaSuc[0].nombre_sucursal || listaSuc[0].nombre || "";
+        if (nomSuc) {
+          localStorage.setItem("sucursal_activa_nombre", nomSuc);
+        }
+      }
+      setCookieValue("sucursal_activa", idSucNueva);
+      setSucursalActivaUsuario(idSucNueva, usuarioIdRef.current).catch(() => {});
+      await cargarItems(nuevaEmp, idSucNueva);
+    }
+  };
+
+  const handleCambioSucursal = async (nuevaSuc: string) => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setSucursalId(nuevaSuc);
+
+    if (typeof window !== "undefined") {
+      if (nuevaSuc) {
+        const sucSel = sucursales.find((s) => String(s.id) === String(nuevaSuc));
+        localStorage.setItem("sucursal_activa", nuevaSuc);
+        localStorage.setItem("sucursal_id", nuevaSuc);
+        const nomSuc = sucSel?.nombre_sucursal || sucSel?.nombre || "";
+        if (nomSuc) {
+          localStorage.setItem("sucursal_activa_nombre", nomSuc);
+        }
+        setCookieValue("sucursal_activa", nuevaSuc);
+      } else {
+        localStorage.removeItem("sucursal_activa");
+        localStorage.removeItem("sucursal_id");
+        localStorage.removeItem("sucursal_activa_nombre");
+        clearCookieValue("sucursal_activa");
       }
     }
 
-    // Evitamos recargar en el primer render si ya vienen precargadas de la cookie
-    if (empresaId !== empresaActivaCookie) {
-      cargarSucursales();
-    }
-  }, [empresaId, isMounted, empresaActivaCookie]);
+    setSucursalActivaUsuario(nuevaSuc || null, usuarioIdRef.current).catch(() => {});
 
-  // 2. Cargar ítems cuando cambia Empresa y Sucursal
-  useEffect(() => {
-    if (!isMounted) return;
-
-    if (empresaId && sucursalId) {
-      // Si coincide con los valores iniciales de la cookie, no duplicamos la carga en el mount
-      if (empresaId === empresaActivaCookie && sucursalId === String(sucursalesIniciales[0]?.id || "")) {
-        return;
-      }
-      cargarItems();
+    if (empresaId && nuevaSuc) {
+      await cargarItems(empresaId, nuevaSuc);
     } else {
       setItems([]);
     }
-  }, [empresaId, sucursalId, isMounted, empresaActivaCookie, sucursalesIniciales]);
-
-  async function cargarItems() {
-    if (!empresaId || !sucursalId) return;
-    setLoadingTabla(true);
-    const res = await obtenerItemsPorEmpresaYSucursal(empresaId, sucursalId);
-    if (res.success) {
-      setItems(res.data);
-    } else {
-      setErrorMsg(res.error);
-    }
-    setLoadingTabla(false);
-  }
+  };
 
   const abrirModalNuevo = () => {
     setFormData(INITIAL_FORM);
@@ -172,7 +440,7 @@ export default function ItemForm({
     if (res.error) {
       alert(res.error);
     } else {
-      await cargarItems();
+      await cargarItems(empresaId, sucursalId);
     }
   };
 
@@ -183,12 +451,14 @@ export default function ItemForm({
     if (res.error) {
       alert(res.error);
     } else {
-      await cargarItems();
+      await cargarItems(empresaId, sucursalId);
     }
   };
 
   const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+    >
   ) => {
     const { name, value, type } = e.target;
 
@@ -226,7 +496,7 @@ export default function ItemForm({
       porcentaje_iva: parseFloat(formData.porcentaje_iva) || 0,
       aplica_descuento: formData.aplica_descuento,
       porcentaje_descuento_max: parseFloat(formData.porcentaje_descuento_max) || 0,
-      estado: true, // Se obliga a guardar como activo
+      estado: true,
     });
 
     setLoading(false);
@@ -241,7 +511,7 @@ export default function ItemForm({
       );
       setTimeout(() => {
         setMostrarModal(false);
-        cargarItems();
+        cargarItems(empresaId, sucursalId);
       }, 1000);
     }
   };
@@ -265,15 +535,21 @@ export default function ItemForm({
           </label>
           <select
             value={empresaId}
-            onChange={(e) => setEmpresaId(e.target.value)}
+            onChange={(e) => handleCambioEmpresa(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 font-medium outline-none focus:ring-2 focus:ring-blue-500"
           >
-            <option value="">-- Seleccione Empresa --</option>
-            {empresasIniciales.map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                {emp.razon_social}
-              </option>
-            ))}
+            {loadingEmpresas ? (
+              <option value="">-- Cargando empresas --</option>
+            ) : (
+              <>
+                <option value="">-- Seleccione Empresa --</option>
+                {empresas.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.razon_social}
+                  </option>
+                ))}
+              </>
+            )}
           </select>
         </div>
 
@@ -284,7 +560,7 @@ export default function ItemForm({
           <select
             value={sucursalId}
             disabled={!empresaId}
-            onChange={(e) => setSucursalId(e.target.value)}
+            onChange={(e) => handleCambioSucursal(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 font-medium outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
           >
             <option value="">
@@ -373,7 +649,6 @@ export default function ItemForm({
                       </td>
                       <td className="p-3 text-center">
                         <div className="flex items-center justify-center gap-2">
-                          {/* Modificar */}
                           <button
                             onClick={() => abrirModalEditar(item)}
                             title="Modificar"
@@ -381,7 +656,6 @@ export default function ItemForm({
                           >
                             ✏️
                           </button>
-                          {/* Inactivar / Activar */}
                           <button
                             onClick={() => handleInactivarToggle(item)}
                             title={item.estado ? "Inactivar" : "Activar"}
@@ -389,7 +663,6 @@ export default function ItemForm({
                           >
                             {item.estado ? "🚫" : "✅"}
                           </button>
-                          {/* Eliminar */}
                           <button
                             onClick={() => handleEliminarItem(item)}
                             title="Eliminar"

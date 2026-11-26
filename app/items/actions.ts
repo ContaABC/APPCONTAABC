@@ -4,7 +4,12 @@ import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let supabaseAdminInstance: ReturnType<typeof createClient<any>> | null = null;
+
 function getSupabaseAdmin() {
+  if (supabaseAdminInstance) return supabaseAdminInstance;
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey) {
@@ -12,16 +17,29 @@ function getSupabaseAdmin() {
       "Faltan variables de entorno NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY."
     );
   }
-  return createClient(supabaseUrl, serviceRoleKey, {
+
+  supabaseAdminInstance = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  return supabaseAdminInstance;
 }
 
-async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
-  if (empresaId) return Number(empresaId);
+async function resolverEmpresaId(
+  empresaId?: number | string | null
+): Promise<number> {
+  if (
+    empresaId !== null &&
+    empresaId !== undefined &&
+    String(empresaId).trim() !== ""
+  ) {
+    const num = Number(empresaId);
+    return Number.isNaN(num) ? 0 : num;
+  }
   const cookieStore = await cookies();
   const idCookie = cookieStore.get("empresa_activa")?.value;
-  return Number(idCookie || 0);
+  const numCookie = Number(idCookie || 0);
+  return Number.isNaN(numCookie) ? 0 : numCookie;
 }
 
 export interface ItemFacturacionInput {
@@ -46,7 +64,7 @@ export async function obtenerEmpresas() {
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from("empresas")
-      .select("*")
+      .select("id, razon_social, nombre_comercial, nit_identificacion, dv")
       .order("razon_social", { ascending: true });
 
     if (error) throw new Error(error.message);
@@ -62,13 +80,13 @@ export async function obtenerEmpresas() {
  */
 export async function obtenerSucursales(empresaId?: number | string | null) {
   try {
-    const supabase = getSupabaseAdmin();
     const parsedEmpresaId = await resolverEmpresaId(empresaId);
     if (!parsedEmpresaId) return { success: true, data: [], error: null };
 
+    const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from("sucursales")
-      .select("*")
+      .select("id, empresa_id, nombre, nombre_sucursal, codigo_sucursal")
       .eq("empresa_id", parsedEmpresaId)
       .order("codigo_sucursal", { ascending: true });
 
@@ -88,17 +106,24 @@ export async function obtenerItemsPorEmpresaYSucursal(
   sucursalId?: number | string | null
 ) {
   try {
-    const supabase = getSupabaseAdmin();
     const parsedEmpresaId = await resolverEmpresaId(empresaId);
-    const parsedSucursalId = sucursalId ? Number(sucursalId) : null;
+    const parsedSucursalId =
+      sucursalId !== null &&
+      sucursalId !== undefined &&
+      String(sucursalId).trim() !== ""
+        ? Number(sucursalId)
+        : 0;
 
-    if (!parsedEmpresaId || !parsedSucursalId) {
+    if (!parsedEmpresaId || !parsedSucursalId || Number.isNaN(parsedSucursalId)) {
       return { success: true, data: [], error: null };
     }
 
+    const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from("items_facturacion")
-      .select("*")
+      .select(
+        "id, empresa_id, sucursal_id, codigo, nombre, descripcion, precio_venta, porcentaje_iva, aplica_descuento, porcentaje_descuento_max, estado"
+      )
       .eq("empresa_id", parsedEmpresaId)
       .eq("sucursal_id", parsedSucursalId)
       .order("nombre", { ascending: true });
@@ -116,8 +141,6 @@ export async function obtenerItemsPorEmpresaYSucursal(
  */
 export async function guardarItemFacturacion(data: ItemFacturacionInput) {
   try {
-    const supabase = getSupabaseAdmin();
-
     const parsedEmpresaId = await resolverEmpresaId(data.empresa_id);
     const parsedSucursalId = data.sucursal_id ? Number(data.sucursal_id) : 0;
 
@@ -133,6 +156,7 @@ export async function guardarItemFacturacion(data: ItemFacturacionInput) {
       return { error: "El precio de venta no puede ser negativo." };
     }
 
+    const supabase = getSupabaseAdmin();
     const payload = {
       empresa_id: parsedEmpresaId,
       sucursal_id: parsedSucursalId,
@@ -142,25 +166,29 @@ export async function guardarItemFacturacion(data: ItemFacturacionInput) {
       precio_venta: data.precio_venta,
       porcentaje_iva: data.porcentaje_iva ?? 0,
       aplica_descuento: data.aplica_descuento,
-      porcentaje_descuento_max: data.aplica_descuento ? data.porcentaje_descuento_max : 0,
+      porcentaje_descuento_max: data.aplica_descuento
+        ? data.porcentaje_descuento_max
+        : 0,
       estado: data.estado ?? true,
     };
 
-    let query;
-    if (data.id) {
-      query = supabase
-        .from("items_facturacion")
-        .update(payload)
-        .eq("id", data.id)
-        .select()
-        .single();
-    } else {
-      query = supabase
-        .from("items_facturacion")
-        .insert([payload])
-        .select()
-        .single();
-    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tabla = supabase.from("items_facturacion") as any;
+
+    const query = data.id
+      ? tabla
+          .update(payload)
+          .eq("id", data.id)
+          .select(
+            "id, empresa_id, sucursal_id, codigo, nombre, descripcion, precio_venta, porcentaje_iva, aplica_descuento, porcentaje_descuento_max, estado"
+          )
+          .single()
+      : tabla
+          .insert([payload])
+          .select(
+            "id, empresa_id, sucursal_id, codigo, nombre, descripcion, precio_venta, porcentaje_iva, aplica_descuento, porcentaje_descuento_max, estado"
+          )
+          .single();
 
     const { data: itemGuardado, error } = await query;
 
@@ -172,7 +200,8 @@ export async function guardarItemFacturacion(data: ItemFacturacionInput) {
     revalidatePath("/items");
     return { success: true, item: itemGuardado };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : "Error interno del servidor.";
+    const errorMsg =
+      err instanceof Error ? err.message : "Error interno del servidor.";
     return { error: errorMsg };
   }
 }
@@ -180,13 +209,15 @@ export async function guardarItemFacturacion(data: ItemFacturacionInput) {
 /**
  * Cambiar estado (Inactivar) un ítem
  */
-export async function cambiarEstadoItemFacturacion(id: string | number, estado: boolean) {
+export async function cambiarEstadoItemFacturacion(
+  id: string | number,
+  estado: boolean
+) {
   try {
     const supabase = getSupabaseAdmin();
-    const { error } = await supabase
-      .from("items_facturacion")
-      .update({ estado })
-      .eq("id", id);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tabla = supabase.from("items_facturacion") as any;
+    const { error } = await tabla.update({ estado }).eq("id", id);
 
     if (error) {
       return { error: `No se pudo actualizar el estado: ${error.message}` };
@@ -195,7 +226,8 @@ export async function cambiarEstadoItemFacturacion(id: string | number, estado: 
     revalidatePath("/items");
     return { success: true };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : "Error interno del servidor.";
+    const errorMsg =
+      err instanceof Error ? err.message : "Error interno del servidor.";
     return { error: errorMsg };
   }
 }
@@ -234,7 +266,8 @@ export async function eliminarItemFacturacion(id: string | number) {
     revalidatePath("/items");
     return { success: true };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : "Error interno del servidor.";
+    const errorMsg =
+      err instanceof Error ? err.message : "Error interno del servidor.";
     return { error: errorMsg };
   }
 }

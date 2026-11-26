@@ -3,9 +3,33 @@
 import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
+interface AuxiliarRow {
+  id: number | string;
+  codigo_auxiliar?: string;
+  nombre?: string;
+  tipo_entidad?: string | null;
+}
+
+interface DetalleDocumentoInput {
+  concepto_auxiliar_id: number;
+  tercero_id: number | null;
+  cuenta_financiera_id: number | null;
+  titulo_valor_id: number | null;
+  debito: number;
+  credito: number;
+}
+
+interface RpcDocumentoResponse {
+  success?: boolean;
+  message?: string;
+  error?: string;
+}
+
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error("Faltan variables de entorno de Supabase.");
@@ -16,15 +40,28 @@ function getSupabaseAdmin() {
   });
 }
 
-async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
-  if (empresaId) return Number(empresaId);
+async function resolverEmpresaId(
+  empresaId?: number | string | null
+): Promise<number> {
+  if (
+    empresaId !== undefined &&
+    empresaId !== null &&
+    String(empresaId).trim() !== ""
+  ) {
+    const parsed = Number(empresaId);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
   const cookieStore = await cookies();
   const idCookie = cookieStore.get("empresa_activa")?.value;
-  return Number(idCookie || 0);
+  const parsedCookie = Number(idCookie || 0);
+  return Number.isNaN(parsedCookie) ? 0 : parsedCookie;
 }
 
 // Obtener clases de documentos según tipo
-export async function obtenerClasesDocumentosPorTipo(empresaId?: number | string | null, afectaCajaBancos?: boolean) {
+export async function obtenerClasesDocumentosPorTipo(
+  empresaId?: number | string | null,
+  afectaCajaBancos?: boolean
+) {
   const supabase = getSupabaseAdmin();
   try {
     const idEmpresa = await resolverEmpresaId(empresaId);
@@ -39,18 +76,26 @@ export async function obtenerClasesDocumentosPorTipo(empresaId?: number | string
       query = query.eq("afecta_caja_bancos", afectaCajaBancos);
     }
 
-    const { data, error } = await query.order("codigo_clase", { ascending: true });
+    const { data, error } = await query.order("codigo_clase", {
+      ascending: true,
+    });
 
     if (error) throw error;
     return { success: true, data: data || [] };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener clases de documentos.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener clases de documentos.";
     return { success: false, error: mensaje, data: [] };
   }
 }
 
 // Obtener conceptos auxiliares (Cuentas_Bancarias y Cuentas de Ingresos)
-export async function obtenerAuxiliaresParaDocumentos(empresaId?: number | string | null, soloBancarios: boolean = false) {
+export async function obtenerAuxiliaresParaDocumentos(
+  empresaId?: number | string | null,
+  soloBancarios: boolean = false
+) {
   const supabase = getSupabaseAdmin();
   try {
     const idEmpresa = await resolverEmpresaId(empresaId);
@@ -64,24 +109,33 @@ export async function obtenerAuxiliaresParaDocumentos(empresaId?: number | strin
 
     if (error) throw error;
 
-    let filtrados = data || [];
+    let filtrados = (data || []) as AuxiliarRow[];
     if (soloBancarios) {
-      filtrados = filtrados.filter((x: any) => {
-        const tipo = (x.tipo_entidad || "").trim().toLowerCase();
-        return tipo.includes("bancarias") || tipo.includes("ingresos") || tipo.includes("cuenta_bancaria");
+      filtrados = filtrados.filter((x) => {
+        const tipo = String(x.tipo_entidad || "")
+          .trim()
+          .toLowerCase();
+        return (
+          tipo.includes("bancarias") ||
+          tipo.includes("ingresos") ||
+          tipo.includes("cuenta_bancaria")
+        );
       });
     }
 
-    const mapeados = filtrados.map((x: any) => ({
+    const mapeados = filtrados.map((x) => ({
       id: x.id,
-      codigo: x.codigo_auxiliar,
-      nombre: x.nombre,
-      tipo_entidad: x.tipo_entidad
+      codigo: x.codigo_auxiliar || "",
+      nombre: x.nombre || "",
+      tipo_entidad: x.tipo_entidad || "",
     }));
 
     return { success: true, data: mapeados };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener auxiliares.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener auxiliares.";
     return { success: false, error: mensaje, data: [] };
   }
 }
@@ -102,18 +156,26 @@ export async function obtenerTerceros(empresaId?: number | string | null) {
     if (error) throw error;
     return { success: true, data: data || [] };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener terceros.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener terceros.";
     return { success: false, error: mensaje, data: [] };
   }
 }
 
 // Obtener Títulos Valores (Cheques) cruzando el auxiliar seleccionado con la cuenta financiera real
-export async function obtenerTitulosValoresPorCuenta(empresaId?: number | string | null, conceptoAuxiliarId?: number | string | null) {
+export async function obtenerTitulosValoresPorCuenta(
+  empresaId?: number | string | null,
+  conceptoAuxiliarId?: number | string | null
+) {
   const supabase = getSupabaseAdmin();
   try {
     const idEmpresa = await resolverEmpresaId(empresaId);
     const parsedAuxId = conceptoAuxiliarId ? Number(conceptoAuxiliarId) : null;
-    if (!idEmpresa || !parsedAuxId) return { success: true, data: [] };
+    if (!idEmpresa || !parsedAuxId || Number.isNaN(parsedAuxId)) {
+      return { success: true, data: [] };
+    }
 
     // 1. Buscar el id de la cuenta financiera asociado a este concepto auxiliar
     const { data: cuentaFin, error: errCta } = await supabase
@@ -131,7 +193,9 @@ export async function obtenerTitulosValoresPorCuenta(empresaId?: number | string
     // 2. Consultar los cheques en titulos_valores cruzando con la cuenta_financiera_id real
     const { data, error } = await supabase
       .from("titulos_valores")
-      .select("id, numero_titulo, monto, tipo_titulo, estado, tercero_girador_id, tercero_beneficiario_id, cuenta_financiera_id")
+      .select(
+        "id, numero_titulo, monto, tipo_titulo, estado, tercero_girador_id, tercero_beneficiario_id, cuenta_financiera_id"
+      )
       .eq("empresa_id", idEmpresa)
       .eq("cuenta_financiera_id", cuentaFinancieraIdReal)
       .in("estado", ["Consignado", "Devuelto"])
@@ -141,7 +205,10 @@ export async function obtenerTitulosValoresPorCuenta(empresaId?: number | string
 
     return { success: true, data: data || [] };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener títulos valores.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener títulos valores.";
     return { success: false, error: mensaje, data: [] };
   }
 }
@@ -155,22 +222,38 @@ export async function guardarDocumentoContable(formData: {
   fecha_contable: string;
   glosa_concepto: string;
   es_bancario: boolean;
-  detalles: Array<{
-    concepto_auxiliar_id: number;
-    tercero_id: number | null;
-    cuenta_financiera_id: number | null;
-    titulo_valor_id: number | null;
-    debito: number;
-    credito: number;
-  }>;
+  detalles: DetalleDocumentoInput[];
 }) {
   const supabase = getSupabaseAdmin();
   try {
-    const totalDebitos = formData.detalles.reduce((acc, d) => acc + Number(d.debito || 0), 0);
-    const totalCreditos = formData.detalles.reduce((acc, d) => acc + Number(d.credito || 0), 0);
+    if (!Array.isArray(formData.detalles) || formData.detalles.length === 0) {
+      return {
+        success: false,
+        error: "Debe agregar al menos una línea de detalle al comprobante.",
+      };
+    }
+
+    const totalDebitos = formData.detalles.reduce(
+      (acc, d) => acc + Number(d.debito || 0),
+      0
+    );
+    const totalCreditos = formData.detalles.reduce(
+      (acc, d) => acc + Number(d.credito || 0),
+      0
+    );
+
+    if (totalDebitos <= 0 && totalCreditos <= 0) {
+      return {
+        success: false,
+        error: "El comprobante debe tener débitos o créditos mayores a cero.",
+      };
+    }
 
     if (Math.abs(totalDebitos - totalCreditos) > 0.01) {
-      return { success: false, error: `El comprobante no está en sumas iguales. Débitos: ${totalDebitos} vs Créditos: ${totalCreditos}` };
+      return {
+        success: false,
+        error: `El comprobante no está en sumas iguales. Débitos: ${totalDebitos} vs Créditos: ${totalCreditos}`,
+      };
     }
 
     // Invocamos la función RPC atómica en Postgres
@@ -182,20 +265,33 @@ export async function guardarDocumentoContable(formData: {
       p_fecha_contable: formData.fecha_contable,
       p_glosa_concepto: formData.glosa_concepto,
       p_es_bancario: Boolean(formData.es_bancario),
-      p_detalles: formData.detalles
+      p_detalles: formData.detalles,
     });
 
     if (error) {
-      return { success: false, error: "Error en la transacción del servidor: " + error.message };
+      return {
+        success: false,
+        error: "Error en la transacción del servidor: " + error.message,
+      };
     }
 
-    if (!data.success) {
-      return { success: false, error: data.error || "Error desconocido al procesar el documento." };
+    const respuestaRpc = (data || {}) as RpcDocumentoResponse;
+    if (!respuestaRpc.success) {
+      return {
+        success: false,
+        error:
+          respuestaRpc.error ||
+          "Error desconocido al procesar el documento.",
+      };
     }
 
-    return { success: true, message: data.message };
+    return {
+      success: true,
+      message: respuestaRpc.message || "Documento guardado correctamente.",
+    };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error crítico de conexión.";
+    const mensaje =
+      err instanceof Error ? err.message : "Error crítico de conexión.";
     return { success: false, error: mensaje };
   }
 }

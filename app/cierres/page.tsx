@@ -1,8 +1,15 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
 import {
-  obtenerEmpresasParaCierre,
+  getEmpresasPermitidas,
+  getEmpresaActivaUsuario,
+  setEmpresaActivaUsuario,
+  type Empresa as EmpresaPermitida,
+} from "@/app/actions/accionesEmpresas";
+import {
   obtenerSucursalesPorEmpresa,
   obtenerClasesDocumentoEmpresa,
   actualizarEstadoClaseDocumento,
@@ -11,706 +18,1018 @@ import {
   ejecutarCierreServer,
   procesarCierreAnualServer,
   obtenerPeriodosAperturas,
-  habilitarPeriodoAperturaServer,
   bloquearPeriodoAperturaServer,
   desbloquearPeriodoAperturaServer,
+  habilitarPeriodoAperturaServer,
   obtenerCuentasAuxiliaresPorElemento,
 } from "./actions";
+import {
+  Lock,
+  Unlock,
+  Calendar,
+  FileSpreadsheet,
+  Layers,
+  Eye,
+  CheckCircle2,
+  AlertTriangle,
+} from "lucide-react";
 
-const MODULOS_DISPONIBLES = [
-  "CONTABILIDAD",
-  "NOMINA",
-  "ACTIVOS FIJOS",
-  "INVENTARIOS",
-  "CARTERA",
-  "TESORERIA",
-];
+type Empresa = EmpresaPermitida & {
+  nombre?: string;
+  nombre_comercial?: string;
+  nit_identificacion?: string;
+  dv?: string;
+};
 
-export default function ModuloCierresPage() {
-  const [isMounted, setIsMounted] = useState(false);
-  const [pestanaActiva, setPestanaActiva] = useState<"mensual" | "anual" | "aperturas">("mensual");
+interface SucursalItem {
+  id: number | string;
+  nombre?: string;
+  codigo_sucursal?: string;
+  ciudad?: string;
+}
 
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [empresaId, setEmpresaId] = useState<any>("");
-  const [sucursales, setSucursales] = useState<any[]>([]);
-  const [sucursalId, setSucursalId] = useState<any>("");
-  
-  // Mensual
-  const [moduloSeleccionado, setModuloSeleccionado] = useState<string>("CONTABILIDAD");
-  const [anioSeleccionado, setAnioSeleccionado] = useState<number>(new Date().getFullYear());
-  const [mesSeleccionado, setMesSeleccionado] = useState<number>(new Date().getMonth() + 1);
-  const [incluirCierreDocumentos, setIncluirCierreDocumentos] = useState<boolean>(false);
-  const [clasesDocumento, setClasesDocumento] = useState<any[]>([]);
+interface ClaseDocItem {
+  id: number;
+  codigo_clase?: string;
+  nombre_clase?: string;
+  estado?: string;
+  es_sistema?: boolean;
+}
 
-  // Anual
-  const [anioAnualSeleccionado, setAnioAnualSeleccionado] = useState<number>(new Date().getFullYear());
-  const [cuentaUtilidadId, setCuentaUtilidadId] = useState<string>("");
+interface CuentaAuxItem {
+  id: number;
+  codigo_auxiliar?: string;
+  nombre?: string;
+  elemento?: string;
+}
+
+interface PeriodoAperturaItem {
+  anio: number;
+  mes: number;
+  periodo: string;
+  estado: string;
+  esCierreContable: boolean;
+}
+
+interface DetalleSimulacionItem {
+  tipo: string;
+  cuenta: string;
+  nombre: string;
+  saldo: number;
+  concepto_id?: number;
+}
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+function obtenerNombreEmpresa(emp: Empresa): string {
+  return String(
+    emp.razon_social || emp.nombre_comercial || emp.nombre || "Empresa"
+  );
+}
+
+function obtenerUsuarioIdDesdeLocalStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  for (const clave of ["usuario_id", "user_id", "uid"]) {
+    const val = localStorage.getItem(clave);
+    if (val && val.trim()) return val.trim();
+  }
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.includes("auth-token") || k.includes("supabase")) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const idEncontrado =
+          parsed?.user?.id ||
+          parsed?.currentSession?.user?.id ||
+          parsed?.session?.user?.id ||
+          null;
+        if (idEncontrado && typeof idEncontrado === "string") {
+          return idEncontrado;
+        }
+      } catch {
+        // Ignorar
+      }
+    }
+  }
+  return null;
+}
+
+function obtenerRangoMesActual(): { desde: string; hasta: string } {
+  const hoy = new Date();
+  const y = hoy.getFullYear();
+  const m = hoy.getMonth();
+  const desde = new Date(y, m, 1).toISOString().split("T")[0];
+  const hasta = new Date(y, m + 1, 0).toISOString().split("T")[0];
+  return { desde, hasta };
+}
+
+export default function CierresContablesPage() {
+  const router = useRouter();
+  const usuarioIdRef = useRef<string | null>(null);
+  const inicializadoRef = useRef<boolean>(false);
+
+  const rangoMes = obtenerRangoMesActual();
+  const anioActual = new Date().getFullYear();
+
+  const [isMounted, setIsMounted] = useState<boolean>(false);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [empresaId, setEmpresaId] = useState<string>("");
+
+  const [sucursales, setSucursales] = useState<SucursalItem[]>([]);
+  const [sucursalId, setSucursalId] = useState<string>("");
+
+  const [pestanaActiva, setPestanaActiva] = useState<
+    "MENSUAL" | "ANUAL" | "PERIODOS" | "CLASES"
+  >("MENSUAL");
+
+  const [moduloCierre, setModuloCierre] = useState<string>("CONTABILIDAD");
+  const [subtipoProceso, setSubtipoProceso] = useState<string>("CIERRE_MENSUAL");
+  const [periodoDesde, setPeriodoDesde] = useState<string>(rangoMes.desde);
+  const [periodoHasta, setPeriodoHasta] = useState<string>(rangoMes.hasta);
+  const [ultimoCierreTexto, setUltimoCierreTexto] = useState<string>("");
+  const [ejecutandoMensual, setEjecutandoMensual] = useState<boolean>(false);
+
+  const [anioCierre, setAnioCierre] = useState<number>(anioActual - 1);
+  const [clasesDocumento, setClasesDocumento] = useState<ClaseDocItem[]>([]);
   const [claseDocumentoId, setClaseDocumentoId] = useState<string>("");
-  const [cuentasPatrimonio, setCuentasPatrimonio] = useState<any[]>([]);
-  const [datosSimulacionAnual, setDatosSimulacionAnual] = useState<any[] | null>(null);
+  const [cuentasPatrimonio, setCuentasPatrimonio] = useState<CuentaAuxItem[]>(
+    []
+  );
+  const [cuentaPatrimonioId, setCuentaPatrimonioId] = useState<string>("");
+  const [detallesSimulacion, setDetallesSimulacion] = useState<
+    DetalleSimulacionItem[]
+  >([]);
+  const [procesandoAnual, setProcesandoAnual] = useState<boolean>(false);
 
-  // Aperturas
-  const [periodosApertura, setPeriodosApertura] = useState<any[]>([]);
-  const [siguientePeriodoApertura, setSiguientePeriodoApertura] = useState<{ anio: number; mes: number }>({
-    anio: new Date().getFullYear(),
-    mes: new Date().getMonth() + 1,
-  });
+  const [periodos, setPeriodos] = useState<PeriodoAperturaItem[]>([]);
+  const [cargandoPeriodos, setCargandoPeriodos] = useState<boolean>(false);
+  const [nuevoAnioHabilitar, setNuevoAnioHabilitar] =
+    useState<number>(anioActual);
+  const [nuevoMesHabilitar, setNuevoMesHabilitar] = useState<number>(
+    new Date().getMonth() + 1
+  );
 
-  const [guardando, setGuardando] = useState<boolean>(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [mensaje, setMensaje] = useState<{
+    tipo: "success" | "error";
+    texto: string;
+  } | null>(null);
+
+  const resolverUsuarioId = useCallback(async (): Promise<string | null> => {
+    if (usuarioIdRef.current) return usuarioIdRef.current;
+    try {
+      const { data } = await supabase.auth.getUser();
+      if (data?.user?.id) {
+        usuarioIdRef.current = data.user.id;
+        return data.user.id;
+      }
+    } catch {
+      // Ignorar
+    }
+    const localUid = obtenerUsuarioIdDesdeLocalStorage();
+    if (localUid) {
+      usuarioIdRef.current = localUid;
+    }
+    return localUid;
+  }, []);
+
+  const persistirEmpresaActiva = useCallback(
+    async (empVal: string) => {
+      if (!empVal) return;
+      const uid = await resolverUsuarioId();
+      const empNormalizado = Number.isNaN(Number(empVal))
+        ? empVal
+        : Number(empVal);
+
+      try {
+        await setEmpresaActivaUsuario(empVal, uid, null);
+      } catch {
+        // Continuar
+      }
+
+      if (uid) {
+        await supabase
+          .from("usuarios_perfiles")
+          .update({ empresa_activa: empNormalizado })
+          .eq("id", uid);
+      }
+    },
+    [resolverUsuarioId]
+  );
 
   useEffect(() => {
     setIsMounted(true);
   }, []);
 
-  // Cargar empresas al iniciar
   useEffect(() => {
-    if (!isMounted) return;
+    if (!isMounted || inicializadoRef.current) return;
+    inicializadoRef.current = true;
+    let cancelado = false;
+
     async function init() {
-      const res = await obtenerEmpresasParaCierre();
-      if (res.success && res.data && res.data.length > 0) {
-        setEmpresas(res.data);
-        setEmpresaId(res.data[0].id);
+      try {
+        const uid = await resolverUsuarioId();
+        const permitidas = await getEmpresasPermitidas(uid);
+        if (cancelado) return;
+
+        const listaEmpresas: Empresa[] = Array.isArray(permitidas)
+          ? (permitidas as Empresa[])
+          : [];
+        setEmpresas(listaEmpresas);
+
+        if (listaEmpresas.length > 0) {
+          let empBD: string | null = null;
+          try {
+            const valBD = await getEmpresaActivaUsuario(uid);
+            if (
+              valBD !== null &&
+              valBD !== undefined &&
+              String(valBD).trim() !== ""
+            ) {
+              empBD = String(valBD).trim();
+            }
+          } catch {
+            // Ignorar
+          }
+
+          const empCookie = getCookieValue("empresa_activa");
+          const empLocal =
+            typeof window !== "undefined"
+              ? localStorage.getItem("empresa_activa") ||
+                localStorage.getItem("empresa_id")
+              : null;
+
+          const candidata = empBD || empCookie || empLocal;
+          let empresaIdAUsar = String(listaEmpresas[0].id);
+
+          if (
+            candidata &&
+            listaEmpresas.some((e) => String(e.id) === String(candidata))
+          ) {
+            empresaIdAUsar = String(candidata);
+          }
+
+          const empElegida =
+            listaEmpresas.find((e) => String(e.id) === empresaIdAUsar) ||
+            listaEmpresas[0];
+
+          if (typeof window !== "undefined") {
+            localStorage.setItem("empresa_activa", empresaIdAUsar);
+            localStorage.setItem("empresa_id", empresaIdAUsar);
+            localStorage.setItem(
+              "empresa_activa_nombre",
+              obtenerNombreEmpresa(empElegida)
+            );
+          }
+          document.cookie = `empresa_activa=${encodeURIComponent(
+            empresaIdAUsar
+          )}; path=/; max-age=86400; SameSite=Lax`;
+
+          setEmpresaId(empresaIdAUsar);
+        }
+      } catch (err) {
+        console.error("Error inicializando cierres contables:", err);
       }
     }
+
     init();
-  }, [isMounted]);
+    return () => {
+      cancelado = true;
+    };
+  }, [isMounted, resolverUsuarioId]);
 
-  // Cada vez que cambia la empresa: recargar sucursales, clases, cuentas y resetear simulaciones
+  const handleCambioEmpresa = async (nuevoId: string) => {
+    setEmpresaId(nuevoId);
+    setSucursalId("");
+    setDetallesSimulacion([]);
+    setMensaje(null);
+
+    if (typeof window !== "undefined" && nuevoId) {
+      const empSel = empresas.find((e) => String(e.id) === String(nuevoId));
+      localStorage.setItem("empresa_activa", nuevoId);
+      localStorage.setItem("empresa_id", nuevoId);
+      if (empSel) {
+        localStorage.setItem(
+          "empresa_activa_nombre",
+          obtenerNombreEmpresa(empSel)
+        );
+      }
+      document.cookie = `empresa_activa=${encodeURIComponent(
+        nuevoId
+      )}; path=/; max-age=86400; SameSite=Lax`;
+    }
+
+    await persistirEmpresaActiva(nuevoId);
+  };
+
+  const cargarPeriodos = useCallback(async (empId: string, sucId: string) => {
+    if (!empId) return;
+    setCargandoPeriodos(true);
+    const res = await obtenerPeriodosAperturas(
+      Number(empId),
+      Number(sucId || 0)
+    );
+    setCargandoPeriodos(false);
+    if (res.success) {
+      setPeriodos((res.data || []) as PeriodoAperturaItem[]);
+    }
+  }, []);
+
+  const cargarUltimoCierre = useCallback(
+    async (empId: string, sucId: string, mod: string) => {
+      if (!empId) return;
+      const res = await obtenerUltimoCierrePeriodo(
+        Number(empId),
+        Number(sucId || 0),
+        mod
+      );
+      if (res.success && res.data) {
+        setUltimoCierreTexto(
+          `Último cierre ${mod}: ${res.data.periodo_desde} al ${res.data.periodo_hasta} (${res.data.estado})`
+        );
+      } else {
+        setUltimoCierreTexto(`Sin cierres previos registrados en ${mod}.`);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
-    if (!empresaId || !isMounted) return;
-    async function cargarDatosEmpresa() {
-      setSucursalId("");
-      setDatosSimulacionAnual(null);
-      setErrorMsg(null);
-      setSuccessMsg(null);
+    if (!isMounted || !empresaId) return;
 
-      const [resSuc, resDoc, resPatrimonio] = await Promise.all([
-        obtenerSucursalesPorEmpresa(Number(empresaId)),
-        obtenerClasesDocumentoEmpresa(Number(empresaId)),
-        obtenerCuentasAuxiliaresPorElemento(Number(empresaId), "Patrimonio"),
+    async function cargarDatos() {
+      const [resSuc, resClases, resPatrimonio] = await Promise.all([
+        obtenerSucursalesPorEmpresa(empresaId),
+        obtenerClasesDocumentoEmpresa(empresaId),
+        obtenerCuentasAuxiliaresPorElemento(empresaId, "Patrimonio"),
       ]);
 
-      if (resSuc.success) setSucursales(resSuc.data ?? []);
-      if (resDoc.success) setClasesDocumento(resDoc.data ?? []);
-      if (resPatrimonio.success) setCuentasPatrimonio(resPatrimonio.data ?? []);
+      const listaSuc = (resSuc.data || []) as SucursalItem[];
+      setSucursales(listaSuc);
+      const sucDefault =
+        listaSuc.find((s) => s.codigo_sucursal === "SUC-001") || listaSuc[0];
+      const sucIdInicial = sucDefault ? String(sucDefault.id) : "";
+      setSucursalId(sucIdInicial);
 
-      const empresaObj = empresas.find((e) => Number(e.id) === Number(empresaId));
-      if (empresaObj && empresaObj.fecha_inicio_operaciones) {
-        const anioOp = Number(empresaObj.fecha_inicio_operaciones.substring(0, 4));
-        setAnioAnualSeleccionado(anioOp);
-      }
+      const listaClases = (resClases.data || []) as ClaseDocItem[];
+      setClasesDocumento(listaClases);
+      setClaseDocumentoId(
+        listaClases.length > 0 ? String(listaClases[0].id) : ""
+      );
+
+      const listaPat = (resPatrimonio.data || []) as CuentaAuxItem[];
+      setCuentasPatrimonio(listaPat);
+      setCuentaPatrimonioId(listaPat.length > 0 ? String(listaPat[0].id) : "");
+
+      await Promise.all([
+        cargarUltimoCierre(empresaId, sucIdInicial, moduloCierre),
+        cargarPeriodos(empresaId, sucIdInicial),
+      ]);
     }
-    cargarDatosEmpresa();
-  }, [empresaId, isMounted]);
 
-  // Cada vez que cambia la sucursal (o empresa): limpiar simulaciones previas
+    cargarDatos();
+  }, [isMounted, empresaId, moduloCierre, cargarUltimoCierre, cargarPeriodos]);
+
   useEffect(() => {
-    if (!isMounted) return;
-    setDatosSimulacionAnual(null);
-  }, [sucursalId, isMounted]);
-
-  // Calcular período exacto para cierre mensual
-  useEffect(() => {
-    if (!empresaId || !isMounted) return;
-    async function calcularPeriodoExacto() {
-      const empresaObj = empresas.find((e) => Number(e.id) === Number(empresaId));
-      const resUltimo = await obtenerUltimoCierrePeriodo(Number(empresaId), Number(sucursalId), moduloSeleccionado);
-
-      let anioCalculado = new Date().getFullYear();
-      let mesCalculado = new Date().getMonth() + 1;
-
-      if (resUltimo.success && resUltimo.data && resUltimo.data.periodo_hasta) {
-        const partes = resUltimo.data.periodo_hasta.split("-");
-        let anio = Number(partes[0]);
-        let mes = Number(partes[1]);
-
-        mes += 1;
-        if (mes > 12) {
-          mes = 1;
-          anio += 1;
-        }
-        anioCalculado = anio;
-        mesCalculado = mes;
-      } else if (empresaObj && empresaObj.fecha_inicio_operaciones) {
-        const partes = empresaObj.fecha_inicio_operaciones.split("-");
-        anioCalculado = Number(partes[0]);
-        mesCalculado = Number(partes[1]);
-      }
-
-      setAnioSeleccionado(anioCalculado);
-      setMesSeleccionado(mesCalculado);
-    }
-    calcularPeriodoExacto();
-  }, [empresaId, sucursalId, moduloSeleccionado, empresas, isMounted]);
-
-  // Cargar aperturas cuando se selecciona la pestaña correspondiente
-  useEffect(() => {
-    if (!empresaId || pestanaActiva !== "aperturas" || !isMounted) return;
-    async function cargarAperturas() {
-      const res = await obtenerPeriodosAperturas(Number(empresaId), Number(sucursalId) || 0);
-      if (res.success) {
-        const lista = res.data || [];
-        setPeriodosApertura(lista);
-        
-        if (lista.length > 0) {
-          const ultimo = lista[0]; 
-          let nMes = ultimo.mes + 1;
-          let nAnio = ultimo.anio;
-          if (nMes > 12) {
-            nMes = 1;
-            nAnio += 1;
-          }
-          setSiguientePeriodoApertura({ anio: nAnio, mes: nMes });
-        }
-      }
-    }
-    cargarAperturas();
-  }, [empresaId, sucursalId, pestanaActiva, isMounted]);
-
-  const handleHabilitarNuevoPeriodo = async () => {
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setGuardando(true);
-
-    try {
-      const res = await habilitarPeriodoAperturaServer({
-        empresaId: Number(empresaId),
-        sucursalId: Number(sucursalId) || 0,
-        anio: siguientePeriodoApertura.anio,
-        mes: siguientePeriodoApertura.mes,
-      });
-
-      if (!res || res.success === false) {
-        throw new Error(res?.error || "Error al habilitar el período.");
-      }
-
-      setSuccessMsg(res.mensaje ?? "Período habilitado con éxito.");
-
-      let nuevoMes = siguientePeriodoApertura.mes + 1;
-      let nuevoAnio = siguientePeriodoApertura.anio;
-      if (nuevoMes > 12) {
-        nuevoMes = 1;
-        nuevoAnio += 1;
-      }
-      setSiguientePeriodoApertura({ anio: nuevoAnio, mes: nuevoMes });
-      
-      const resAperturas = await obtenerPeriodosAperturas(Number(empresaId), Number(sucursalId) || 0);
-      if (resAperturas.success) {
-        setPeriodosApertura(resAperturas.data || []);
-      }
-    } catch (err: unknown) {
-      const mensaje = err instanceof Error ? err.message : "Error desconocido.";
-      setErrorMsg(mensaje);
-    } finally {
-      setGuardando(false);
-    }
-  };
-
-  const handleBloquearPeriodo = async (periodoDesde: string) => {
-    if (!confirm("¿Estás seguro de bloquear/cerrar este período de apertura? Se impedirá la creación de documentos en él.")) return;
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    const res = await bloquearPeriodoAperturaServer({
-      empresaId: Number(empresaId),
-      sucursalId: Number(sucursalId) || 0,
-      periodoDesde,
-    });
-
-    if (res.success) {
-      setSuccessMsg(res.mensaje ?? "Período bloqueado con éxito.");
-      const resAperturas = await obtenerPeriodosAperturas(Number(empresaId), Number(sucursalId) || 0);
-      if (resAperturas.success) setPeriodosApertura(resAperturas.data || []);
-    } else {
-      setErrorMsg(res.error || "Error al bloquear.");
-    }
-  };
-
-  const handleDesbloquearPeriodo = async (periodoDesde: string) => {
-    if (!confirm("¿Estás seguro de desbloquear este período de apertura? Se habilitará nuevamente para la creación de documentos.")) return;
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    const res = await desbloquearPeriodoAperturaServer({
-      empresaId: Number(empresaId),
-      sucursalId: Number(sucursalId) || 0,
-      periodoDesde,
-    });
-
-    if (res.success) {
-      setSuccessMsg(res.mensaje ?? "Período desbloqueado con éxito.");
-      const resAperturas = await obtenerPeriodosAperturas(Number(empresaId), Number(sucursalId) || 0);
-      if (resAperturas.success) setPeriodosApertura(resAperturas.data || []);
-    } else {
-      setErrorMsg(res.error || "Error al desbloquear.");
-    }
-  };
-
-  const handleSimularCierreAnual = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setGuardando(true);
-    setDatosSimulacionAnual(null);
-
-    try {
-      const res = await procesarCierreAnualServer({
-        empresaId: Number(empresaId),
-        sucursalId: Number(sucursalId) || 0,
-        anio: Number(anioAnualSeleccionado),
-        cuentaPatrimonioId: cuentaUtilidadId ? Number(cuentaUtilidadId) : undefined,
-        claseDocumentoId: claseDocumentoId ? Number(claseDocumentoId) : undefined,
-        soloSimular: true,
-      });
-
-      if (!res || res.success === false) {
-        throw new Error(res?.error || "Error al simular el cierre anual.");
-      }
-
-      setSuccessMsg(res.mensaje ?? null);
-      setDatosSimulacionAnual(res.detalles || []);
-    } catch (err: unknown) {
-      const mensaje = err instanceof Error ? err.message : "Ocurrió un error desconocido.";
-      setErrorMsg(mensaje);
-    } finally {
-      setGuardando(false);
-    }
-  };
-
-  const handleGrabarCierreAnual = async () => {
-    if (!confirm("¿Está seguro de grabar el comprobante de Cierre Anual (Mes 13)? Esta acción cerrará fiscalmente el año.")) return;
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setGuardando(true);
-
-    try {
-      const res = await procesarCierreAnualServer({
-        empresaId: Number(empresaId),
-        sucursalId: Number(sucursalId) || 0,
-        anio: Number(anioAnualSeleccionado),
-        cuentaPatrimonioId: Number(cuentaUtilidadId),
-        claseDocumentoId: Number(claseDocumentoId),
-        soloSimular: false,
-      });
-
-      if (!res || res.success === false) {
-        throw new Error(res?.error || "Error al grabar el cierre anual.");
-      }
-
-      setSuccessMsg(res.mensaje ?? null);
-      setDatosSimulacionAnual(null);
-    } catch (err: unknown) {
-      const mensaje = err instanceof Error ? err.message : "Ocurrió un error desconocido.";
-      setErrorMsg(mensaje);
-    } finally {
-      setGuardando(false);
-    }
-  };
-
-  const handleToggleEstadoClase = async (claseId: number, estadoActual: string) => {
-    const nuevoEstado = estadoActual === "Inactiva" ? "Activa" : "Inactiva";
-    const res = await actualizarEstadoClaseDocumento(claseId, nuevoEstado);
-    if (res.success) {
-      setClasesDocumento((prev) => prev.map((c) => (c.id === claseId ? { ...c, estado: nuevoEstado } : c)));
-    } else {
-      alert("Error al actualizar la clase de documento: " + res.error);
-    }
-  };
-
-  const handleCambiarEstadoTodasClases = async (nuevoEstado: "Activa" | "Inactiva") => {
-    if (!empresaId) return;
-    const res = await actualizarEstadoTodasClasesDocumento(Number(empresaId), nuevoEstado);
-    if (res.success) {
-      setClasesDocumento((prev) => prev.map((c) => ({ ...c, estado: nuevoEstado })));
-    } else {
-      alert("Error al actualizar todas las clases: " + res.error);
-    }
-  };
+    if (!isMounted || !empresaId) return;
+    cargarUltimoCierre(empresaId, sucursalId, moduloCierre);
+    cargarPeriodos(empresaId, sucursalId);
+  }, [
+    isMounted,
+    empresaId,
+    sucursalId,
+    moduloCierre,
+    cargarUltimoCierre,
+    cargarPeriodos,
+  ]);
 
   const handleEjecutarCierreMensual = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setGuardando(true);
+    setMensaje(null);
 
-    try {
-      const anio = Number(anioSeleccionado);
-      const mes = Number(mesSeleccionado);
-      const periodoDesde = `${anio}-${String(mes).padStart(2, "0")}-01`;
-      const ultimoDia = new Date(anio, mes, 0).getDate();
-      const periodoHasta = `${anio}-${String(mes).padStart(2, "0")}-${ultimoDia}`;
+    if (!empresaId) {
+      setMensaje({ tipo: "error", texto: "Seleccione una empresa activa." });
+      return;
+    }
 
-      const res = await ejecutarCierreServer({
-        empresaId: Number(empresaId),
-        sucursalId: Number(sucursalId) || 0,
-        modulo: moduloSeleccionado,
-        subtipoProceso: "CIERRE_MENSUAL",
-        periodoDesde,
-        periodoHasta,
+    setEjecutandoMensual(true);
+    const uid = await resolverUsuarioId();
+    const res = await ejecutarCierreServer({
+      empresaId: Number(empresaId),
+      sucursalId: sucursalId ? Number(sucursalId) : null,
+      modulo: moduloCierre,
+      subtipoProceso,
+      periodoDesde,
+      periodoHasta,
+      usuarioCreacion: uid || undefined,
+    });
+    setEjecutandoMensual(false);
+
+    if (res?.success) {
+      setMensaje({
+        tipo: "success",
+        texto: res.mensaje || "Cierre ejecutado correctamente.",
       });
-
-      if (!res || res.success === false) {
-        throw new Error(res?.error || "Error desconocido al procesar el cierre.");
-      }
-
-      setSuccessMsg(res.mensaje ?? `¡Cierre del módulo ${moduloSeleccionado} ejecutado con éxito para ${mes}/${anio}!`);
-    } catch (err: unknown) {
-      const mensaje = err instanceof Error ? err.message : "Error desconocido.";
-      setErrorMsg(mensaje);
-    } finally {
-      setGuardando(false);
+      await Promise.all([
+        cargarUltimoCierre(empresaId, sucursalId, moduloCierre),
+        cargarPeriodos(empresaId, sucursalId),
+      ]);
+    } else {
+      setMensaje({
+        tipo: "error",
+        texto: res?.error || "No se pudo ejecutar el cierre.",
+      });
     }
   };
 
-  if (!isMounted) return <div className="p-4 text-center text-xs text-slate-400">Cargando módulo de cierres...</div>;
+  const handleCierreAnual = async (soloSimular: boolean) => {
+    setMensaje(null);
+    setProcesandoAnual(true);
+
+    const res = await procesarCierreAnualServer({
+      empresaId: Number(empresaId),
+      sucursalId: sucursalId ? Number(sucursalId) : null,
+      anio: Number(anioCierre),
+      cuentaPatrimonioId: cuentaPatrimonioId
+        ? Number(cuentaPatrimonioId)
+        : undefined,
+      claseDocumentoId: claseDocumentoId
+        ? Number(claseDocumentoId)
+        : undefined,
+      soloSimular,
+    });
+
+    setProcesandoAnual(false);
+
+    if (res?.success) {
+      if (res.simulacion && Array.isArray(res.detalles)) {
+        setDetallesSimulacion(res.detalles as DetalleSimulacionItem[]);
+      }
+      setMensaje({
+        tipo: "success",
+        texto: res.mensaje || "Proceso de cierre anual completado.",
+      });
+      if (!soloSimular) {
+        await cargarPeriodos(empresaId, sucursalId);
+      }
+    } else {
+      setMensaje({
+        tipo: "error",
+        texto: res?.error || "Error al procesar el cierre anual.",
+      });
+    }
+  };
+
+  const handleToggleEstadoClase = async (clase: ClaseDocItem) => {
+    setMensaje(null);
+    const nuevoEstado: "Activa" | "Inactiva" =
+      clase.estado === "Inactiva" ? "Activa" : "Inactiva";
+    const res = await actualizarEstadoClaseDocumento(clase.id, nuevoEstado);
+    if (res.success) {
+      setClasesDocumento((prev) =>
+        prev.map((c) => (c.id === clase.id ? { ...c, estado: nuevoEstado } : c))
+      );
+    } else {
+      setMensaje({
+        tipo: "error",
+        texto: res.error || "Error al actualizar estado de clase de documento.",
+      });
+    }
+  };
+
+  const handleEstadoTodasClases = async (estado: "Activa" | "Inactiva") => {
+    if (!empresaId) return;
+    setMensaje(null);
+    const res = await actualizarEstadoTodasClasesDocumento(
+      Number(empresaId),
+      estado
+    );
+    if (res.success) {
+      setClasesDocumento((prev) => prev.map((c) => ({ ...c, estado })));
+      setMensaje({
+        tipo: "success",
+        texto: `Todas las clases de documento marcadas como ${estado}.`,
+      });
+    } else {
+      setMensaje({
+        tipo: "error",
+        texto: res.error || "Error al actualizar las clases de documento.",
+      });
+    }
+  };
+
+  const handleBloquear = async (periodoStr: string) => {
+    setMensaje(null);
+    const res = await bloquearPeriodoAperturaServer({
+      empresaId: Number(empresaId),
+      sucursalId: sucursalId ? Number(sucursalId) : null,
+      periodoDesde: `${periodoStr}-01`,
+    });
+    if (res.success) {
+      setMensaje({
+        tipo: "success",
+        texto: res.mensaje || "Periodo bloqueado.",
+      });
+      await cargarPeriodos(empresaId, sucursalId);
+    } else {
+      setMensaje({ tipo: "error", texto: res.error || "Error al bloquear." });
+    }
+  };
+
+  const handleDesbloquear = async (periodoStr: string) => {
+    setMensaje(null);
+    const res = await desbloquearPeriodoAperturaServer({
+      empresaId: Number(empresaId),
+      sucursalId: sucursalId ? Number(sucursalId) : null,
+      periodoDesde: `${periodoStr}-01`,
+    });
+    if (res.success) {
+      setMensaje({
+        tipo: "success",
+        texto: res.mensaje || "Periodo desbloqueado.",
+      });
+      await cargarPeriodos(empresaId, sucursalId);
+    } else {
+      setMensaje({
+        tipo: "error",
+        texto: res.error || "Error al desbloquear.",
+      });
+    }
+  };
+
+  const handleHabilitarNuevoPeriodo = async () => {
+    setMensaje(null);
+    const res = await habilitarPeriodoAperturaServer({
+      empresaId: Number(empresaId),
+      sucursalId: sucursalId ? Number(sucursalId) : null,
+      anio: Number(nuevoAnioHabilitar),
+      mes: Number(nuevoMesHabilitar),
+    });
+    if (res.success) {
+      setMensaje({
+        tipo: "success",
+        texto: res.mensaje || "Periodo habilitado.",
+      });
+      await cargarPeriodos(empresaId, sucursalId);
+    } else {
+      setMensaje({
+        tipo: "error",
+        texto: res.error || "Error al habilitar periodo.",
+      });
+    }
+  };
+
+  const fmt = (v: number) => `$ ${Number(v || 0).toLocaleString("es-CO")}`;
+
+  if (!isMounted) return null;
 
   return (
-    <div className="p-4 max-w-7xl mx-auto space-y-4 text-xs">
-      <div className="border-b pb-2">
-        <h1 className="text-base font-bold text-slate-800">Módulo de Cierres Contables y Aperturas</h1>
-        <p className="text-[11px] text-slate-500">Gestión de periodos mensuales, cierre anual (mes 13) y control de apertura de documentos.</p>
+    <div className="p-6 max-w-7xl mx-auto space-y-6 text-sm font-sans">
+      <div className="border-b pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition border border-slate-200 cursor-pointer shrink-0"
+          >
+            ← Atrás
+          </button>
+          <div>
+            <h1 className="text-xl font-bold text-slate-800">
+              Cierres Contables y Control de Periodos
+            </h1>
+            <p className="text-sm text-slate-500">
+              Cierres mensuales, cierre anual NIIF y administración de periodos.
+            </p>
+          </div>
+        </div>
       </div>
 
-      {errorMsg && <div className="p-2 bg-red-50 border border-red-200 text-red-700 rounded font-medium">⚠ {errorMsg}</div>}
-      {successMsg && <div className="p-2 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded font-medium">✔ {successMsg}</div>}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
-        <div>
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[11px]">Empresa</label>
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+        <div className="md:col-span-6">
+          <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">
+            Empresa Activa
+          </label>
           <select
             value={empresaId}
-            onChange={(e) => setEmpresaId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none focus:ring-1 focus:ring-blue-500"
+            onChange={(e) => handleCambioEmpresa(e.target.value)}
+            className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 font-semibold text-sm outline-none"
           >
             {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>
-                {emp.razon_social || emp.nombre_comercial} (NIT: {emp.nit_identificacion}{emp.dv ? `-${emp.dv}` : ""})
+                {obtenerNombreEmpresa(emp)}
               </option>
             ))}
           </select>
         </div>
 
-        <div>
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[11px]">Sucursal</label>
+        <div className="md:col-span-6">
+          <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">
+            Sucursal
+          </label>
           <select
             value={sucursalId}
             onChange={(e) => setSucursalId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 font-semibold text-sm outline-none"
           >
-            <option value="">-- Todas las Sucursales (Consolidado / 001 por defecto) --</option>
             {sucursales.map((suc) => (
-              <option key={suc.id} value={suc.id}>
-                {suc.nombre} ({suc.codigo_sucursal})
+              <option key={suc.id} value={String(suc.id)}>
+                {suc.codigo_sucursal ? `${suc.codigo_sucursal} - ` : ""}
+                {suc.nombre || suc.ciudad || `Sucursal #${suc.id}`}
               </option>
             ))}
           </select>
         </div>
       </div>
 
-      <div className="flex border-b border-slate-200 gap-2">
+      <div className="flex flex-wrap gap-2 border-b pb-3">
         <button
           type="button"
-          onClick={() => { setPestanaActiva("mensual"); setErrorMsg(null); setSuccessMsg(null); }}
-          className={`px-4 py-2 font-bold text-xs border-b-2 transition ${pestanaActiva === "mensual" ? "border-blue-600 text-blue-600 bg-blue-50/50" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+          onClick={() => {
+            setPestanaActiva("MENSUAL");
+            setMensaje(null);
+          }}
+          className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer transition ${
+            pestanaActiva === "MENSUAL"
+              ? "bg-indigo-600 text-white"
+              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+          }`}
         >
-          📅 Cierre Mensual
+          <Calendar className="w-4 h-4" /> Cierre Mensual / Módulo
         </button>
+
         <button
           type="button"
-          onClick={() => { setPestanaActiva("anual"); setErrorMsg(null); setSuccessMsg(null); }}
-          className={`px-4 py-2 font-bold text-xs border-b-2 transition ${pestanaActiva === "anual" ? "border-blue-600 text-blue-600 bg-blue-50/50" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+          onClick={() => {
+            setPestanaActiva("ANUAL");
+            setMensaje(null);
+          }}
+          className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer transition ${
+            pestanaActiva === "ANUAL"
+              ? "bg-indigo-600 text-white"
+              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+          }`}
         >
-          📊 Cierre Anual (Mes 13)
+          <FileSpreadsheet className="w-4 h-4" /> Cierre Anual
         </button>
+
         <button
           type="button"
-          onClick={() => { setPestanaActiva("aperturas"); setErrorMsg(null); setSuccessMsg(null); }}
-          className={`px-4 py-2 font-bold text-xs border-b-2 transition ${pestanaActiva === "aperturas" ? "border-blue-600 text-blue-600 bg-blue-50/50" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+          onClick={() => {
+            setPestanaActiva("PERIODOS");
+            setMensaje(null);
+          }}
+          className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer transition ${
+            pestanaActiva === "PERIODOS"
+              ? "bg-indigo-600 text-white"
+              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+          }`}
         >
-          🔓 Control de Aperturas
+          <Lock className="w-4 h-4" /> Apertura y Bloqueo de Periodos
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setPestanaActiva("CLASES");
+            setMensaje(null);
+          }}
+          className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer transition ${
+            pestanaActiva === "CLASES"
+              ? "bg-indigo-600 text-white"
+              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+          }`}
+        >
+          <Layers className="w-4 h-4" /> Clases de Documento
         </button>
       </div>
 
-      {pestanaActiva === "mensual" && (
-        <form onSubmit={handleEjecutarCierreMensual} className="space-y-4">
-          <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-            <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[11px]">Módulo a Cerrar</label>
-            <select
-              value={moduloSeleccionado}
-              onChange={(e) => setModuloSeleccionado(e.target.value)}
-              className="w-full md:w-1/3 bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none"
-            >
-              {MODULOS_DISPONIBLES.map((mod) => (
-                <option key={mod} value={mod}>{mod}</option>
-              ))}
-            </select>
+      {mensaje && (
+        <div
+          className={`p-4 rounded-xl border text-xs font-semibold flex items-start gap-3 ${
+            mensaje.tipo === "success"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-red-50 border-red-200 text-red-900"
+          }`}
+        >
+          {mensaje.tipo === "success" ? (
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+          ) : (
+            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          )}
+          <span>{mensaje.texto}</span>
+        </div>
+      )}
+
+      {pestanaActiva === "MENSUAL" && (
+        <form
+          onSubmit={handleEjecutarCierreMensual}
+          className="bg-white border rounded-xl p-6 space-y-5 shadow-2xs"
+        >
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b pb-3">
+            <h2 className="text-sm font-bold uppercase text-slate-800">
+              Ejecución de Cierre por Periodo
+            </h2>
+            <span className="text-xs font-mono text-slate-500">
+              {ultimoCierreTexto}
+            </span>
           </div>
 
-          <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm space-y-3">
-            <h2 className="font-bold text-slate-800 uppercase tracking-wider border-b pb-1 text-[11px]">
-              Período de Cierre Siguiente (Automático)
-            </h2>
-
-            <div className="flex items-center gap-3">
-              <div>
-                <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Año</label>
-                <input
-                  type="number"
-                  value={anioSeleccionado}
-                  disabled
-                  className="w-24 bg-slate-100 border border-slate-300 rounded px-2 py-1 text-slate-700 font-mono text-center cursor-not-allowed"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Mes</label>
-                <input
-                  type="text"
-                  value={new Date(0, mesSeleccionado - 1).toLocaleString('es', { month: 'long' }).toUpperCase()}
-                  disabled
-                  className="w-36 bg-slate-100 border border-slate-300 rounded px-2 py-1 text-slate-700 font-semibold text-center cursor-not-allowed"
-                />
-              </div>
-            </div>
-
-            <div className="pt-2 flex justify-between items-center border-t mt-2">
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="checkDoc"
-                  checked={incluirCierreDocumentos}
-                  onChange={(e) => setIncluirCierreDocumentos(e.target.checked)}
-                  className="cursor-pointer accent-blue-600"
-                />
-                <label htmlFor="checkDoc" className="font-semibold text-slate-700 cursor-pointer">
-                  Gestionar / bloquear clases de documentos en este cierre
-                </label>
-              </div>
-
-              <button
-                type="submit"
-                disabled={guardando}
-                className={`px-5 py-2 font-bold rounded shadow transition text-xs text-white ${moduloSeleccionado === "CONTABILIDAD" ? "bg-blue-600 hover:bg-blue-700" : "bg-emerald-600 hover:bg-emerald-700"} disabled:opacity-50`}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+              <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">
+                Módulo
+              </label>
+              <select
+                value={moduloCierre}
+                onChange={(e) => setModuloCierre(e.target.value)}
+                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-900 outline-none"
               >
-                {guardando ? "Procesando cierre..." : moduloSeleccionado === "CONTABILIDAD" ? "🔒 Ejecutar Cierre Contable y Actualizar Saldos" : `🔒 Cerrar Período (${moduloSeleccionado})`}
-              </button>
+                <option value="CONTABILIDAD">Contabilidad</option>
+                <option value="CARTERA">Cartera</option>
+                <option value="TESORERIA">Tesorería</option>
+                <option value="INVENTARIOS">Inventarios</option>
+              </select>
             </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">
+                Subtipo Proceso
+              </label>
+              <select
+                value={subtipoProceso}
+                onChange={(e) => setSubtipoProceso(e.target.value)}
+                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-900 outline-none"
+              >
+                <option value="CIERRE_MENSUAL">Cierre Mensual</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">
+                Periodo Desde
+              </label>
+              <input
+                type="date"
+                value={periodoDesde}
+                onChange={(e) => setPeriodoDesde(e.target.value)}
+                required
+                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono text-slate-900 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">
+                Periodo Hasta
+              </label>
+              <input
+                type="date"
+                value={periodoHasta}
+                onChange={(e) => setPeriodoHasta(e.target.value)}
+                required
+                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono text-slate-900 outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <button
+              type="submit"
+              disabled={ejecutandoMensual || !empresaId}
+              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-lg text-xs flex items-center gap-2 cursor-pointer transition"
+            >
+              <Lock className="w-4 h-4" />
+              {ejecutandoMensual ? "Ejecutando cierre..." : "Ejecutar Cierre"}
+            </button>
           </div>
         </form>
       )}
 
-      {pestanaActiva === "anual" && (
-        <div className="space-y-4">
-          <form onSubmit={handleSimularCierreAnual} className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm space-y-3">
-            <div className="border-b pb-2">
-              <h2 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
-                Cierre Anual (Cancelación de Cuentas de Resultados - Mes 13)
-              </h2>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                Valida los 12 meses previos cerrados, selecciona la cuenta de patrimonio y la clase de documento para previsualizar el comprobante.
-              </p>
-            </div>
+      {pestanaActiva === "ANUAL" && (
+        <div className="bg-white border rounded-xl p-6 space-y-5 shadow-2xs">
+          <h2 className="text-sm font-bold uppercase text-slate-800 border-b pb-3">
+            Cierre Anual NIIF — Traslado Directo a Patrimonio
+          </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <label className="block font-semibold text-slate-600 uppercase mb-1 text-[11px]">Año Fiscal a Cerrar</label>
-                <input
-                  type="number"
-                  value={anioAnualSeleccionado}
-                  onChange={(e) => { setAnioAnualSeleccionado(Number(e.target.value)); setDatosSimulacionAnual(null); }}
-                  className="w-full border border-slate-300 rounded px-3 py-1.5 text-slate-800 font-mono text-xs outline-none bg-white"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-600 uppercase mb-1 text-[11px]">Cuenta Auxiliar (Patrimonio - Utilidad)</label>
-                <select
-                  value={cuentaUtilidadId}
-                  onChange={(e) => setCuentaUtilidadId(e.target.value)}
-                  className="w-full border border-slate-300 rounded px-3 py-1.5 text-slate-800 font-medium text-xs outline-none bg-white"
-                  required
-                >
-                  <option value="">-- Seleccione Cuenta de Patrimonio --</option>
-                  {cuentasPatrimonio.map((cta) => (
-                    <option key={cta.id} value={cta.id}>
-                      {cta.codigo_auxiliar} - {cta.nombre}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-600 uppercase mb-1 text-[11px]">Clase de Documento (Cierre Anual)</label>
-                <select
-                  value={claseDocumentoId}
-                  onChange={(e) => setClaseDocumentoId(e.target.value)}
-                  className="w-full border border-slate-300 rounded px-3 py-1.5 text-slate-800 font-medium text-xs outline-none bg-white"
-                  required
-                >
-                  <option value="">-- Seleccione Clase de Documento --</option>
-                  {clasesDocumento.map((doc) => (
-                    <option key={doc.id} value={doc.id}>
-                      {doc.codigo_clase} - {doc.nombre_clase}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="pt-2 flex justify-end">
-              <button
-                type="submit"
-                disabled={guardando}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded shadow transition text-xs flex items-center gap-1.5"
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">
+                Año a Cerrar
+              </label>
+              <select
+                value={anioCierre}
+                onChange={(e) => setAnioCierre(Number(e.target.value))}
+                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-900 outline-none"
               >
-                {guardando ? "Calculando..." : "🔍 1. Simular / Verificar Proceso"}
-              </button>
+                {[2024, 2025, 2026, 2027, 2028].map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
             </div>
-          </form>
 
-          {datosSimulacionAnual && (
-            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm space-y-3">
-              <div className="border-b pb-2 flex justify-between items-center">
-                <h3 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
-                  Previsualización de Saldos para Cancelación (Año {anioAnualSeleccionado})
-                </h3>
-                <span className="bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded text-[10px]">
-                  ✔ Verificación Exitosa
-                </span>
-              </div>
+            <div>
+              <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">
+                Clase de Documento
+              </label>
+              <select
+                value={claseDocumentoId}
+                onChange={(e) => setClaseDocumentoId(e.target.value)}
+                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-900 outline-none"
+              >
+                <option value="">-- Seleccione --</option>
+                {clasesDocumento.map((cd) => (
+                  <option key={cd.id} value={String(cd.id)}>
+                    {cd.codigo_clase ? `${cd.codigo_clase} - ` : ""}
+                    {cd.nombre_clase || `Clase #${cd.id}`}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-slate-600 border-collapse">
-                  <thead className="bg-slate-100 border-b text-slate-500 font-semibold uppercase text-[10px]">
-                    <tr>
-                      <th className="p-2">Elemento / Tipo</th>
-                      <th className="p-2">Código Auxiliar</th>
-                      <th className="p-2">Nombre del Concepto</th>
-                      <th className="p-2 text-right">Saldo Final</th>
+            <div>
+              <label className="block font-bold text-slate-700 uppercase mb-1 text-xs">
+                Cuenta Patrimonio (Destino)
+              </label>
+              <select
+                value={cuentaPatrimonioId}
+                onChange={(e) => setCuentaPatrimonioId(e.target.value)}
+                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono text-slate-900 outline-none"
+              >
+                <option value="">-- Seleccione --</option>
+                {cuentasPatrimonio.map((cta) => (
+                  <option key={cta.id} value={String(cta.id)}>
+                    {cta.codigo_auxiliar} - {cta.nombre}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => handleCierreAnual(true)}
+              disabled={procesandoAnual || !empresaId}
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white font-bold rounded-lg text-xs flex items-center gap-2 cursor-pointer transition"
+            >
+              <Eye className="w-4 h-4" /> Simular Cierre Anual
+            </button>
+            <button
+              type="button"
+              onClick={() => handleCierreAnual(false)}
+              disabled={procesandoAnual || !empresaId}
+              className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded-lg text-xs flex items-center gap-2 cursor-pointer transition"
+            >
+              <Lock className="w-4 h-4" />
+              {procesandoAnual ? "Procesando..." : "Procesar Cierre Anual"}
+            </button>
+          </div>
+
+          {detallesSimulacion.length > 0 && (
+            <div className="overflow-x-auto border rounded-xl mt-4">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead className="bg-slate-100 text-slate-700 font-bold border-b uppercase">
+                  <tr>
+                    <th className="p-3">Tipo</th>
+                    <th className="p-3">Cuenta</th>
+                    <th className="p-3">Nombre</th>
+                    <th className="p-3 text-right">Saldo</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {detallesSimulacion.map((det, idx) => (
+                    <tr
+                      key={`${det.cuenta}_${idx}`}
+                      className="hover:bg-slate-50"
+                    >
+                      <td className="p-3 font-bold text-slate-800">
+                        {det.tipo}
+                      </td>
+                      <td className="p-3 font-mono text-slate-700">
+                        {det.cuenta}
+                      </td>
+                      <td className="p-3 text-slate-900">{det.nombre}</td>
+                      <td className="p-3 text-right font-mono font-bold text-indigo-700">
+                        {fmt(det.saldo)}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-[11px]">
-                    {datosSimulacionAnual.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="p-4 text-center text-slate-400 italic">
-                          No se encontraron registros de saldos acumulados auxiliares para el año {anioAnualSeleccionado}.
-                        </td>
-                      </tr>
-                    ) : (
-                      datosSimulacionAnual.map((item, idx) => (
-                        <tr key={idx} className="hover:bg-slate-50">
-                          <td className="p-2 font-bold text-slate-800">{item.tipo}</td>
-                          <td className="p-2 font-mono">{item.cuenta}</td>
-                          <td className="p-2">{item.nombre}</td>
-                          <td className="p-2 text-right font-mono font-bold text-slate-800">
-                            ${Number(item.saldo || 0).toLocaleString()}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="pt-3 flex justify-between items-center border-t">
-                <p className="text-[11px] text-slate-500 italic">
-                  * Verifique que los valores correspondan al cierre fiscal antes de ejecutar la grabación definitiva.
-                </p>
-                <button
-                  type="button"
-                  onClick={handleGrabarCierreAnual}
-                  disabled={guardando}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded shadow transition text-xs flex items-center gap-1.5"
-                >
-                  {guardando ? "Grabando..." : "💾 2. Grabar Comprobante de Cierre (Mes 13)"}
-                </button>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
       )}
 
-      {pestanaActiva === "aperturas" && (
-        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm space-y-4">
-          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center border-b pb-3 gap-3">
+      {pestanaActiva === "PERIODOS" && (
+        <div className="bg-white border rounded-xl p-6 space-y-5 shadow-2xs">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 border-b pb-4">
             <div>
-              <h2 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
-                Control de Apertura de Periodos (Comprobantes y Documentos)
+              <h2 className="text-sm font-bold uppercase text-slate-800">
+                Control de Periodos Contables
               </h2>
-              <p className="text-[11px] text-slate-500">
-                Permite habilitar nuevos períodos o visualizar el estado de control para la elaboración de documentos.
+              <p className="text-xs text-slate-500">
+                Habilita, bloquea o desbloquea periodos mensuales.
               </p>
             </div>
 
-            <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-md border border-slate-200 self-end lg:self-auto">
-              <span className="font-semibold text-slate-600 text-[11px]">Siguiente Período:</span>
-              <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-300 font-bold text-slate-800 text-xs">
-                {siguientePeriodoApertura.anio}-{String(siguientePeriodoApertura.mes).padStart(2, "0")}
-              </span>
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">
+                  Año
+                </label>
+                <input
+                  type="number"
+                  value={nuevoAnioHabilitar}
+                  onChange={(e) => setNuevoAnioHabilitar(Number(e.target.value))}
+                  className="w-24 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">
+                  Mes (1-12)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={12}
+                  value={nuevoMesHabilitar}
+                  onChange={(e) => setNuevoMesHabilitar(Number(e.target.value))}
+                  className="w-20 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-mono"
+                />
+              </div>
               <button
                 type="button"
                 onClick={handleHabilitarNuevoPeriodo}
-                disabled={guardando}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold text-[11px] shadow disabled:opacity-50 transition flex items-center gap-1"
+                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs cursor-pointer transition"
               >
-                {guardando ? "Habilitando..." : "🔓 Abrir / Habilitar"}
+                Habilitar Periodo
               </button>
             </div>
           </div>
 
-          {periodosApertura.length === 0 ? (
-            <div className="p-4 text-center text-slate-400 italic">No hay periodos registrados o falta configurar la fecha de inicio de operaciones.</div>
+          {cargandoPeriodos ? (
+            <div className="p-8 text-center text-slate-500 font-semibold">
+              Cargando periodos...
+            </div>
+          ) : periodos.length === 0 ? (
+            <div className="p-8 text-center text-slate-500 italic">
+              No hay periodos disponibles para mostrar.
+            </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-slate-600 border-collapse">
-                <thead className="bg-slate-100 border-b text-slate-500 font-semibold uppercase text-[10px]">
+            <div className="overflow-x-auto border rounded-xl">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead className="bg-slate-100 text-slate-700 font-bold border-b uppercase">
                   <tr>
-                    <th className="p-3 w-1/3">Período (Año - Mes)</th>
-                    <th className="p-3 text-center w-1/4">Estado de Operación</th>
-                    <th className="p-3 text-center w-5/12">Detalle / Control</th>
+                    <th className="p-3">Periodo</th>
+                    <th className="p-3">Estado</th>
+                    <th className="p-3 text-right">Acciones</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-[11px]">
-                  {periodosApertura.map((p) => (
-                    <tr key={p.periodo} className="hover:bg-slate-50/80 transition">
-                      <td className="p-3 font-mono font-bold text-slate-800">
-                        {p.anio}-{String(p.mes).padStart(2, "0")} ({new Date(p.anio, p.mes - 1).toLocaleString('es', { month: 'long' }).toUpperCase()})
+                <tbody className="divide-y">
+                  {periodos.map((p) => (
+                    <tr key={p.periodo} className="hover:bg-slate-50">
+                      <td className="p-3 font-mono font-bold text-slate-900">
+                        {p.periodo}
                       </td>
-                      <td className="p-3 text-center">
-                        <span className={`inline-block px-2.5 py-0.5 rounded font-semibold text-[10px] ${p.estado === "Cerrado" ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"}`}>
+                      <td className="p-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            p.estado === "Cerrado"
+                              ? "bg-rose-100 text-rose-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
                           {p.estado}
                         </span>
                       </td>
-                      <td className="p-3 text-center">
-                        {p.esCierreContable ? (
-                          <span className="text-rose-600 font-semibold inline-flex items-center gap-1 justify-center">
-                            🔒 Bloqueado por Cierre Contable
-                          </span>
-                        ) : p.estado === "Cerrado" ? (
-                          <div className="flex items-center justify-center gap-3">
-                            <span className="text-rose-600 font-semibold">🔒 Bloqueado / Cerrado</span>
-                            <button
-                              type="button"
-                              onClick={() => handleDesbloquearPeriodo(`${p.periodo}-01`)}
-                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[10px] shadow transition inline-flex items-center gap-1"
-                            >
-                              🔓 Desbloquear
-                            </button>
-                          </div>
+                      <td className="p-3 text-right space-x-2">
+                        {p.estado === "Cerrado" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleDesbloquear(p.periodo)}
+                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1 cursor-pointer transition"
+                          >
+                            <Unlock className="w-3.5 h-3.5" /> Desbloquear
+                          </button>
                         ) : (
-                          <div className="flex items-center justify-center gap-3">
-                            <span className="text-emerald-600 font-semibold">✔ Habilitado para Documentos</span>
-                            <button
-                              type="button"
-                              onClick={() => handleBloquearPeriodo(`${p.periodo}-01`)}
-                              className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded font-bold text-[10px] shadow transition inline-flex items-center gap-1"
-                            >
-                              🔒 Bloquear
-                            </button>
-                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleBloquear(p.periodo)}
+                            className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1 cursor-pointer transition"
+                          >
+                            <Lock className="w-3.5 h-3.5" /> Bloquear
+                          </button>
                         )}
                       </td>
                     </tr>
@@ -722,64 +1041,86 @@ export default function ModuloCierresPage() {
         </div>
       )}
 
-      {pestanaActiva === "mensual" && incluirCierreDocumentos && (
-        <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm space-y-3">
-          <div className="flex items-center justify-between border-b pb-1">
-            <h2 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
-              Control de Clases de Documento
-            </h2>
+      {pestanaActiva === "CLASES" && (
+        <div className="bg-white border rounded-xl p-6 space-y-5 shadow-2xs">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b pb-4">
+            <div>
+              <h2 className="text-sm font-bold uppercase text-slate-800">
+                Estado de Clases de Documento
+              </h2>
+              <p className="text-xs text-slate-500">
+                Activa o inactiva clases de documento para la empresa activa.
+              </p>
+            </div>
+
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => handleCambiarEstadoTodasClases("Activa")}
-                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-semibold text-[10px] shadow"
+                onClick={() => handleEstadoTodasClases("Activa")}
+                className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg text-xs cursor-pointer transition"
               >
-                ✔ Activar Todas
+                Activar Todas
               </button>
               <button
                 type="button"
-                onClick={() => handleCambiarEstadoTodasClases("Inactiva")}
-                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded font-semibold text-[10px] shadow"
+                onClick={() => handleEstadoTodasClases("Inactiva")}
+                className="px-3.5 py-1.5 bg-slate-700 hover:bg-slate-800 text-white font-bold rounded-lg text-xs cursor-pointer transition"
               >
-                🔒 Inactivar Todas
+                Inactivar Todas
               </button>
             </div>
           </div>
 
           {clasesDocumento.length === 0 ? (
-            <div className="p-4 text-center text-slate-400 italic">No hay clases de documento registradas para esta empresa.</div>
+            <div className="p-8 text-center text-slate-500 italic">
+              No hay clases de documento registradas para esta empresa.
+            </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-slate-600 border-collapse">
-                <thead className="bg-slate-100 border-b text-slate-500 font-semibold uppercase text-[10px]">
+            <div className="overflow-x-auto border rounded-xl">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead className="bg-slate-100 text-slate-700 font-bold border-b uppercase">
                   <tr>
-                    <th className="p-2">Código</th>
-                    <th className="p-2">Nombre Clase</th>
-                    <th className="p-2 text-center">Estado Actual</th>
-                    <th className="p-2 text-center">Acción</th>
+                    <th className="p-3">Código</th>
+                    <th className="p-3">Nombre</th>
+                    <th className="p-3">Estado</th>
+                    <th className="p-3 text-right">Acción</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-[11px]">
-                  {clasesDocumento.map((clase) => (
-                    <tr key={clase.id} className="hover:bg-slate-50">
-                      <td className="p-2 font-mono font-bold">{clase.codigo_clase}</td>
-                      <td className="p-2 font-semibold text-slate-800">{clase.nombre_clase}</td>
-                      <td className="p-2 text-center">
-                        <span className={`px-2 py-0.5 rounded font-semibold text-[10px] ${clase.estado === "Inactiva" ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"}`}>
-                          {clase.estado || "Activa"}
-                        </span>
-                      </td>
-                      <td className="p-2 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleEstadoClase(clase.id, clase.estado || "Activa")}
-                          className={`px-3 py-1 rounded font-semibold text-[10px] shadow transition ${clase.estado === "Inactiva" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-rose-600 hover:bg-rose-700 text-white"}`}
-                        >
-                          {clase.estado === "Inactiva" ? "✔ Habilitar" : "🔒 Bloquear Uso"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                <tbody className="divide-y">
+                  {clasesDocumento.map((cd) => {
+                    const estaInactiva =
+                      cd.estado === "Inactiva" || cd.estado === "Inactivo";
+                    return (
+                      <tr key={cd.id} className="hover:bg-slate-50">
+                        <td className="p-3 font-mono font-bold text-slate-800">
+                          {cd.codigo_clase || "-"}
+                        </td>
+                        <td className="p-3 font-semibold text-slate-900">
+                          {cd.nombre_clase || `Clase #${cd.id}`}
+                        </td>
+                        <td className="p-3">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              estaInactiva
+                                ? "bg-slate-200 text-slate-700"
+                                : "bg-emerald-100 text-emerald-800"
+                            }`}
+                          >
+                            {estaInactiva ? "Inactiva" : "Activa"}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleEstadoClase(cd)}
+                            className="px-3 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold cursor-pointer transition"
+                          >
+                            {estaInactiva ? "Activar" : "Inactivar"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -5,7 +5,9 @@ import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error(
@@ -18,11 +20,22 @@ function getSupabaseAdmin() {
   });
 }
 
-async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
-  if (empresaId) return Number(empresaId);
+async function resolverEmpresaId(
+  empresaId?: number | string | null
+): Promise<number> {
+  if (
+    empresaId !== undefined &&
+    empresaId !== null &&
+    String(empresaId).trim() !== ""
+  ) {
+    const parsed = Number(empresaId);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
   const cookieStore = await cookies();
   const idCookie = cookieStore.get("empresa_activa")?.value;
-  return Number(idCookie || 0);
+  const parsedCookie = Number(idCookie || 0);
+  return Number.isNaN(parsedCookie) ? 0 : parsedCookie;
 }
 
 export async function obtenerEmpresas() {
@@ -36,7 +49,10 @@ export async function obtenerEmpresas() {
     if (error) throw new Error(error.message);
     return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener empresas.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener empresas.";
     return { success: false, data: [], error: mensaje };
   }
 }
@@ -56,7 +72,10 @@ export async function obtenerSucursales(empresaId?: number | string | null) {
     if (error) throw new Error(error.message);
     return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener sucursales.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener sucursales.";
     return { success: false, data: [], error: mensaje };
   }
 }
@@ -73,17 +92,33 @@ export async function obtenerEstadoResultados(
 ) {
   const supabase = getSupabaseAdmin();
   const idEmpresa = await resolverEmpresaId(empresaId);
-  const parsedSucursalId = sucursalId ? Number(sucursalId) : null;
-  const parsedAnio = anio ? Number(anio) : new Date().getFullYear();
-  const parsedMes = mes ? Number(mes) : new Date().getMonth() + 1;
-  const parsedTipoReporte = tipoReporte || "ACUMULADO";
+  const parsedSucursalId =
+    sucursalId !== undefined &&
+    sucursalId !== null &&
+    String(sucursalId).trim() !== ""
+      ? Number(sucursalId)
+      : null;
+
+  const anioNum = anio ? Number(anio) : new Date().getFullYear();
+  const mesNum = mes ? Number(mes) : new Date().getMonth() + 1;
+  const parsedAnio = Number.isNaN(anioNum) ? new Date().getFullYear() : anioNum;
+  const parsedMes = Number.isNaN(mesNum) ? new Date().getMonth() + 1 : mesNum;
+  const parsedTipoReporte: "ACUMULADO" | "MES" =
+    tipoReporte === "MES" ? "MES" : "ACUMULADO";
 
   try {
-    if (!idEmpresa) throw new Error("Debe especificar o tener activa una empresa válida.");
+    if (!idEmpresa) {
+      throw new Error(
+        "Debe especificar o tener activa una empresa válida."
+      );
+    }
 
     const { data, error } = await supabase.rpc("obtener_estado_resultados", {
       p_empresa_id: idEmpresa,
-      p_sucursal_id: parsedSucursalId,
+      p_sucursal_id:
+        parsedSucursalId !== null && Number.isNaN(parsedSucursalId)
+          ? null
+          : parsedSucursalId,
       p_anio: parsedAnio,
       p_mes: parsedMes,
       p_tipo_reporte: parsedTipoReporte,
@@ -91,13 +126,16 @@ export async function obtenerEstadoResultados(
 
     if (error) {
       console.error("Error en RPC obtener_estado_resultados:", error.message);
-      return { success: false, error: error.message, data: [] };
+      return { success: false, error: error.message, data: [], null: error.message };
     }
 
-    return { success: true, data: data || [] };
+    return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error desconocido al obtener el estado de resultados.";
+    const mensaje =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener el estado de resultados.";
     console.error("Error inesperado en obtenerEstadoResultados:", mensaje);
-    return { success: false, error: mensaje, data: [] };
+    return { success: false, error: mensaje, data: [], null: mensaje };
   }
 }

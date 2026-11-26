@@ -1,10 +1,27 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, Suspense } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  Suspense,
+  useMemo,
+} from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseClient";
+import {
+  obtenerEmpresas,
+  obtenerSucursales,
+} from "@/app/consultas/movimientos/actions";
+import {
+  getEmpresasPermitidas,
+  getEmpresaActivaUsuario,
+  setEmpresaActivaUsuario,
+} from "@/app/actions/accionesEmpresas";
+import { obtenerDatosAuxiliaresPago } from "@/app/tesoreria/pagos/pagos-actions";
 import XmlUploader from "@/components/xml-uploader";
 import XmlUploaderMasivo from "@/components/xml-uploader-masivo";
 import { validarPeriodoContable } from "@/lib/accounting-validations";
@@ -12,23 +29,27 @@ import { validarPeriodoContable } from "@/lib/accounting-validations";
 interface UserType {
   id: string;
   email?: string;
-  tipo_usuario?: string;
+  nombre?: string;
 }
 
 interface Company {
-  id: string | number;
+  id: number | string;
+  empresa_id?: number | string;
   razon_social?: string;
-  nit_identificacion?: string;
+  nombre_comercial?: string;
+  nombre?: string;
 }
 
 interface Branch {
-  id: string | number;
-  nombre?: string;
+  id: number | string;
+  empresa_id?: number | string;
+  codigo_sucursal?: string;
+  nombre: string;
   name?: string;
 }
 
 interface DocumentClass {
-  id: string | number;
+  id: number | string;
   codigo_clase?: string;
   nombre_clase?: string;
   nombre?: string;
@@ -50,10 +71,21 @@ export interface ConceptoRetencionItem {
   anio?: number;
   tipo_retencion?: "RENTA" | "IVA" | "ICA" | string;
   concepto?: string;
+  nombre?: string;
   base_minima?: number;
   tarifa?: number;
+  porcentaje?: number;
   activo?: boolean;
   codigo_municipio?: string | null;
+}
+
+function getClienteBrowser() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  if (supabaseUrl && supabaseAnonKey) {
+    return createClient(supabaseUrl, supabaseAnonKey);
+  }
+  return supabase;
 }
 
 function getCookieValue(name: string): string | null {
@@ -64,17 +96,22 @@ function getCookieValue(name: string): string | null {
   return match ? decodeURIComponent(match.split("=")[1]) : null;
 }
 
-function extraerAnioFecha(fechaStr?: string): number {
-  if (fechaStr) {
-    const match = /^(\d{4})/.exec(fechaStr.trim());
-    if (match) {
-      const anioNum = Number(match[1]);
-      if (!Number.isNaN(anioNum) && anioNum > 1900) return anioNum;
-    }
-    const d = new Date(fechaStr);
-    if (!Number.isNaN(d.getTime())) return d.getUTCFullYear();
+function setCookieValue(name: string, value: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=86400; SameSite=Lax`;
+}
+
+function recortarConceptoConPorcentaje(
+  conceptoTexto: string,
+  pct: number,
+  maxConceptoLen = 54
+): string {
+  const limpio = conceptoTexto.trim();
+  const sufijo = ` (${pct}%)`;
+  if (limpio.length <= maxConceptoLen) {
+    return `${limpio}${sufijo}`;
   }
-  return new Date().getFullYear();
+  return `${limpio.slice(0, maxConceptoLen).trimEnd()}...${sufijo}`;
 }
 
 function CargarFacturasContent() {
@@ -82,20 +119,51 @@ function CargarFacturasContent() {
 
   const [mounted, setMounted] = useState<boolean>(false);
   const [rutaRetorno, setRutaRetorno] = useState<string>("/modulos/proveedores");
-  const [tituloRetorno, setTituloRetorno] = useState<string>("Volver a Proveedores");
+  const [tituloRetorno, setTituloRetorno] = useState<string>(
+    "Volver a Proveedores"
+  );
 
   const [user, setUser] = useState<UserType | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [documentClasses, setDocumentClasses] = useState<DocumentClass[]>([]);
   const [tercerosEmpresa, setTercerosEmpresa] = useState<TerceroRetencionInfo[]>([]);
-  const [conceptosRetencion, setConceptosRetencion] = useState<ConceptoRetencionItem[]>([]);
+  const [conceptosRetencion, setConceptosRetencion] = useState<
+    ConceptoRetencionItem[]
+  >([]);
 
-  const [activeTab, setActiveTab] = useState<"individual" | "masiva">("individual");
+  const [selectedRentaId, setSelectedRentaId] = useState<string>("");
+  const [selectedIvaId, setSelectedIvaId] = useState<string>("");
+  const [selectedIcaId, setSelectedIcaId] = useState<string>("");
+  const [rentaDesplegada, setRentaDesplegada] = useState<boolean>(false);
+  const [hoverRentaTexto, setHoverRentaTexto] = useState<string | null>(null);
 
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
-  const [selectedBranchId, setSelectedBranchId] = useState<string>("");
-  const [selectedDocumentClassId, setSelectedDocumentClassId] = useState<string>("");
+  const [activeTab, setActiveTab] = useState<"individual" | "masiva">(
+    "individual"
+  );
+
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return (
+        localStorage.getItem("empresa_activa") ||
+        localStorage.getItem("empresa_id") ||
+        ""
+      );
+    }
+    return "";
+  });
+  const [selectedBranchId, setSelectedBranchId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return (
+        localStorage.getItem("sucursal_activa") ||
+        localStorage.getItem("sucursal_id") ||
+        ""
+      );
+    }
+    return "";
+  });
+  const [selectedDocumentClassId, setSelectedDocumentClassId] =
+    useState<string>("");
 
   const [fechaContabilizacion, setFechaContabilizacion] = useState<string>(
     new Date().toISOString().split("T")[0]
@@ -106,6 +174,42 @@ function CargarFacturasContent() {
 
   const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  const conceptosRenta = useMemo(
+    () => conceptosRetencion.filter((c) => c.tipo_retencion === "RENTA"),
+    [conceptosRetencion]
+  );
+
+  const conceptosIva = useMemo(
+    () => conceptosRetencion.filter((c) => c.tipo_retencion === "IVA"),
+    [conceptosRetencion]
+  );
+
+  const conceptosIca = useMemo(
+    () => conceptosRetencion.filter((c) => c.tipo_retencion === "ICA"),
+    [conceptosRetencion]
+  );
+
+  const conceptoRentaSeleccionado = useMemo(() => {
+    if (!selectedRentaId) return null;
+    return (
+      conceptosRenta.find((c) => String(c.id) === String(selectedRentaId)) ||
+      null
+    );
+  }, [conceptosRenta, selectedRentaId]);
+
+  const textoRentaSeleccionadaCompleto = useMemo(() => {
+    if (!conceptoRentaSeleccionado) return null;
+    const nombre =
+      conceptoRentaSeleccionado.concepto ||
+      conceptoRentaSeleccionado.nombre ||
+      "";
+    const pct =
+      conceptoRentaSeleccionado.tarifa != null
+        ? Number(conceptoRentaSeleccionado.tarifa)
+        : Number(conceptoRentaSeleccionado.porcentaje || 0) * 100;
+    return `${nombre} (${pct}%)`;
+  }, [conceptoRentaSeleccionado]);
 
   useEffect(() => {
     const fromParam = searchParams.get("from");
@@ -125,23 +229,21 @@ function CargarFacturasContent() {
 
       const empNum = Number(empresaIdStr);
       const sucNum =
-        sucursalIdStr && !Number.isNaN(Number(sucursalIdStr)) && Number(sucursalIdStr) > 0
+        sucursalIdStr &&
+        !Number.isNaN(Number(sucursalIdStr)) &&
+        Number(sucursalIdStr) > 0
           ? Number(sucursalIdStr)
           : null;
 
       if (typeof window !== "undefined") {
         localStorage.setItem("empresa_activa", String(empresaIdStr));
         localStorage.setItem("empresa_id", String(empresaIdStr));
-        document.cookie = `empresa_activa=${encodeURIComponent(
-          String(empresaIdStr)
-        )}; path=/; max-age=86400; SameSite=Lax`;
+        setCookieValue("empresa_activa", String(empresaIdStr));
 
         if (sucursalIdStr) {
           localStorage.setItem("sucursal_activa", String(sucursalIdStr));
           localStorage.setItem("sucursal_id", String(sucursalIdStr));
-          document.cookie = `sucursal_activa=${encodeURIComponent(
-            String(sucursalIdStr)
-          )}; path=/; max-age=86400; SameSite=Lax`;
+          setCookieValue("sucursal_activa", String(sucursalIdStr));
         } else {
           localStorage.removeItem("sucursal_activa");
           localStorage.removeItem("sucursal_id");
@@ -150,282 +252,283 @@ function CargarFacturasContent() {
         }
       }
 
+      try {
+        await setEmpresaActivaUsuario(empresaIdStr);
+      } catch {
+        // Ignorar si no aplica
+      }
+
       const userId = user?.id;
       if (userId && !Number.isNaN(empNum) && empNum > 0) {
         const payloadUpdate: {
           empresa_activa: number;
           sucursal_activa?: number | null;
-        } = {
-          empresa_activa: empNum,
-        };
+        } = { empresa_activa: empNum };
 
         if (sucursalIdStr !== undefined) {
           payloadUpdate.sucursal_activa = sucNum;
         }
 
-        const { error: perfilErr } = await supabase
+        const client = getClienteBrowser();
+        await client
           .from("usuarios_perfiles")
           .update(payloadUpdate)
           .eq("id", userId);
-
-        if (perfilErr) {
-          const { error: perfilErrAlt } = await supabase
-            .from("usuarios_perfiles")
-            .update(payloadUpdate)
-            .eq("usuario_id", userId);
-
-          if (perfilErrAlt) {
-            console.error(
-              "Error al actualizar usuarios_perfiles:",
-              perfilErrAlt.message || perfilErrAlt
-            );
-          }
-        }
       }
     },
     [user?.id]
   );
 
   const verificarPeriodo = useCallback(
-    async (fecha: string) => {
-      if (!selectedCompanyId || !selectedBranchId || !fecha) {
+    async (fecha: string, empIdOverride?: string, sucIdOverride?: string) => {
+      const empId = empIdOverride ?? selectedCompanyId;
+      const sucId = sucIdOverride ?? selectedBranchId;
+
+      if (!empId || !fecha) {
         setErrorPeriodo(null);
+        setValidandoPeriodo(false);
         return;
       }
 
       setValidandoPeriodo(true);
       setErrorPeriodo(null);
 
-      const res = await validarPeriodoContable(selectedCompanyId, selectedBranchId, fecha);
-      if (!res.valido) {
-        setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
+      try {
+        const res = await validarPeriodoContable(empId, sucId, fecha);
+        setErrorPeriodo(
+          res.valido
+            ? null
+            : res.mensaje ||
+                "Periodo no habilitado para transacciones en la empresa seleccionada."
+        );
+      } catch {
+        setErrorPeriodo(null);
+      } finally {
+        setValidandoPeriodo(false);
       }
-
-      setValidandoPeriodo(false);
     },
     [selectedCompanyId, selectedBranchId]
   );
 
   useEffect(() => {
-    if (selectedCompanyId && selectedBranchId && fechaContabilizacion && mounted) {
-      verificarPeriodo(fechaContabilizacion);
+    if (!mounted) return;
+    if (!selectedCompanyId || !fechaContabilizacion) {
+      setErrorPeriodo(null);
+      setValidandoPeriodo(false);
+      return;
     }
-  }, [selectedCompanyId, selectedBranchId, fechaContabilizacion, mounted, verificarPeriodo]);
+    verificarPeriodo(
+      fechaContabilizacion,
+      selectedCompanyId,
+      selectedBranchId
+    );
+  }, [
+    mounted,
+    selectedCompanyId,
+    selectedBranchId,
+    fechaContabilizacion,
+    verificarPeriodo,
+  ]);
 
-  const fetchBranches = useCallback(async (companyId: string, userId?: string) => {
-    try {
-      const { data, error: branchErr } = await supabase
-        .from("sucursales")
-        .select("*")
-        .eq("empresa_id", Number(companyId))
-        .order("nombre", { ascending: true });
+  const fetchBranches = useCallback(
+    async (companyId: string, sucursalUrlOverride?: string | null) => {
+      const sucRes = await obtenerSucursales(Number(companyId));
+      const lista = sucRes.success ? ((sucRes.data || []) as Branch[]) : [];
+      setBranches(lista);
 
-      if (branchErr) throw branchErr;
-
-      const sucursalesList = (data || []) as Branch[];
-      setBranches(sucursalesList);
-
-      if (sucursalesList.length === 0) {
+      if (lista.length === 0) {
         setSelectedBranchId("");
         return;
       }
 
-      let sucursalPreferida =
-        typeof window !== "undefined"
+      const guardada =
+        sucursalUrlOverride ||
+        (typeof window !== "undefined"
           ? localStorage.getItem("sucursal_activa") ||
             localStorage.getItem("sucursal_id") ||
             getCookieValue("sucursal_activa") ||
             ""
-          : "";
+          : "");
 
-      if (userId) {
-        const { data: permisosUsrSuc } = await supabase
-          .from("usuario_permisos_tx")
-          .select("sucursal_id")
-          .eq("usuario_id", userId)
-          .eq("empresa_id", Number(companyId))
-          .not("sucursal_id", "is", null);
-
-        const idsSucAsignadas = (permisosUsrSuc || [])
-          .map((r: { sucursal_id?: string | number | null }) =>
-            r.sucursal_id != null ? String(r.sucursal_id) : ""
-          )
-          .filter(Boolean);
-
-        if (idsSucAsignadas.length > 0) {
-          sucursalPreferida = idsSucAsignadas.includes(sucursalPreferida)
-            ? sucursalPreferida
-            : idsSucAsignadas[0];
-        }
-      }
-
-      const existeSuc = sucursalesList.some(
-        (b) => String(b.id) === String(sucursalPreferida)
-      );
+      const existe = lista.some((b) => String(b.id) === String(guardada));
       setSelectedBranchId(
-        existeSuc && sucursalPreferida
-          ? String(sucursalPreferida)
-          : String(sucursalesList[0].id)
+        existe && guardada ? String(guardada) : String(lista[0].id)
       );
-    } catch (err: unknown) {
-      console.error("Error al cargar sucursales:", err);
-      setBranches([]);
-      setSelectedBranchId("");
-    }
-  }, []);
-
-  const fetchDocumentClasses = useCallback(async (companyId: string) => {
-    try {
-      const { data, error: classErr } = await supabase
-        .from("clases_documento")
-        .select("*")
-        .eq("empresa_id", Number(companyId))
-        .order("codigo_clase", { ascending: true });
-
-      if (classErr) throw classErr;
-
-      const clasesList = (data || []) as DocumentClass[];
-      setDocumentClasses(clasesList);
-      if (clasesList.length > 0) {
-        setSelectedDocumentClassId(String(clasesList[0].id));
-      } else {
-        setSelectedDocumentClassId("");
-      }
-    } catch (err: unknown) {
-      console.error("Error al cargar clases de documento:", err);
-      setDocumentClasses([]);
-      setSelectedDocumentClassId("");
-    }
-  }, []);
-
-  const fetchTercerosYRetenciones = useCallback(
-    async (companyId: string, fechaStr?: string) => {
-      const empNum = Number(companyId);
-      if (!companyId || Number.isNaN(empNum) || empNum <= 0) {
-        setTercerosEmpresa([]);
-        setConceptosRetencion([]);
-        return;
-      }
-
-      const anioContabilidad = extraerAnioFecha(fechaStr);
-
-      const { data: tercData, error: tercErr } = await supabase
-        .from("terceros")
-        .select(
-          "id, numero_identificacion, razon_social, nombre_comercial, retencion_renta_id, retencion_iva_id, retencion_ica_id"
-        )
-        .eq("empresa_id", empNum);
-
-      if (tercErr) {
-        console.error(
-          "Error al cargar terceros por empresa:",
-          tercErr.message || tercErr.code || JSON.stringify(tercErr)
-        );
-        setTercerosEmpresa([]);
-      } else {
-        const normalizados = (
-          (tercData || []) as Array<
-            TerceroRetencionInfo & { nombre_comercial?: string | null }
-          >
-        ).map((t) => ({
-          ...t,
-          nombre: t.nombre || t.nombre_comercial || t.razon_social || "",
-        }));
-        setTercerosEmpresa(normalizados);
-      }
-
-      const { data: retData, error: retErr } = await supabase
-        .from("conceptos_retencion")
-        .select(
-          "id, empresa_id, anio, tipo_retencion, concepto, base_minima, tarifa, activo, codigo_municipio"
-        )
-        .eq("empresa_id", empNum)
-        .eq("anio", anioContabilidad);
-
-      if (retErr) {
-        console.error(
-          "Error al cargar conceptos_retencion por empresa y año:",
-          retErr.message || retErr.code || JSON.stringify(retErr)
-        );
-        setConceptosRetencion([]);
-      } else {
-        setConceptosRetencion((retData || []) as ConceptoRetencionItem[]);
-      }
     },
     []
   );
 
+  const fetchDocumentClasses = useCallback(async (companyId: string) => {
+    const client = getClienteBrowser();
+    const { data } = await client
+      .from("clases_documento")
+      .select("*")
+      .eq("empresa_id", Number(companyId))
+      .order("codigo_clase", { ascending: true });
+
+    const lista = (data || []) as DocumentClass[];
+    setDocumentClasses(lista);
+    setSelectedDocumentClassId(lista.length > 0 ? String(lista[0].id) : "");
+  }, []);
+
+  const fetchTercerosYRetenciones = useCallback(async (companyId: string) => {
+    const empNum = Number(companyId);
+    if (!companyId || Number.isNaN(empNum) || empNum <= 0) {
+      setTercerosEmpresa([]);
+      setConceptosRetencion([]);
+      return;
+    }
+
+    const client = getClienteBrowser();
+
+    const { data: tercData, error: tercErr } = await client
+      .from("terceros")
+      .select(
+        "id, numero_identificacion, razon_social, nombre_comercial, retencion_renta_id, retencion_iva_id, retencion_ica_id"
+      )
+      .eq("empresa_id", empNum);
+
+    if (!tercErr) {
+      const normalizados = (
+        (tercData || []) as Array<
+          TerceroRetencionInfo & { nombre_comercial?: string | null }
+        >
+      ).map((t) => ({
+        ...t,
+        nombre: t.nombre || t.nombre_comercial || t.razon_social || "",
+      }));
+      setTercerosEmpresa(normalizados);
+    }
+
+    const auxRes = await obtenerDatosAuxiliaresPago(empNum);
+    if (auxRes?.success && Array.isArray(auxRes.conceptosRetencion)) {
+      setConceptosRetencion(
+        auxRes.conceptosRetencion as ConceptoRetencionItem[]
+      );
+    } else {
+      setConceptosRetencion([]);
+    }
+  }, []);
+
   const fetchInitialData = useCallback(async () => {
     setLoadingInitial(true);
     setError(null);
+    setErrorPeriodo(null);
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const currentUser = userData?.user || null;
-      if (currentUser) {
-        setUser({ id: currentUser.id, email: currentUser.email });
-      }
+      const client = getClienteBrowser();
+      let listaEmpresas: Company[] = [];
 
-      let idsEmpresasPermitidas: number[] = [];
-      if (currentUser) {
-        const { data: permisosData } = await supabase
+      const {
+        data: { user: authUser },
+      } = await client.auth.getUser();
+
+      if (authUser) {
+        setUser({ id: authUser.id, email: authUser.email });
+        const { data: permisosTx } = await client
           .from("usuario_permisos_tx")
           .select("empresa_id")
-          .eq("usuario_id", currentUser.id);
+          .eq("usuario_id", authUser.id);
 
-        idsEmpresasPermitidas = Array.from(
+        const idsPermitidos = Array.from(
           new Set(
-            (permisosData || [])
-              .map((p: { empresa_id?: string | number | null }) =>
-                p.empresa_id != null ? Number(p.empresa_id) : NaN
+            (permisosTx || [])
+              .map((p: { empresa_id?: number | string | null }) =>
+                p.empresa_id != null ? String(p.empresa_id) : ""
               )
-              .filter((n) => !Number.isNaN(n) && n > 0)
+              .filter(Boolean)
           )
         );
+
+        if (idsPermitidos.length > 0) {
+          const { data: rowsEmp } = await client
+            .from("empresas")
+            .select("id, razon_social, nombre_comercial")
+            .in("id", idsPermitidos);
+
+          if (rowsEmp && rowsEmp.length > 0) {
+            listaEmpresas = rowsEmp as Company[];
+          }
+        }
       }
 
-      let empresasQuery = supabase
-        .from("empresas")
-        .select("id, razon_social, nit_identificacion")
-        .order("razon_social", { ascending: true });
-
-      if (idsEmpresasPermitidas.length > 0) {
-        empresasQuery = empresasQuery.in("id", idsEmpresasPermitidas);
+      if (listaEmpresas.length === 0) {
+        try {
+          const resPermitidas: unknown = await getEmpresasPermitidas();
+          if (Array.isArray(resPermitidas)) {
+            listaEmpresas = resPermitidas as Company[];
+          } else if (
+            resPermitidas &&
+            typeof resPermitidas === "object" &&
+            Array.isArray((resPermitidas as { datos?: unknown }).datos)
+          ) {
+            listaEmpresas = (resPermitidas as { datos: Company[] }).datos;
+          }
+        } catch {
+          // Ignorar
+        }
       }
 
-      const { data: compData, error: compErr } = await empresasQuery;
-      if (compErr) throw compErr;
+      if (listaEmpresas.length === 0) {
+        const res = await obtenerEmpresas();
+        if (res.success && Array.isArray(res.data)) {
+          listaEmpresas = res.data as Company[];
+        }
+      }
 
-      const empresasList = (compData || []) as Company[];
-      setCompanies(empresasList);
+      if (listaEmpresas.length > 0) {
+        const ordenadas = [...listaEmpresas].sort((a, b) => {
+          const nomA = a.razon_social || a.nombre_comercial || a.nombre || "";
+          const nomB = b.razon_social || b.nombre_comercial || b.nombre || "";
+          return nomA.localeCompare(nomB, "es", { sensitivity: "base" });
+        });
+        setCompanies(ordenadas);
 
-      if (empresasList.length > 0) {
-        const empresaGuardadaCookie = getCookieValue("empresa_activa");
-        const empresaGuardadaLocal =
+        let empresaActivaBD: string | null = null;
+        try {
+          const bdVal = await getEmpresaActivaUsuario();
+          if (bdVal) empresaActivaBD = String(bdVal);
+        } catch {
+          // Ignorar
+        }
+
+        const empresaParam =
+          searchParams.get("empresaId") || searchParams.get("empresa_id");
+        const localEmp =
           typeof window !== "undefined"
             ? localStorage.getItem("empresa_activa") ||
               localStorage.getItem("empresa_id")
             : null;
+        const cookieEmp = getCookieValue("empresa_activa");
 
-        const empresaIdParaSeleccionar =
-          empresaGuardadaLocal || empresaGuardadaCookie;
-        const existeEmpresa = empresasList.some(
-          (emp: Company) => String(emp.id) === String(empresaIdParaSeleccionar)
+        const candidata =
+          empresaParam || localEmp || cookieEmp || empresaActivaBD;
+        const existe = ordenadas.some(
+          (e) => String(e.id || e.empresa_id) === String(candidata)
         );
 
-        if (existeEmpresa && empresaIdParaSeleccionar) {
-          setSelectedCompanyId(String(empresaIdParaSeleccionar));
-        } else {
-          setSelectedCompanyId(String(empresasList[0].id));
+        const idFinal =
+          existe && candidata
+            ? String(candidata)
+            : String(ordenadas[0].id || ordenadas[0].empresa_id);
+
+        setSelectedCompanyId(idFinal);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("empresa_activa", idFinal);
+          localStorage.setItem("empresa_id", idFinal);
         }
+        setCookieValue("empresa_activa", idFinal);
+      } else {
+        setCompanies([]);
+        setSelectedCompanyId("");
       }
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : "Error al cargar datos iniciales.";
-      setError(msg);
+      setError(
+        err instanceof Error ? err.message : "Error al cargar empresas asignadas."
+      );
     } finally {
       setLoadingInitial(false);
     }
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     setMounted(true);
@@ -435,17 +538,24 @@ function CargarFacturasContent() {
   useEffect(() => {
     if (!mounted || !selectedCompanyId) return;
 
+    const sucursalParam =
+      searchParams.get("sucursalId") || searchParams.get("sucursal_id");
+
     const syncCompanyData = async () => {
       setSelectedBranchId("");
       setSelectedDocumentClassId("");
+      setSelectedRentaId("");
+      setSelectedIvaId("");
+      setSelectedIcaId("");
+      setRentaDesplegada(false);
+      setHoverRentaTexto(null);
       setErrorPeriodo(null);
 
-      await persistirContextoUsuario(selectedCompanyId, "");
-
+      await persistirContextoUsuario(selectedCompanyId, sucursalParam || "");
       await Promise.all([
-        fetchBranches(selectedCompanyId, user?.id),
+        fetchBranches(selectedCompanyId, sucursalParam),
         fetchDocumentClasses(selectedCompanyId),
-        fetchTercerosYRetenciones(selectedCompanyId, fechaContabilizacion),
+        fetchTercerosYRetenciones(selectedCompanyId),
       ]);
     };
 
@@ -453,17 +563,12 @@ function CargarFacturasContent() {
   }, [
     selectedCompanyId,
     mounted,
-    user?.id,
+    searchParams,
     persistirContextoUsuario,
     fetchBranches,
     fetchDocumentClasses,
     fetchTercerosYRetenciones,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!mounted || !selectedCompanyId) return;
-    fetchTercerosYRetenciones(selectedCompanyId, fechaContabilizacion);
-  }, [mounted, selectedCompanyId, fechaContabilizacion, fetchTercerosYRetenciones]);
 
   useEffect(() => {
     if (!mounted || !selectedCompanyId || !selectedBranchId) return;
@@ -472,50 +577,51 @@ function CargarFacturasContent() {
 
   if (!mounted || loadingInitial) {
     return (
-      <div className="max-w-6xl mx-auto p-4 text-center text-xs font-medium text-gray-500">
+      <div className="max-w-7xl mx-auto p-6 text-center text-sm font-medium text-gray-500">
         Cargando interfaz...
       </div>
     );
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-3 space-y-3 text-xs">
-      {/* Header */}
-      <div className="flex justify-between items-center border-b border-gray-200 pb-2">
-        <div className="flex items-center gap-2.5">
+    <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-4 text-sm">
+      <div className="flex flex-wrap justify-between items-center bg-white p-4 rounded-lg shadow-sm border border-gray-200 gap-4">
+        <div className="flex items-center gap-3">
           <Link
             href={rutaRetorno}
             title={tituloRetorno}
-            className="p-2 text-gray-600 hover:text-blue-600 bg-gray-50 hover:bg-blue-50 border border-gray-200 rounded-lg transition flex items-center justify-center shrink-0 cursor-pointer"
+            className="p-2.5 text-slate-600 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 border border-slate-200 rounded-xl transition flex items-center justify-center shrink-0 cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-5 h-5" />
           </Link>
-          <h1 className="text-base font-bold text-gray-900 leading-none">
-            Carga de Facturas XML
-          </h1>
-          <span className="text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
-            Contabilización Automática & Retenciones
-          </span>
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">
+              Carga de Facturas XML
+            </h1>
+            <p className="text-xs md:text-sm text-gray-500">
+              Contabilización Automática &amp; Retenciones
+            </p>
+          </div>
         </div>
         {user && (
-          <div className="text-[10px] text-gray-500">
-            Usuario: <span className="font-medium text-gray-700">{user.email}</span>
+          <div className="text-xs text-gray-500">
+            Usuario:{" "}
+            <span className="font-semibold text-gray-700">{user.email}</span>
           </div>
         )}
       </div>
 
       {error && (
-        <div className="p-1.5 bg-red-50 border border-red-200 text-red-800 rounded text-[11px]">
+        <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-md text-xs md:text-sm">
           {error}
         </div>
       )}
 
-      {/* Selector de Modo (Tabs Carga Individual / Carga Masiva) */}
       <div className="flex border-b border-gray-200">
         <button
           type="button"
           onClick={() => setActiveTab("individual")}
-          className={`py-1.5 px-4 text-xs font-semibold rounded-t border-t border-l border-r transition-colors cursor-pointer ${
+          className={`py-2 px-5 text-xs md:text-sm font-semibold rounded-t border-t border-l border-r transition-colors cursor-pointer ${
             activeTab === "individual"
               ? "bg-white border-gray-300 text-blue-600 border-b-transparent -mb-px"
               : "bg-gray-50 border-transparent text-gray-500 hover:text-gray-700"
@@ -526,7 +632,7 @@ function CargarFacturasContent() {
         <button
           type="button"
           onClick={() => setActiveTab("masiva")}
-          className={`py-1.5 px-4 text-xs font-semibold rounded-t border-t border-l border-r transition-colors cursor-pointer ${
+          className={`py-2 px-5 text-xs md:text-sm font-semibold rounded-t border-t border-l border-r transition-colors cursor-pointer ${
             activeTab === "masiva"
               ? "bg-white border-gray-300 text-blue-600 border-b-transparent -mb-px"
               : "bg-gray-50 border-transparent text-gray-500 hover:text-gray-700"
@@ -536,62 +642,70 @@ function CargarFacturasContent() {
         </button>
       </div>
 
-      {/* Selectores Parámetros */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-2 bg-gray-50 p-2 rounded border border-gray-200 items-start">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-white p-4 rounded-lg shadow-sm border border-gray-200 items-start">
         <div className="md:col-span-3">
-          <label className="block text-[9px] font-bold text-gray-600 uppercase mb-0.5">
+          <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
             Empresa *
           </label>
           <select
             value={selectedCompanyId}
-            onChange={(e) => setSelectedCompanyId(e.target.value)}
-            className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 truncate"
+            onChange={(e) => {
+              setSelectedCompanyId(e.target.value);
+              setErrorPeriodo(null);
+            }}
+            className="w-full bg-white border border-gray-300 rounded-md px-3 py-1.5 text-xs md:text-sm text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 truncate"
           >
             <option value="">-- Seleccione --</option>
-            {companies.map((comp) => (
-              <option key={comp.id} value={String(comp.id)}>
-                {comp.razon_social || "Sin Nombre"}
-              </option>
-            ))}
+            {companies.map((comp) => {
+              const id = String(comp.id || comp.empresa_id);
+              return (
+                <option key={id} value={id}>
+                  {comp.razon_social || comp.nombre_comercial || comp.nombre}
+                </option>
+              );
+            })}
           </select>
         </div>
 
         <div className="md:col-span-3">
-          <label className="block text-[9px] font-bold text-gray-600 uppercase mb-0.5">
+          <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
             Sucursal *
           </label>
           <select
             value={selectedBranchId}
             onChange={(e) => setSelectedBranchId(e.target.value)}
             disabled={!selectedCompanyId || branches.length === 0}
-            className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 truncate"
+            className="w-full bg-white border border-gray-300 rounded-md px-3 py-1.5 text-xs md:text-sm text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:bg-gray-100 truncate"
           >
             <option value="">
               {branches.length === 0 ? "Sin sucursales" : "-- Seleccione --"}
             </option>
             {branches.map((b) => (
-              <option key={b.id} value={String(b.id)}>
+              <option key={String(b.id)} value={String(b.id)}>
                 {b.nombre || b.name}
+                {b.codigo_sucursal ? ` (${b.codigo_sucursal})` : ""}
               </option>
             ))}
           </select>
         </div>
 
         <div className="md:col-span-4">
-          <label className="block text-[9px] font-bold text-gray-600 uppercase mb-0.5">
+          <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
             Clase Documento *
           </label>
           <select
             value={selectedDocumentClassId}
             onChange={(e) => setSelectedDocumentClassId(e.target.value)}
             disabled={!selectedCompanyId || documentClasses.length === 0}
-            className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-xs text-gray-800 focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 truncate"
+            className="w-full bg-white border border-gray-300 rounded-md px-3 py-1.5 text-xs md:text-sm text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:bg-gray-100 truncate"
           >
             <option value="">
-              {documentClasses.length === 0 ? "Sin clases" : "-- Seleccione --"}
+              {documentClasses.length === 0
+                ? "Sin clases"
+                : "-- Seleccione --"}
             </option>
             {documentClasses.map((dc) => (
-              <option key={dc.id} value={String(dc.id)}>
+              <option key={String(dc.id)} value={String(dc.id)}>
                 {dc.codigo_clase ? `[${dc.codigo_clase}] ` : ""}
                 {dc.nombre_clase || dc.nombre}
               </option>
@@ -600,38 +714,182 @@ function CargarFacturasContent() {
         </div>
 
         <div className="md:col-span-2">
-          <label className="block text-[9px] font-bold text-gray-600 uppercase mb-0.5">
+          <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
             Fecha Contabilidad *
           </label>
           <input
             type="date"
             value={fechaContabilizacion}
+            disabled={!selectedCompanyId}
             onChange={(e) => {
               const nuevaFecha = e.target.value;
               setFechaContabilizacion(nuevaFecha);
               if (errorPeriodo) setErrorPeriodo(null);
             }}
-            onBlur={() => verificarPeriodo(fechaContabilizacion)}
-            className="w-full bg-white border border-gray-300 rounded px-1.5 py-1 text-[11px] text-gray-800 focus:ring-1 focus:ring-blue-500"
+            onBlur={() => {
+              if (selectedCompanyId && fechaContabilizacion) {
+                verificarPeriodo(
+                  fechaContabilizacion,
+                  selectedCompanyId,
+                  selectedBranchId
+                );
+              }
+            }}
+            className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs md:text-sm text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:bg-gray-100"
           />
-          {validandoPeriodo && (
-            <p className="text-[9px] text-blue-500 mt-0.5 animate-pulse">
+          {selectedCompanyId && validandoPeriodo && (
+            <p className="text-xs text-blue-500 mt-1 animate-pulse">
               Verificando...
             </p>
           )}
-          {errorPeriodo && (
-            <p className="text-[10px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1 rounded mt-0.5">
+          {selectedCompanyId && errorPeriodo && (
+            <p className="text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1.5 rounded mt-1">
               ⚠️ {errorPeriodo}
             </p>
           )}
         </div>
+
+        <div
+          className="md:col-span-4 pt-2 border-t border-gray-100 relative"
+          onMouseEnter={() => {
+            if (textoRentaSeleccionadaCompleto) {
+              setHoverRentaTexto(textoRentaSeleccionadaCompleto);
+            }
+          }}
+          onMouseLeave={() => {
+            setHoverRentaTexto(null);
+            setRentaDesplegada(false);
+          }}
+        >
+          <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
+            Retención RENTA
+          </label>
+          <select
+            value={selectedRentaId}
+            size={rentaDesplegada ? Math.min(6, conceptosRenta.length + 1) : 1}
+            title={textoRentaSeleccionadaCompleto || "Retención RENTA"}
+            onFocus={() => setRentaDesplegada(true)}
+            onBlur={() => {
+              setRentaDesplegada(false);
+              setHoverRentaTexto(null);
+            }}
+            onChange={(e) => {
+              const val = e.target.value;
+              setSelectedRentaId(val);
+              setRentaDesplegada(false);
+              const found = conceptosRenta.find(
+                (item) => String(item.id) === String(val)
+              );
+              if (found) {
+                const nom = found.concepto || found.nombre || "";
+                const p =
+                  found.tarifa != null
+                    ? Number(found.tarifa)
+                    : Number(found.porcentaje || 0) * 100;
+                setHoverRentaTexto(`${nom} (${p}%)`);
+              } else {
+                setHoverRentaTexto(null);
+              }
+            }}
+            className={`w-full bg-white border border-gray-300 rounded-md px-3 py-1.5 text-xs text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 truncate cursor-pointer ${
+              rentaDesplegada ? "max-h-36 overflow-y-auto" : ""
+            }`}
+          >
+            <option value="">-- Sin Retención Renta --</option>
+            {conceptosRenta.map((cr) => {
+              const nombre = cr.concepto || cr.nombre || "";
+              const pct =
+                cr.tarifa != null
+                  ? Number(cr.tarifa)
+                  : Number(cr.porcentaje || 0) * 100;
+              const textoCompleto = `${nombre} (${pct}%)`;
+              return (
+                <option
+                  key={String(cr.id)}
+                  value={String(cr.id)}
+                  title={textoCompleto}
+                  onMouseEnter={() => setHoverRentaTexto(textoCompleto)}
+                >
+                  {recortarConceptoConPorcentaje(nombre, pct, 54)}
+                </option>
+              );
+            })}
+          </select>
+
+          {hoverRentaTexto && (
+            <div className="mt-1.5 p-2 bg-slate-900 text-white text-[11px] rounded-md shadow-md border border-slate-700 leading-snug">
+              {hoverRentaTexto}
+            </div>
+          )}
+        </div>
+
+        <div className="md:col-span-4 pt-2 border-t border-gray-100">
+          <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
+            Retención IVA
+          </label>
+          <select
+            value={selectedIvaId}
+            onChange={(e) => setSelectedIvaId(e.target.value)}
+            className="w-full bg-white border border-gray-300 rounded-md px-3 py-1.5 text-xs md:text-sm text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 truncate cursor-pointer"
+          >
+            <option value="">-- Sin Retención IVA --</option>
+            {conceptosIva.map((cr) => {
+              const nombre = cr.concepto || cr.nombre || "";
+              const pct =
+                cr.tarifa != null
+                  ? Number(cr.tarifa)
+                  : Number(cr.porcentaje || 0) * 100;
+              const textoCompleto = `${nombre} (${pct}%)`;
+              return (
+                <option
+                  key={String(cr.id)}
+                  value={String(cr.id)}
+                  title={textoCompleto}
+                >
+                  {textoCompleto}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+
+        <div className="md:col-span-4 pt-2 border-t border-gray-100">
+          <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
+            Retención ICA
+          </label>
+          <select
+            value={selectedIcaId}
+            onChange={(e) => setSelectedIcaId(e.target.value)}
+            className="w-full bg-white border border-gray-300 rounded-md px-3 py-1.5 text-xs md:text-sm text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 truncate cursor-pointer"
+          >
+            <option value="">-- Sin Retención ICA --</option>
+            {conceptosIca.map((cr) => {
+              const nombre = cr.concepto || cr.nombre || "";
+              const porMil =
+                cr.tarifa != null
+                  ? Number(cr.tarifa)
+                  : Number(cr.porcentaje || 0) * 1000;
+              const textoCompleto = `${nombre} (${porMil} x mil)`;
+              return (
+                <option
+                  key={String(cr.id)}
+                  value={String(cr.id)}
+                  title={textoCompleto}
+                >
+                  {textoCompleto}
+                </option>
+              );
+            })}
+          </select>
+        </div>
       </div>
 
-      {errorPeriodo ? (
-        <div className="p-3 bg-rose-50 border border-rose-300 text-rose-800 rounded text-xs font-semibold flex items-center justify-between">
+      {selectedCompanyId && errorPeriodo ? (
+        <div className="p-4 bg-rose-50 border border-rose-300 text-rose-800 rounded-lg text-xs md:text-sm font-semibold flex items-center justify-between">
           <span>
             🛑 No es posible realizar la carga de facturas XML porque el periodo
-            contable seleccionado no se encuentra habilitado o está cerrado.
+            contable seleccionado no se encuentra habilitado o está cerrado para
+            la empresa activa.
           </span>
         </div>
       ) : activeTab === "individual" ? (
@@ -649,6 +907,10 @@ function CargarFacturasContent() {
           fechaContabilizacion={fechaContabilizacion}
         />
       )}
+
+      {tercerosEmpresa.length > 0 && (
+        <div className="hidden" data-terceros-count={tercerosEmpresa.length} />
+      )}
     </div>
   );
 }
@@ -657,7 +919,7 @@ export default function CargarFacturasPage() {
   return (
     <Suspense
       fallback={
-        <div className="max-w-6xl mx-auto p-4 text-center text-xs font-medium text-gray-500">
+        <div className="max-w-7xl mx-auto p-6 text-center text-sm font-medium text-gray-500">
           Cargando interfaz...
         </div>
       }

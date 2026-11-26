@@ -1,9 +1,9 @@
 "use client";
 
-export const dynamic = 'force-dynamic';
-export const fetchCache = 'force-no-store';
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import { Lock, Mail, Building2, MapPin, XCircle, RefreshCw } from "lucide-react";
@@ -15,12 +15,10 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Control de la fase de selección en la misma pantalla
   const [requiereSeleccion, setRequiereSeleccion] = useState(false);
   const [empresasDisponibles, setEmpresasDisponibles] = useState<any[]>([]);
   const [sucursalesDisponibles, setSucursalesDisponibles] = useState<any[]>([]);
 
-  // Selección elegida por el usuario
   const [empresaIdSeleccionada, setEmpresaIdSeleccionada] = useState("");
   const [sucursalIdSeleccionada, setSucursalIdSeleccionada] = useState("");
 
@@ -35,20 +33,59 @@ export default function LoginPage() {
 
     try {
       // 1. Autenticar credenciales en Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const { data: authData, error: authError } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
 
       if (authError) throw authError;
       const userId = authData.user.id;
 
-      // 2. Consultar perfil del usuario (incluyendo la empresa_activa que ya tuviera guardada)
-      const { data: perfil } = await supabase
+      // 2. Consultar perfil y estado de vigencia del usuario
+      const { data: perfil, error: perfilError } = await supabase
         .from("usuarios_perfiles")
-        .select("tipo_usuario, empresa_activa")
+        .select(
+          "tipo_usuario, empresa_activa, activo, es_temporal, fecha_expiracion_password, requiere_cambio_password"
+        )
         .eq("id", userId)
         .single();
+
+      if (perfilError) throw perfilError;
+
+      if (perfil?.activo === false) {
+        await supabase.auth.signOut();
+        throw new Error(
+          "Su usuario se encuentra inactivo. Contacte al administrador."
+        );
+      }
+
+      const ahora = new Date();
+      const fechaExp = perfil?.fecha_expiracion_password
+        ? new Date(perfil.fecha_expiracion_password)
+        : null;
+      const estaVencidaPorFecha =
+        fechaExp !== null &&
+        !Number.isNaN(fechaExp.getTime()) &&
+        fechaExp <= ahora;
+
+      const esTemporal = Boolean(perfil?.es_temporal);
+      const requiereCambio = Boolean(perfil?.requiere_cambio_password);
+
+      // Si es usuario temporal y ya expiró la fecha límite -> bloquear acceso
+      if (esTemporal && estaVencidaPorFecha) {
+        await supabase.auth.signOut();
+        throw new Error(
+          `Su acceso temporal venció el ${fechaExp?.toLocaleDateString()}. Contacte al administrador para renovar su vigencia.`
+        );
+      }
+
+      // Si es usuario permanente con contraseña vencida o requiere cambio -> ir a /usuarios/cambiar-password
+      if ((!esTemporal && estaVencidaPorFecha) || requiereCambio) {
+        router.replace("/usuarios/cambiar-password");
+        router.refresh();
+        return;
+      }
 
       // 3. Consultar permisos desde la tabla usuario_permisos_tx
       const { data: permisosTx, error: permError } = await supabase
@@ -59,13 +96,25 @@ export default function LoginPage() {
       if (permError) throw permError;
 
       if (!permisosTx || permisosTx.length === 0) {
-        if (perfil?.tipo_usuario === 'Administrador') {
-          // Si es Administrador global, permitimos todo
-          const { data: allEmp } = await supabase.from("empresas").select("id, razon_social, nombre_comercial").eq("estado", "Activa").order("razon_social");
-          const { data: allSuc } = await supabase.from("sucursales").select("id, nombre, empresa_id").eq("estado", "Activa");
-          
+        if (perfil?.tipo_usuario === "Administrador") {
+          const { data: allEmp } = await supabase
+            .from("empresas")
+            .select("id, razon_social, nombre_comercial")
+            .eq("estado", "Activa")
+            .order("razon_social");
+          const { data: allSuc } = await supabase
+            .from("sucursales")
+            .select("id, nombre, empresa_id")
+            .eq("estado", "Activa");
+
           if (allEmp && allEmp.length === 1 && allSuc && allSuc.length === 1) {
-            await finalizarIngreso(String(allEmp[0].id), String(allSuc[0].id), allEmp, allSuc, userId);
+            await finalizarIngreso(
+              String(allEmp[0].id),
+              String(allSuc[0].id),
+              allEmp,
+              allSuc,
+              userId
+            );
             return;
           }
           setEmpresasDisponibles(allEmp || []);
@@ -74,17 +123,27 @@ export default function LoginPage() {
           setLoading(false);
           return;
         }
-        throw new Error("Su usuario no tiene empresas o permisos asignados en el sistema.");
+        throw new Error(
+          "Su usuario no tiene empresas o permisos asignados en el sistema."
+        );
       }
 
-      // Extraer IDs únicos permitidos
-      const empresaIds = Array.from(new Set(permisosTx.map((p: any) => p.empresa_id).filter(Boolean)));
-      
-      const sucursalIdsPermitidas = Array.from(
-        new Set(permisosTx.map((p: any) => p.sucursal_id).filter((id: any) => id !== null && id !== undefined && id !== 0))
+      // 4. Extraer IDs únicos permitidos
+      const empresaIds = Array.from(
+        new Set(permisosTx.map((p: any) => p.empresa_id).filter(Boolean))
       );
 
-      // 4. Consultar empresas permitidas
+      const sucursalIdsPermitidas = Array.from(
+        new Set(
+          permisosTx
+            .map((p: any) => p.sucursal_id)
+            .filter(
+              (id: any) => id !== null && id !== undefined && id !== 0
+            )
+        )
+      );
+
+      // 5. Consultar empresas permitidas
       let listaEmpresas: any[] = [];
       if (empresaIds.length > 0) {
         const { data: empData } = await supabase
@@ -96,7 +155,7 @@ export default function LoginPage() {
         listaEmpresas = empData || [];
       }
 
-      // 5. Consultar SUCURSALES
+      // 6. Consultar SUCURSALES
       let listaSucursales: any[] = [];
       if (sucursalIdsPermitidas.length > 0) {
         const { data: sucEspecificas } = await supabase
@@ -104,23 +163,25 @@ export default function LoginPage() {
           .select("id, nombre, empresa_id")
           .in("id", sucursalIdsPermitidas)
           .eq("estado", "Activa");
-        
+
         if (sucEspecificas) {
           listaSucursales.push(...sucEspecificas);
         }
       }
 
-      const empresasGlobalesIds = permisosTx.filter((p: any) => p.sucursal_id === null).map((p: any) => p.empresa_id);
+      const empresasGlobalesIds = permisosTx
+        .filter((p: any) => p.sucursal_id === null)
+        .map((p: any) => p.empresa_id);
       if (empresasGlobalesIds.length > 0) {
         const { data: sucGlobalData } = await supabase
           .from("sucursales")
           .select("id, nombre, empresa_id")
           .in("empresa_id", empresasGlobalesIds)
           .eq("estado", "Activa");
-        
+
         if (sucGlobalData) {
-          const idsExistentes = new Set(listaSucursales.map(s => s.id));
-          sucGlobalData.forEach(s => {
+          const idsExistentes = new Set(listaSucursales.map((s) => s.id));
+          sucGlobalData.forEach((s) => {
             if (!idsExistentes.has(s.id)) {
               listaSucursales.push(s);
             }
@@ -131,36 +192,50 @@ export default function LoginPage() {
       setEmpresasDisponibles(listaEmpresas);
       setSucursalesDisponibles(listaSucursales);
 
-      // CASO AUTOMÁTICO: Si solo tiene una empresa y una sucursal permitida
       if (listaEmpresas.length === 1 && listaSucursales.length === 1) {
-        await finalizarIngreso(String(listaEmpresas[0].id), String(listaSucursales[0].id), listaEmpresas, listaSucursales, userId);
+        await finalizarIngreso(
+          String(listaEmpresas[0].id),
+          String(listaSucursales[0].id),
+          listaEmpresas,
+          listaSucursales,
+          userId
+        );
         return;
       }
 
-      // CASO INTELIGENTE: Si el usuario ya tenía una empresa activa guardada en su perfil y es válida en sus permisos actuales
       const empresaActivaBD = perfil?.empresa_activa;
-      const empresaValidaEnPermisos = listaEmpresas.find(e => String(e.id) === String(empresaActivaBD));
+      const empresaValidaEnPermisos = listaEmpresas.find(
+        (e) => String(e.id) === String(empresaActivaBD)
+      );
 
       if (empresaValidaEnPermisos) {
         setEmpresaIdSeleccionada(String(empresaActivaBD));
-        const sucursalesDeEstaEmpresa = listaSucursales.filter(s => String(s.empresa_id) === String(empresaActivaBD));
+        const sucursalesDeEstaEmpresa = listaSucursales.filter(
+          (s) => String(s.empresa_id) === String(empresaActivaBD)
+        );
         if (sucursalesDeEstaEmpresa.length === 1) {
           setSucursalIdSeleccionada(String(sucursalesDeEstaEmpresa[0].id));
         }
       }
 
       setRequiereSeleccion(true);
-      
     } catch (err: any) {
-      setError(err.message || "Credenciales incorrectas o error al iniciar sesión.");
+      setError(
+        err.message || "Credenciales incorrectas o error al iniciar sesión."
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const finalizarIngreso = async (empId: string, sucId: string, empList: any[], sucList: any[], userId: string) => {
+  const finalizarIngreso = async (
+    empId: string,
+    sucId: string,
+    empList: any[],
+    sucList: any[],
+    userId: string
+  ) => {
     try {
-      // 1. ACTUALIZAR LA NUEVA COLUMNA empresa_activa EN LA TABLA usuarios_perfiles
       const { error: updateError } = await supabase
         .from("usuarios_perfiles")
         .update({ empresa_activa: empId })
@@ -176,10 +251,12 @@ export default function LoginPage() {
     const empresaObj = empList.find((e) => String(e.id) === String(empId));
     const sucursalObj = sucList.find((s) => String(s.id) === String(sucId));
 
-    const nombreEmpresaVal = empresaObj?.razon_social || empresaObj?.nombre_comercial || "Empresa Principal";
+    const nombreEmpresaVal =
+      empresaObj?.razon_social ||
+      empresaObj?.nombre_comercial ||
+      "Empresa Principal";
     const nombreSucursalVal = sucursalObj?.nombre || "Sucursal Principal";
 
-    // Guardar también en localStorage y Cookies como respaldo rápido de sesión
     localStorage.setItem("empresa_activa", empId);
     localStorage.setItem("sucursal_activa", sucId);
     localStorage.setItem("empresa_activa_nombre", nombreEmpresaVal);
@@ -187,14 +264,17 @@ export default function LoginPage() {
 
     document.cookie = `empresa_activa=${empId}; path=/; max-age=86400; SameSite=Lax`;
     document.cookie = `sucursal_activa=${sucId}; path=/; max-age=86400; SameSite=Lax`;
-    document.cookie = `empresa_activa_nombre=${encodeURIComponent(nombreEmpresaVal)}; path=/; max-age=86400; SameSite=Lax`;
-    document.cookie = `sucursal_activa_nombre=${encodeURIComponent(nombreSucursalVal)}; path=/; max-age=86400; SameSite=Lax`;
+    document.cookie = `empresa_activa_nombre=${encodeURIComponent(
+      nombreEmpresaVal
+    )}; path=/; max-age=86400; SameSite=Lax`;
+    document.cookie = `sucursal_activa_nombre=${encodeURIComponent(
+      nombreSucursalVal
+    )}; path=/; max-age=86400; SameSite=Lax`;
 
     router.push("/");
     router.refresh();
   };
 
-  // Filtrar sucursales según la empresa elegida
   const sucursalesFiltradas = sucursalesDisponibles.filter(
     (s) => !empresaIdSeleccionada || String(s.empresa_id) === empresaIdSeleccionada
   );
@@ -202,14 +282,17 @@ export default function LoginPage() {
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center p-6">
       <div className="max-w-md w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-8 shadow-sm">
-        
         <div className="text-center mb-6">
           <div className="inline-flex p-3 bg-blue-50 dark:bg-blue-950/50 rounded-2xl text-blue-600 mb-3">
             <Lock className="w-8 h-8" />
           </div>
-          <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">ContaABC</h1>
+          <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+            ContaABC
+          </h1>
           <p className="text-sm text-zinc-500 mt-1">
-            {requiereSeleccion ? "Seleccione su entorno de trabajo" : "Ingresa tus datos para acceder al sistema"}
+            {requiereSeleccion
+              ? "Seleccione su entorno de trabajo"
+              : "Ingresa tus datos para acceder al sistema"}
           </p>
         </div>
 
@@ -220,40 +303,45 @@ export default function LoginPage() {
           </div>
         )}
 
-        <form 
+        <form
           onSubmit={async (e) => {
             e.preventDefault();
-            if (requiereSeleccion && (!empresaIdSeleccionada || !sucursalIdSeleccionada)) {
+            if (
+              requiereSeleccion &&
+              (!empresaIdSeleccionada || !sucursalIdSeleccionada)
+            ) {
               setError("Debe seleccionar una empresa y una sucursal.");
               return;
             }
             if (requiereSeleccion) {
               setLoading(true);
-              // Para obtener el userId actual logueado en supabase client
-              const { data: { user } } = await supabase.auth.getUser();
+              const {
+                data: { user },
+              } = await supabase.auth.getUser();
               await finalizarIngreso(
-                empresaIdSeleccionada, 
-                sucursalIdSeleccionada, 
-                empresasDisponibles, 
-                sucursalesDisponibles, 
+                empresaIdSeleccionada,
+                sucursalIdSeleccionada,
+                empresasDisponibles,
+                sucursalesDisponibles,
                 user?.id || ""
               );
               setLoading(false);
             } else {
               handleLoginUnificado(e);
             }
-          }} 
+          }}
           className="space-y-4 text-sm"
         >
-          {/* Correo Electrónico */}
           <div>
-            <label className="block text-xs font-semibold text-zinc-500 mb-1">Correo Electrónico</label>
+            <label className="block text-xs font-semibold text-zinc-500 mb-1">
+              Correo Electrónico
+            </label>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-zinc-400">
                 <Mail className="w-4 h-4" />
               </span>
-              <input 
-                type="email" 
+              <input
+                type="email"
                 required
                 disabled={requiereSeleccion}
                 value={email}
@@ -264,15 +352,16 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Contraseña */}
           <div>
-            <label className="block text-xs font-semibold text-zinc-500 mb-1">Contraseña</label>
+            <label className="block text-xs font-semibold text-zinc-500 mb-1">
+              Contraseña
+            </label>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-zinc-400">
                 <Lock className="w-4 h-4" />
               </span>
-              <input 
-                type="password" 
+              <input
+                type="password"
                 required
                 disabled={requiereSeleccion}
                 value={password}
@@ -283,11 +372,12 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Selectores dinámicos */}
           {requiereSeleccion && (
             <>
               <div>
-                <label className="block text-xs font-semibold text-zinc-500 mb-1">Empresa Autorizada</label>
+                <label className="block text-xs font-semibold text-zinc-500 mb-1">
+                  Empresa Autorizada
+                </label>
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-zinc-400">
                     <Building2 className="w-4 h-4" />
@@ -302,16 +392,24 @@ export default function LoginPage() {
                         (s) => String(s.empresa_id) === nuevaEmpresaId
                       );
                       if (sucursalesDeEstaEmpresa.length === 1) {
-                        setSucursalIdSeleccionada(String(sucursalesDeEstaEmpresa[0].id));
+                        setSucursalIdSeleccionada(
+                          String(sucursalesDeEstaEmpresa[0].id)
+                        );
                       } else {
                         setSucursalIdSeleccionada("");
                       }
                     }}
                     className="w-full pl-10 pr-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 cursor-pointer"
                   >
-                    <option value="" className="dark:bg-zinc-900">Seleccione una empresa...</option>
+                    <option value="" className="dark:bg-zinc-900">
+                      Seleccione una empresa...
+                    </option>
                     {empresasDisponibles.map((emp) => (
-                      <option key={emp.id} value={emp.id} className="dark:bg-zinc-900">
+                      <option
+                        key={emp.id}
+                        value={emp.id}
+                        className="dark:bg-zinc-900"
+                      >
                         {emp.razon_social || emp.nombre_comercial}
                       </option>
                     ))}
@@ -320,7 +418,9 @@ export default function LoginPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-500 mb-1">Sucursal de Trabajo</label>
+                <label className="block text-xs font-semibold text-zinc-500 mb-1">
+                  Sucursal de Trabajo
+                </label>
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-zinc-400">
                     <MapPin className="w-4 h-4" />
@@ -333,10 +433,16 @@ export default function LoginPage() {
                     className="w-full pl-10 pr-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 disabled:opacity-50 cursor-pointer"
                   >
                     <option value="" className="dark:bg-zinc-900">
-                      {empresaIdSeleccionada ? "Seleccione una sucursal..." : "Primero seleccione una empresa"}
+                      {empresaIdSeleccionada
+                        ? "Seleccione una sucursal..."
+                        : "Primero seleccione una empresa"}
                     </option>
                     {sucursalesFiltradas.map((suc) => (
-                      <option key={suc.id} value={suc.id} className="dark:bg-zinc-900">
+                      <option
+                        key={suc.id}
+                        value={suc.id}
+                        className="dark:bg-zinc-900"
+                      >
                         {suc.nombre}
                       </option>
                     ))}
@@ -346,13 +452,17 @@ export default function LoginPage() {
             </>
           )}
 
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={loading}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-semibold transition shadow-sm mt-4 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
           >
             {loading && <RefreshCw className="w-4 h-4 animate-spin" />}
-            {loading ? "Verificando acceso..." : requiereSeleccion ? "Entrar al Sistema" : "Validar y Continuar"}
+            {loading
+              ? "Verificando acceso..."
+              : requiereSeleccion
+              ? "Entrar al Sistema"
+              : "Validar y Continuar"}
           </button>
 
           {requiereSeleccion && (
@@ -368,7 +478,6 @@ export default function LoginPage() {
             </button>
           )}
         </form>
-
       </div>
     </main>
   );

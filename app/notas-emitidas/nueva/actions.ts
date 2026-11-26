@@ -7,22 +7,40 @@ import { jsPDF } from "jspdf";
 import crypto from "crypto";
 import QRCode from "qrcode";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let supabaseAdminInstance: ReturnType<typeof createClient<any>> | null = null;
+
 function getSupabaseAdmin() {
+  if (supabaseAdminInstance) return supabaseAdminInstance;
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error("Faltan variables de entorno para Supabase.");
   }
-  return createClient(supabaseUrl, serviceRoleKey, {
+
+  supabaseAdminInstance = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  return supabaseAdminInstance;
 }
 
-async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
-  if (empresaId) return Number(empresaId);
+async function resolverEmpresaId(
+  empresaId?: number | string | null
+): Promise<number> {
+  if (
+    empresaId !== null &&
+    empresaId !== undefined &&
+    String(empresaId).trim() !== ""
+  ) {
+    const num = Number(empresaId);
+    return Number.isNaN(num) ? 0 : num;
+  }
   const cookieStore = await cookies();
   const idCookie = cookieStore.get("empresa_activa")?.value;
-  return Number(idCookie || 0);
+  const numCookie = Number(idCookie || 0);
+  return Number.isNaN(numCookie) ? 0 : numCookie;
 }
 
 function calcularCude(
@@ -58,9 +76,52 @@ function generarUrlQrNotaDian(
 }
 
 function numeroALetras(monto: number): string {
-  const unidades = ["", "UN", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE", "DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISEIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"];
-  const decenas = ["", "", "VEINTE", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA", "OCHENTA", "NOVENTA"];
-  const centenas = ["", "CIENTO", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS", "QUINIENTOS", "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS", "NOVECIENTOS"];
+  const unidades = [
+    "",
+    "UN",
+    "DOS",
+    "TRES",
+    "CUATRO",
+    "CINCO",
+    "SEIS",
+    "SIETE",
+    "OCHO",
+    "NUEVE",
+    "DIEZ",
+    "ONCE",
+    "DOCE",
+    "TRECE",
+    "CATORCE",
+    "QUINCE",
+    "DIECISEIS",
+    "DIECISIETE",
+    "DIECIOCHO",
+    "DIECINUEVE",
+  ];
+  const decenas = [
+    "",
+    "",
+    "VEINTE",
+    "TREINTA",
+    "CUARENTA",
+    "CINCUENTA",
+    "SESENTA",
+    "SETENTA",
+    "OCHENTA",
+    "NOVENTA",
+  ];
+  const centenas = [
+    "",
+    "CIENTO",
+    "DOSCIENTOS",
+    "TRESCIENTOS",
+    "CUATROCIENTOS",
+    "QUINIENTOS",
+    "SEISCIENTOS",
+    "SETECIENTOS",
+    "OCHOCIENTOS",
+    "NOVECIENTOS",
+  ];
 
   function convertGroup(n: number): string {
     let output = "";
@@ -83,7 +144,7 @@ function numeroALetras(monto: number): string {
     return output.trim();
   }
 
-  const entero = Math.floor(monto);
+  const entero = Math.floor(Math.max(0, Number(monto || 0)));
   if (entero === 0) return "SON: CERO PESOS M/CTE.";
 
   let resultado = "";
@@ -91,8 +152,13 @@ function numeroALetras(monto: number): string {
   const miles = Math.floor((entero % 1000000) / 1000);
   const resto = entero % 1000;
 
-  if (millones > 0) resultado += (millones === 1 ? "UN MILLON " : convertGroup(millones) + " MILLONES ");
-  if (miles > 0) resultado += (miles === 1 ? "UN MIL " : convertGroup(miles) + " MIL ");
+  if (millones > 0)
+    resultado +=
+      millones === 1
+        ? "UN MILLON "
+        : convertGroup(millones) + " MILLONES ";
+  if (miles > 0)
+    resultado += miles === 1 ? "UN MIL " : convertGroup(miles) + " MIL ";
   if (resto > 0) resultado += convertGroup(resto) + " ";
 
   return `SON: ${resultado.trim()} PESOS M/CTE.`;
@@ -114,7 +180,9 @@ async function subirArchivoStorage(
     .upload(rutaFinal, contenido, { contentType, upsert: true });
 
   if (uploadError) {
-    throw new Error(`Error al subir ${rutaFinal} a Storage: ${uploadError.message}`);
+    throw new Error(
+      `Error al subir ${rutaFinal} a Storage: ${uploadError.message}`
+    );
   }
 
   const { data } = supabase.storage.from(bucketName).getPublicUrl(rutaFinal);
@@ -150,7 +218,9 @@ async function generarPdfNotaBuffer(
 ): Promise<Buffer> {
   const doc = new jsPDF();
   const nitEmisor = empresaInfo?.nit_identificacion
-    ? `${empresaInfo.nit_identificacion}${empresaInfo.dv ? `-${empresaInfo.dv}` : ""}`
+    ? `${empresaInfo.nit_identificacion}${
+        empresaInfo.dv ? `-${empresaInfo.dv}` : ""
+      }`
     : "N/A";
 
   doc.setFont("helvetica", "bold");
@@ -164,15 +234,23 @@ async function generarPdfNotaBuffer(
   const direccionCompleta = [
     empresaInfo?.direccion,
     empresaInfo?.ciudad,
-    empresaInfo?.pais
-  ].filter(Boolean).join(" - ");
+    empresaInfo?.pais,
+  ]
+    .filter(Boolean)
+    .join(" - ");
 
   if (direccionCompleta) {
     doc.text(`Dirección: ${direccionCompleta}`, 14, 24);
   }
 
   if (empresaInfo?.telefono || empresaInfo?.email) {
-    doc.text(`Tel: ${empresaInfo?.telefono || ""} | Email: ${empresaInfo?.email || ""}`, 14, 28);
+    doc.text(
+      `Tel: ${empresaInfo?.telefono || ""} | Email: ${
+        empresaInfo?.email || ""
+      }`,
+      14,
+      28
+    );
   }
 
   doc.setFont("helvetica", "bold");
@@ -215,8 +293,22 @@ async function generarPdfNotaBuffer(
     doc.text(String(cod), 16, y);
     doc.text(String(desc).substring(0, 38), 42, y);
     doc.text(String(item.cantidad), 110, y, { align: "center" });
-    doc.text(`$${Number(item.valorUnitario || 0).toLocaleString("es-CO", { minimumFractionDigits: 2 })}`, 155, y, { align: "right" });
-    doc.text(`$${Number(item.total || 0).toLocaleString("es-CO", { minimumFractionDigits: 2 })}`, 192, y, { align: "right" });
+    doc.text(
+      `$${Number(item.valorUnitario || 0).toLocaleString("es-CO", {
+        minimumFractionDigits: 2,
+      })}`,
+      155,
+      y,
+      { align: "right" }
+    );
+    doc.text(
+      `$${Number(item.total || 0).toLocaleString("es-CO", {
+        minimumFractionDigits: 2,
+      })}`,
+      192,
+      y,
+      { align: "right" }
+    );
     y += 6;
   });
 
@@ -226,18 +318,33 @@ async function generarPdfNotaBuffer(
   doc.setFont("helvetica", "bold");
   doc.text("Subtotal:", 155, y, { align: "right" });
   doc.setFont("helvetica", "normal");
-  doc.text(`$${subtotal.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`, 192, y, { align: "right" });
+  doc.text(
+    `$${subtotal.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`,
+    192,
+    y,
+    { align: "right" }
+  );
 
   y += 5.5;
   doc.setFont("helvetica", "bold");
   doc.text("IVA:", 155, y, { align: "right" });
   doc.setFont("helvetica", "normal");
-  doc.text(`$${iva.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`, 192, y, { align: "right" });
+  doc.text(
+    `$${iva.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`,
+    192,
+    y,
+    { align: "right" }
+  );
 
   y += 6.5;
   doc.setFont("helvetica", "bold");
   doc.text("Total Nota:", 155, y, { align: "right" });
-  doc.text(`$${total.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`, 192, y, { align: "right" });
+  doc.text(
+    `$${total.toLocaleString("es-CO", { minimumFractionDigits: 2 })}`,
+    192,
+    y,
+    { align: "right" }
+  );
 
   y += 10;
   doc.setFontSize(8.5);
@@ -264,12 +371,15 @@ async function generarPdfNotaBuffer(
   return Buffer.from(doc.output("arraybuffer"));
 }
 
-export async function obtenerFacturasParaNota(empresaId?: number | string | null, sucursalId?: number | string | null) {
+export async function obtenerFacturasParaNota(
+  empresaId?: number | string | null,
+  sucursalId?: number | string | null
+) {
   try {
-    const supabase = getSupabaseAdmin();
     const empId = await resolverEmpresaId(empresaId);
     if (!empId) return { success: true, data: [] };
 
+    const supabase = getSupabaseAdmin();
     let query = supabase
       .from("facturas_emitidas")
       .select("*")
@@ -278,7 +388,7 @@ export async function obtenerFacturasParaNota(empresaId?: number | string | null
       .gt("saldo_pendiente", 0)
       .order("fecha_emision", { ascending: false });
 
-    if (sucursalId && sucursalId !== "") {
+    if (sucursalId && String(sucursalId).trim() !== "") {
       query = query.eq("sucursal_id", Number(sucursalId));
     }
 
@@ -318,11 +428,22 @@ export async function verificarNotasFactura(facturaId: string | number) {
 
     if (error) throw new Error(error.message);
 
-    const tieneNotas = (data || []).length > 0;
-    return { success: true, tieneNotas, cantidadNotas: (data || []).length, data: data || [] };
+    const lista = Array.isArray(data) ? data : [];
+    return {
+      success: true,
+      tieneNotas: lista.length > 0,
+      cantidadNotas: lista.length,
+      data: lista,
+    };
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    return { success: false, tieneNotas: false, cantidadNotas: 0, data: [], error: errorMsg };
+    return {
+      success: false,
+      tieneNotas: false,
+      cantidadNotas: 0,
+      data: [],
+      error: errorMsg,
+    };
   }
 }
 
@@ -355,23 +476,33 @@ export interface RegistrarNotaPayload {
 }
 
 export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
-  const supabase = getSupabaseAdmin();
-
   try {
+    const supabase = getSupabaseAdmin();
     const empresaIdResuelto = await resolverEmpresaId(payload.empresa_id);
     if (!empresaIdResuelto) {
-      return { success: false, error: "No se pudo determinar la empresa activa." };
+      return {
+        success: false,
+        error: "No se pudo determinar la empresa activa.",
+      };
     }
 
-    const itemsValidos = payload.items || [];
+    const itemsValidos = Array.isArray(payload.items) ? payload.items : [];
 
-    const subtotalReal = itemsValidos.reduce((acc, i) => acc + Number(i.subtotal || 0), 0);
-    const ivaReal = itemsValidos.reduce((acc, i) => acc + Number(i.iva || 0), 0);
-    const totalReal = subtotalReal + ivaReal;
+    const subtotalReal =
+      Math.round(
+        itemsValidos.reduce((acc, i) => acc + Number(i.subtotal || 0), 0) * 100
+      ) / 100;
+    const ivaReal =
+      Math.round(
+        itemsValidos.reduce((acc, i) => acc + Number(i.iva || 0), 0) * 100
+      ) / 100;
+    const totalReal = Math.round((subtotalReal + ivaReal) * 100) / 100;
 
     const { data: empresaInfo } = await supabase
       .from("empresas")
-      .select("razon_social, nit_identificacion, dv, direccion, ciudad, pais, telefono, email")
+      .select(
+        "razon_social, nit_identificacion, dv, direccion, ciudad, pais, telefono, email"
+      )
       .eq("id", empresaIdResuelto)
       .maybeSingle();
 
@@ -379,15 +510,30 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
 
     const { data: facturaInfo } = await supabase
       .from("facturas_emitidas")
-      .select("fecha_vencimiento, numero_factura, total_factura")
+      .select(
+        "fecha_vencimiento, numero_factura, total_factura, saldo_pendiente"
+      )
       .eq("id", payload.factura_emitida_id)
       .maybeSingle();
 
-    const fechaVencimientoNota = facturaInfo?.fecha_vencimiento || payload.fecha_emision;
+    const fechaVencimientoNota =
+      facturaInfo?.fecha_vencimiento || payload.fecha_emision;
     const numeroFacturaAfectada = facturaInfo?.numero_factura || "";
+    const totalFacturaOrig = Number(facturaInfo?.total_factura || 0);
+    const saldoPendienteOrig = Number(
+      facturaInfo?.saldo_pendiente ?? totalFacturaOrig
+    );
+
+    const esDebito = payload.tipo_nota === "DEBITO";
+    const esConceptoAnulacion = String(payload.concepto_dian).trim() === "2";
+    const esAnulacionTotal =
+      !esDebito &&
+      esConceptoAnulacion &&
+      totalFacturaOrig > 0 &&
+      Math.abs(totalReal - totalFacturaOrig) <= 1;
 
     let numeroNotaFinal = `NC-${Date.now().toString().slice(-6)}`;
-    let prefijoDocumento = "NC";
+    let prefijoDocumento = esDebito ? "ND" : "NC";
 
     const { data: claseDocData } = await supabase
       .from("clases_documento")
@@ -395,7 +541,7 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
       .eq("id", payload.clase_documento_id)
       .maybeSingle();
 
-    if (claseDocData && claseDocData.prefijo) {
+    if (claseDocData?.prefijo) {
       prefijoDocumento = claseDocData.prefijo;
     }
 
@@ -410,8 +556,11 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
       if (consecutivoData.prefijo) {
         prefijoDocumento = consecutivoData.prefijo;
       }
-      const siguienteNum = (consecutivoData.ultimo_numero || 0) + 1;
-      numeroNotaFinal = `${prefijoDocumento}-${String(siguienteNum).padStart(5, "0")}`;
+      const siguienteNum = Number(consecutivoData.ultimo_numero || 0) + 1;
+      numeroNotaFinal = `${prefijoDocumento}-${String(siguienteNum).padStart(
+        5,
+        "0"
+      )}`;
 
       const { error: errConsecutivo } = await supabase
         .from("consecutivos")
@@ -419,7 +568,9 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
         .eq("id", consecutivoData.id);
 
       if (errConsecutivo) {
-        throw new Error(`Error al actualizar el consecutivo: ${errConsecutivo.message}`);
+        throw new Error(
+          `Error al actualizar el consecutivo: ${errConsecutivo.message}`
+        );
       }
     } else {
       numeroNotaFinal = `${prefijoDocumento}-00001`;
@@ -445,25 +596,31 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
       cudeGenerado
     );
 
+    const rootTag = esDebito ? "DebitNote" : "CreditNote";
+    const lineTag = esDebito ? "DebitNoteLine" : "CreditNoteLine";
+    const qtyTag = esDebito ? "DebitedQuantity" : "CreditedQuantity";
+
     const lineasXml = itemsValidos
       .map(
         (item, idx) => `
-  <cac:CreditNoteLine>
+  <cac:${lineTag}>
     <cbc:ID>${idx + 1}</cbc:ID>
-    <cbc:CreditedQuantity>${item.cantidad}</cbc:CreditedQuantity>
+    <cbc:${qtyTag}>${item.cantidad}</cbc:${qtyTag}>
     <cbc:LineExtensionAmount>${item.subtotal}</cbc:LineExtensionAmount>
-    <cac:Item><cbc:Description>${item.nombre || item.nombre_item}</cbc:Description></cac:Item>
+    <cac:Item><cbc:Description>${
+      item.nombre || item.nombre_item || "Ítem"
+    }</cbc:Description></cac:Item>
     <cac:Price><cbc:PriceAmount>${item.valorUnitario}</cbc:PriceAmount></cac:Price>
-  </cac:CreditNoteLine>`
+  </cac:${lineTag}>`
       )
       .join("\n");
 
     const contenidoXml = `<?xml version="1.0" encoding="UTF-8"?>
-<CreditNote xmlns="urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2">
+<${rootTag} xmlns="urn:oasis:names:specification:ubl:schema:xsd:${rootTag}-2">
   <cbc:ID>${numeroNotaFinal}</cbc:ID>
   <cbc:IssueDate>${payload.fecha_emision}</cbc:IssueDate>
   ${lineasXml}
-</CreditNote>`;
+</${rootTag}>`;
 
     const xmlUrl = await subirArchivoStorage(
       contenidoXml,
@@ -520,11 +677,15 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
           creado_en: new Date().toISOString(),
         },
       ])
-      .select()
+      .select("id")
       .single();
 
-    if (errNota) {
-      throw new Error(`Error al registrar cabecera de nota: ${errNota.message}`);
+    if (errNota || !notaInsertada) {
+      throw new Error(
+        `Error al registrar cabecera de nota: ${
+          errNota?.message || "No se pudo insertar."
+        }`
+      );
     }
 
     const notaId = notaInsertada.id;
@@ -550,7 +711,9 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
         .insert(itemsPayload);
 
       if (errDetalle) {
-        throw new Error(`Error al registrar detalle de la nota: ${errDetalle.message}`);
+        throw new Error(
+          `Error al registrar detalle de la nota: ${errDetalle.message}`
+        );
       }
     }
 
@@ -567,32 +730,46 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
       credito?: number;
     }
 
-    let detallesContablesPayload: { concepto_auxiliar_id: number | string; tercero_id: number | string | null; debito: number; credito: number }[] = [];
+    const proporcion =
+      totalFacturaOrig > 0 && !esAnulacionTotal
+        ? Math.min(1, totalReal / totalFacturaOrig)
+        : 1;
 
-    if (transaccionOriginal) {
+    let detallesContablesPayload: {
+      concepto_auxiliar_id: number | string;
+      tercero_id: number | string | null;
+      debito: number;
+      credito: number;
+    }[] = [];
+
+    if (transaccionOriginal?.id) {
       const { data: detallesOriginales } = await supabase
         .from("detalle_transacciones")
         .select("concepto_auxiliar_id, tercero_id, debito, credito")
         .eq("transaccion_id", transaccionOriginal.id);
 
       if (detallesOriginales && detallesOriginales.length > 0) {
-        detallesContablesPayload = (detallesOriginales as DetalleTransaccionOriginal[]).map((d) => {
-          const debitoOrig = Number(d.debito || 0);
-          const creditoOrig = Number(d.credito || 0);
+        detallesContablesPayload = (
+          detallesOriginales as DetalleTransaccionOriginal[]
+        ).map((d) => {
+          const debitoOrig = Number(d.debito || 0) * proporcion;
+          const creditoOrig = Number(d.credito || 0) * proporcion;
+          const debRed = Math.round(debitoOrig * 100) / 100;
+          const credRed = Math.round(creditoOrig * 100) / 100;
 
-          if (payload.tipo_nota === "DEBITO") {
+          if (esDebito) {
             return {
               concepto_auxiliar_id: d.concepto_auxiliar_id,
               tercero_id: d.tercero_id || payload.cliente_id,
-              debito: debitoOrig,
-              credito: creditoOrig,
+              debito: debRed,
+              credito: credRed,
             };
           } else {
             return {
               concepto_auxiliar_id: d.concepto_auxiliar_id,
               tercero_id: d.tercero_id || payload.cliente_id,
-              debito: creditoOrig,
-              credito: debitoOrig,
+              debito: credRed,
+              credito: debRed,
             };
           }
         });
@@ -618,11 +795,15 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
           created_at: new Date().toISOString(),
         },
       ])
-      .select()
+      .select("id")
       .single();
 
-    if (errTrans) {
-      throw new Error(`Error al registrar transacción contable: ${errTrans.message}`);
+    if (errTrans || !transaccionNueva) {
+      throw new Error(
+        `Error al registrar transacción contable: ${
+          errTrans?.message || "No se pudo insertar."
+        }`
+      );
     }
 
     if (detallesContablesPayload.length > 0) {
@@ -639,12 +820,14 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
         .insert(detalleTransaccionFinal);
 
       if (errDetalleTrans) {
-        throw new Error(`Error al registrar el detalle de la transacción: ${errDetalleTrans.message}`);
+        throw new Error(
+          `Error al registrar el detalle de la transacción: ${errDetalleTrans.message}`
+        );
       }
     }
 
-    const esConceptoAnulacion = String(payload.concepto_dian).trim() === "2";
-    if (payload.tipo_nota === "CREDITO" && esConceptoAnulacion) {
+    // Actualizar estado o saldo de la factura afectada
+    if (!esDebito && esConceptoAnulacion) {
       const { error: errFacturaUpd } = await supabase
         .from("facturas_emitidas")
         .update({
@@ -655,15 +838,34 @@ export async function registrarNotaEmitida(payload: RegistrarNotaPayload) {
         .eq("id", payload.factura_emitida_id);
 
       if (errFacturaUpd) {
-        throw new Error(`Error al actualizar el estado de la factura: ${errFacturaUpd.message}`);
+        throw new Error(
+          `Error al actualizar el estado de la factura: ${errFacturaUpd.message}`
+        );
       }
+    } else {
+      const nuevoSaldo = esDebito
+        ? Math.round((saldoPendienteOrig + totalReal) * 100) / 100
+        : Math.max(0, Math.round((saldoPendienteOrig - totalReal) * 100) / 100);
+
+      await supabase
+        .from("facturas_emitidas")
+        .update({
+          saldo_pendiente: nuevoSaldo,
+        })
+        .eq("id", payload.factura_emitida_id);
     }
 
     revalidatePath("/notas-emitidas");
+    revalidatePath("/notas-emitidas/nueva");
     revalidatePath("/facturas/emitir");
+    revalidatePath("/facturas-emitidas");
+
     return { success: true, notaId, numeroNota: numeroNotaFinal };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : "Error interno al registrar la nota.";
+    const errorMsg =
+      err instanceof Error
+        ? err.message
+        : "Error interno al registrar la nota.";
     console.error("Excepción en registrarNotaEmitida:", err);
     return { success: false, error: errorMsg };
   }

@@ -2,8 +2,15 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { BarChart3, ArrowLeft, ArrowRight, Building2, MapPin } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { useRouter } from "next/navigation";
+import {
+  BarChart3,
+  ArrowLeft,
+  ArrowRight,
+  Building2,
+  MapPin,
+} from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
 
 interface OpcionModulo {
   name: string;
@@ -18,71 +25,93 @@ interface UsuarioPerfil {
 }
 
 export default function ContabilidadPage() {
-  const [empresaActivaNombre, setEmpresaActivaNombre] = useState<string>("Empresa Principal");
-  const [sucursalActivaNombre, setSucursalActivaNombre] = useState<string>("Sucursal Principal");
-  const [usuarioActual, setUsuarioActual] = useState<UsuarioPerfil | null>(null);
+  const router = useRouter();
+  const [empresaActivaNombre, setEmpresaActivaNombre] =
+    useState<string>("Empresa Principal");
+  const [sucursalActivaNombre, setSucursalActivaNombre] =
+    useState<string>("Sucursal Principal");
+  const [usuarioActual, setUsuarioActual] = useState<UsuarioPerfil | null>(
+    null
+  );
 
   useEffect(() => {
+    let cancelado = false;
+
     async function initContexto() {
-      // Leer Empresa y Sucursal desde localStorage
       if (typeof window !== "undefined") {
-        const storedEmpresa = localStorage.getItem("empresa_activa_nombre");
-        const storedSucursal = localStorage.getItem("sucursal_activa_nombre");
+        const storedEmpresa =
+          localStorage.getItem("empresa_activa_nombre") ||
+          localStorage.getItem("empresa_activa") ||
+          localStorage.getItem("empresa_id");
+        const storedSucursal =
+          localStorage.getItem("sucursal_activa_nombre") ||
+          localStorage.getItem("sucursal_activa") ||
+          localStorage.getItem("sucursal_id");
         if (storedEmpresa) setEmpresaActivaNombre(storedEmpresa);
         if (storedSucursal) setSucursalActivaNombre(storedSucursal);
       }
 
-      // Cargar sesión del usuario
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      if (!supabaseUrl || !supabaseAnonKey) return;
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (cancelado || !user) return;
 
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
         const { data: perfil } = await supabase
           .from("usuarios_perfiles")
           .select("*")
           .eq("id", user.id)
           .single();
 
-        if (perfil) setUsuarioActual(perfil as UsuarioPerfil);
+        if (!cancelado && perfil) {
+          setUsuarioActual(perfil as UsuarioPerfil);
+        }
+      } catch {
+        // Ignorar errores de sesión en carga inicial
       }
     }
+
     initContexto();
+    return () => {
+      cancelado = true;
+    };
   }, []);
 
   const opciones: OpcionModulo[] = [
     { name: "Documentos Contables", href: "/documentos" },
     { name: "Balance General", href: "/balance_general" },
     { name: "Estado de Resultados", href: "/estado-resultados" },
+    { name: "Conceptos de Retención", href: "/retenciones/conceptos" },
     { name: "Declaración de Retenciones", href: "/retenciones/declaracion" },
     { name: "Certificados de Retención", href: "/retenciones/Certificados" },
-    { name: "Conceptos de Retención", href: "/retenciones/conceptos" },
     { name: "Cierres Contables", href: "/cierres" },
   ];
 
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-4 md:p-8">
       <div className="max-w-4xl mx-auto space-y-6">
-        
         {/* BARRA SUPERIOR CONTEXTUAL (Empresa, Sucursal y Usuario) */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-3.5 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-3 text-xs">
-          <Link 
-            href="/modulos/contabilidad" 
+          <button
+            type="button"
+            onClick={() => router.back()}
             className="inline-flex items-center gap-1.5 font-semibold text-zinc-600 dark:text-zinc-300 hover:text-blue-600 transition cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4" /> Volver al Menú Contable
-          </Link>
+            <ArrowLeft className="w-4 h-4" /> Volver
+          </button>
 
           <div className="flex flex-wrap items-center gap-2.5">
             {/* Empresa y Sucursal */}
             <div className="flex items-center gap-2 bg-zinc-50 dark:bg-zinc-800/60 px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700">
               <Building2 className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
-              <span className="font-bold truncate max-w-[120px]">{empresaActivaNombre}</span>
+              <span className="font-bold truncate max-w-[140px]">
+                {empresaActivaNombre}
+              </span>
               <span className="text-zinc-300 dark:text-zinc-600">|</span>
               <MapPin className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
-              <span className="truncate max-w-[100px]">{sucursalActivaNombre}</span>
+              <span className="truncate max-w-[120px]">
+                {sucursalActivaNombre}
+              </span>
             </div>
 
             {/* Usuario */}
@@ -102,26 +131,29 @@ export default function ContabilidadPage() {
             </div>
             <div>
               <h1 className="text-2xl font-bold">Módulo de Contabilidad</h1>
-              <p className="text-sm text-zinc-500">Estructura oficial NIIF, estados financieros, retenciones y cierres</p>
+              <p className="text-sm text-zinc-500">
+                Estructura oficial NIIF, estados financieros, retenciones y
+                cierres
+              </p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {opciones.map((op, idx) => (
-              <Link 
-                key={idx} 
-                href={op.href} 
+            {opciones.map((op) => (
+              <Link
+                key={op.href}
+                href={op.href}
                 className="group p-4 rounded-xl border border-zinc-200/70 dark:border-zinc-800 hover:border-blue-500/40 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition flex items-center justify-between cursor-pointer"
               >
                 <span className="text-sm font-medium flex items-center gap-2.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span> {op.name}
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>{" "}
+                  {op.name}
                 </span>
                 <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-blue-600 group-hover:translate-x-1 transition-all" />
               </Link>
             ))}
           </div>
         </div>
-
       </div>
     </main>
   );

@@ -1,131 +1,525 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
+import { supabase } from "@/lib/supabaseClient";
 import {
-  obtenerEmpresas,
-  obtenerSucursales,
-} from "./movimientos-actions";
+  getEmpresasPermitidas,
+  getSucursalesPermitidas,
+  getEmpresaActivaUsuario,
+  getSucursalActivaUsuario,
+  setEmpresaActivaUsuario,
+  setSucursalActivaUsuario,
+  type Empresa as EmpresaPermitida,
+  type Sucursal as SucursalPermitida,
+} from "@/app/actions/accionesEmpresas";
 import { obtenerBalanceGeneral } from "./balance-actions";
 import BotonAnalisisIA from "./BotonAnalisisIA";
 
+type Empresa = EmpresaPermitida & {
+  nombre?: string;
+  nombre_comercial?: string;
+};
+
+type Sucursal = SucursalPermitida & {
+  nombre_sucursal?: string;
+  codigo_sucursal?: string;
+};
+
+interface BalanceRow {
+  elemento: string;
+  concepto_id: number | string;
+  concepto_codigo: string;
+  concepto_nombre: string;
+  clasificacion_balance?: string;
+  subconcepto_id?: number | string | null;
+  subconcepto_codigo?: string;
+  subconcepto_nombre?: string;
+  saldo?: number;
+}
+
+interface SubconceptoBalance {
+  id: number | string;
+  codigo?: string;
+  nombre?: string;
+  saldo: number;
+  saldoComp: number;
+  variacion: number;
+}
+
+interface ConceptoBalance {
+  codigo: string;
+  nombre: string;
+  subconceptos: SubconceptoBalance[];
+  totalConcepto: number;
+  totalConceptoComp: number;
+}
+
+interface FilaExportacionBalance {
+  Elemento: string;
+  Código: string;
+  Nombre: string;
+  Saldo: number | string;
+  Saldo_Comparativo?: number | string;
+  Variacion?: number | string;
+}
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+function obtenerNombreEmpresa(emp: Empresa): string {
+  return String(
+    emp.razon_social || emp.nombre_comercial || emp.nombre || "Empresa"
+  );
+}
+
+function obtenerNombreSucursal(suc: Sucursal): string {
+  return String(suc.nombre || suc.nombre_sucursal || `Sucursal ${suc.id}`);
+}
+
+function obtenerUsuarioIdDesdeLocalStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  for (const clave of ["usuario_id", "user_id", "uid"]) {
+    const val = localStorage.getItem(clave);
+    if (val && val.trim()) return val.trim();
+  }
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.includes("auth-token") || k.includes("supabase")) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const idEncontrado =
+          parsed?.user?.id ||
+          parsed?.currentSession?.user?.id ||
+          parsed?.session?.user?.id ||
+          null;
+        if (idEncontrado && typeof idEncontrado === "string") {
+          return idEncontrado;
+        }
+      } catch {
+        // Ignorar
+      }
+    }
+  }
+  return null;
+}
+
 export default function BalanceGeneralPage() {
+  const router = useRouter();
+  const usuarioIdRef = useRef<string | null>(null);
+  const inicializadoRef = useRef<boolean>(false);
+
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
 
   // Filtros
   const [empresaId, setEmpresaId] = useState<string>("");
   const [sucursalId, setSucursalId] = useState<string>("");
   const [anio, setAnio] = useState<string>("2026");
   const [mes, setMes] = useState<string>("12");
-  const [tipoReporte, setTipoReporte] = useState<"ACUMULADO" | "MES">("ACUMULADO");
-  const [modoPresentacion, setModoPresentacion] = useState<"NORMAL" | "COMPARATIVO_MES" | "COMPARATIVO_ANIO">("NORMAL");
+  const [tipoReporte, setTipoReporte] = useState<"ACUMULADO" | "MES">(
+    "ACUMULADO"
+  );
+  const [modoPresentacion, setModoPresentacion] = useState<
+    "NORMAL" | "COMPARATIVO_MES" | "COMPARATIVO_ANIO"
+  >("NORMAL");
 
   // Estados de datos
   const [loading, setLoading] = useState<boolean>(false);
-  const [balanceData, setBalanceData] = useState<any[]>([]);
-  const [balanceComparativoData, setBalanceComparativoData] = useState<any[]>([]);
+  const [balanceData, setBalanceData] = useState<BalanceRow[]>([]);
+  const [balanceComparativoData, setBalanceComparativoData] = useState<
+    BalanceRow[]
+  >([]);
+
+  const resolverUsuarioId = useCallback(async (): Promise<string | null> => {
+    if (usuarioIdRef.current) return usuarioIdRef.current;
+    try {
+      const { data } = await supabase.auth.getUser();
+      if (data?.user?.id) {
+        usuarioIdRef.current = data.user.id;
+        return data.user.id;
+      }
+    } catch {
+      // Ignorar
+    }
+    const localUid = obtenerUsuarioIdDesdeLocalStorage();
+    if (localUid) {
+      usuarioIdRef.current = localUid;
+    }
+    return localUid;
+  }, []);
+
+  const persistirContextoEnPerfil = useCallback(
+    async (empVal: string | null, sucVal: string | null) => {
+      const uid = await resolverUsuarioId();
+      if (!uid) return;
+
+      const empNormalizado =
+        empVal && empVal.trim() !== ""
+          ? Number.isNaN(Number(empVal))
+            ? empVal
+            : Number(empVal)
+          : null;
+
+      const sucNormalizado =
+        sucVal && sucVal.trim() !== ""
+          ? Number.isNaN(Number(sucVal))
+            ? sucVal
+            : Number(sucVal)
+          : null;
+
+      try {
+        if (empVal && empVal.trim() !== "") {
+          await setEmpresaActivaUsuario(empVal, uid, sucVal || null);
+        }
+        if (sucVal !== undefined) {
+          await setSucursalActivaUsuario(sucVal || null, uid);
+        }
+      } catch {
+        // Continuar con actualización directa
+      }
+
+      const payload: {
+        empresa_activa?: string | number | null;
+        sucursal_activa?: string | number | null;
+      } = {};
+      if (empVal !== undefined) payload.empresa_activa = empNormalizado;
+      if (sucVal !== undefined) payload.sucursal_activa = sucNormalizado;
+
+      if (Object.keys(payload).length > 0) {
+        await supabase
+          .from("usuarios_perfiles")
+          .update(payload)
+          .eq("id", uid);
+      }
+    },
+    [resolverUsuarioId]
+  );
 
   useEffect(() => {
     setIsMounted(true);
   }, []);
 
+  // Cargar empresas y contexto activo al iniciar
   useEffect(() => {
-    async function init() {
-      const res = await obtenerEmpresas();
-      if (res.success && res.data.length > 0) {
-        setEmpresas(res.data);
-        setEmpresaId(String(res.data[0].id));
+    if (!isMounted || inicializadoRef.current) return;
+    inicializadoRef.current = true;
+    let cancelado = false;
+
+    async function initContexto() {
+      try {
+        const uid = await resolverUsuarioId();
+        const permitidas = await getEmpresasPermitidas(uid);
+        if (cancelado) return;
+
+        const listaEmpresas: Empresa[] = Array.isArray(permitidas)
+          ? (permitidas as Empresa[])
+          : [];
+
+        if (listaEmpresas.length > 0) {
+          setEmpresas(listaEmpresas);
+
+          let empBD: string | null = null;
+          try {
+            const valBD = await getEmpresaActivaUsuario(uid);
+            if (
+              valBD !== null &&
+              valBD !== undefined &&
+              String(valBD).trim() !== ""
+            ) {
+              empBD = String(valBD).trim();
+            }
+          } catch {
+            // Ignorar
+          }
+
+          const empCookie = getCookieValue("empresa_activa");
+          const empLocal =
+            typeof window !== "undefined"
+              ? localStorage.getItem("empresa_activa") ||
+                localStorage.getItem("empresa_id")
+              : null;
+
+          let empresaIdAUsar = String(listaEmpresas[0].id);
+          const candidataEmp = empBD || empCookie || empLocal;
+          if (
+            candidataEmp &&
+            listaEmpresas.some((e) => String(e.id) === String(candidataEmp))
+          ) {
+            empresaIdAUsar = String(candidataEmp);
+          }
+
+          const empElegida =
+            listaEmpresas.find((e) => String(e.id) === empresaIdAUsar) ||
+            listaEmpresas[0];
+
+          const sucPermitidas = await getSucursalesPermitidas(
+            empresaIdAUsar,
+            uid
+          );
+          if (cancelado) return;
+
+          const listaSuc: Sucursal[] = Array.isArray(sucPermitidas)
+            ? (sucPermitidas as Sucursal[])
+            : [];
+          setSucursales(listaSuc);
+
+          let sucBD: string | null = null;
+          try {
+            const valSuc = await getSucursalActivaUsuario(uid);
+            if (
+              valSuc !== null &&
+              valSuc !== undefined &&
+              String(valSuc).trim() !== ""
+            ) {
+              sucBD = String(valSuc).trim();
+            }
+          } catch {
+            // Ignorar
+          }
+
+          const sucCookie = getCookieValue("sucursal_activa");
+          const sucLocal =
+            typeof window !== "undefined"
+              ? localStorage.getItem("sucursal_activa") ||
+                localStorage.getItem("sucursal_id")
+              : null;
+          const candidataSuc = sucBD || sucCookie || sucLocal;
+
+          let idSucFinal = "";
+          if (
+            candidataSuc &&
+            listaSuc.some((s) => String(s.id) === String(candidataSuc))
+          ) {
+            idSucFinal = String(candidataSuc);
+          }
+
+          if (typeof window !== "undefined") {
+            localStorage.setItem("empresa_activa", empresaIdAUsar);
+            localStorage.setItem("empresa_id", empresaIdAUsar);
+            localStorage.setItem(
+              "empresa_activa_nombre",
+              obtenerNombreEmpresa(empElegida)
+            );
+            if (idSucFinal) {
+              const sucElegida = listaSuc.find(
+                (s) => String(s.id) === idSucFinal
+              );
+              localStorage.setItem("sucursal_activa", idSucFinal);
+              localStorage.setItem("sucursal_id", idSucFinal);
+              if (sucElegida) {
+                localStorage.setItem(
+                  "sucursal_activa_nombre",
+                  obtenerNombreSucursal(sucElegida)
+                );
+              }
+            }
+          }
+          document.cookie = `empresa_activa=${encodeURIComponent(
+            empresaIdAUsar
+          )}; path=/; max-age=86400; SameSite=Lax`;
+          if (idSucFinal) {
+            document.cookie = `sucursal_activa=${encodeURIComponent(
+              idSucFinal
+            )}; path=/; max-age=86400; SameSite=Lax`;
+          }
+
+          setEmpresaId(empresaIdAUsar);
+          setSucursalId(idSucFinal);
+        }
+      } catch (err) {
+        console.error("Error inicializando contexto de balance general:", err);
       }
     }
-    init();
-  }, []);
 
-  useEffect(() => {
-    if (!empresaId) return;
-    async function cargarSuc() {
-      setSucursalId("");
-      const res = await obtenerSucursales(Number(empresaId));
-      if (res.success) {
-        setSucursales(res.data);
+    initContexto();
+    return () => {
+      cancelado = true;
+    };
+  }, [isMounted, resolverUsuarioId]);
+
+  const handleCambioEmpresa = async (nuevoId: string) => {
+    setEmpresaId(nuevoId);
+    setSucursalId("");
+    setSucursales([]);
+
+    if (typeof window !== "undefined") {
+      if (nuevoId) {
+        const empSel = empresas.find((e) => String(e.id) === nuevoId);
+        localStorage.setItem("empresa_activa", nuevoId);
+        localStorage.setItem("empresa_id", nuevoId);
+        if (empSel) {
+          localStorage.setItem(
+            "empresa_activa_nombre",
+            obtenerNombreEmpresa(empSel)
+          );
+        }
+        document.cookie = `empresa_activa=${encodeURIComponent(
+          nuevoId
+        )}; path=/; max-age=86400; SameSite=Lax`;
+      } else {
+        localStorage.removeItem("empresa_activa");
+        localStorage.removeItem("empresa_id");
+        localStorage.removeItem("empresa_activa_nombre");
+        document.cookie = "empresa_activa=; path=/; max-age=0; SameSite=Lax";
+      }
+      localStorage.removeItem("sucursal_activa");
+      localStorage.removeItem("sucursal_id");
+      localStorage.removeItem("sucursal_activa_nombre");
+      document.cookie = "sucursal_activa=; path=/; max-age=0; SameSite=Lax";
+    }
+
+    await persistirContextoEnPerfil(nuevoId || null, null);
+
+    if (nuevoId) {
+      const uid = await resolverUsuarioId();
+      const sucPermitidas = await getSucursalesPermitidas(nuevoId, uid);
+      setSucursales(
+        Array.isArray(sucPermitidas) ? (sucPermitidas as Sucursal[]) : []
+      );
+    }
+  };
+
+  const handleCambioSucursal = async (nuevoSucId: string) => {
+    setSucursalId(nuevoSucId);
+
+    if (typeof window !== "undefined") {
+      if (nuevoSucId) {
+        const sucSel = sucursales.find((s) => String(s.id) === nuevoSucId);
+        localStorage.setItem("sucursal_activa", nuevoSucId);
+        localStorage.setItem("sucursal_id", nuevoSucId);
+        if (sucSel) {
+          localStorage.setItem(
+            "sucursal_activa_nombre",
+            obtenerNombreSucursal(sucSel)
+          );
+        }
+        document.cookie = `sucursal_activa=${encodeURIComponent(
+          nuevoSucId
+        )}; path=/; max-age=86400; SameSite=Lax`;
+      } else {
+        localStorage.removeItem("sucursal_activa");
+        localStorage.removeItem("sucursal_id");
+        localStorage.removeItem("sucursal_activa_nombre");
+        document.cookie = "sucursal_activa=; path=/; max-age=0; SameSite=Lax";
       }
     }
-    cargarSuc();
-  }, [empresaId]);
+
+    await persistirContextoEnPerfil(empresaId || null, nuevoSucId || null);
+  };
+
+  const claveConsulta = `${empresaId}|${sucursalId}|${anio}|${mes}|${tipoReporte}|${modoPresentacion}`;
 
   useEffect(() => {
-    if (!empresaId || !anio || !mes) return;
-    async function cargarBalances() {
+    if (!isMounted || !empresaId || !anio || !mes) return;
+
+    let cancelado = false;
+    const timer = setTimeout(async () => {
+      if (cancelado) return;
       setLoading(true);
 
-      const resActual = await obtenerBalanceGeneral(
-        Number(empresaId),
-        sucursalId ? Number(sucursalId) : null,
-        Number(anio),
-        Number(mes),
-        tipoReporte
-      );
-
-      if (resActual.success) {
-        setBalanceData(resActual.data);
-      } else {
-        alert("Error al cargar el balance actual: " + resActual.error);
-      }
-
-      if (modoPresentacion !== "NORMAL") {
-        let anioComp = Number(anio);
-        let mesComp = Number(mes);
-
-        if (modoPresentacion === "COMPARATIVO_MES") {
-          mesComp -= 1;
-          if (mesComp < 1) {
-            mesComp = 12;
-            anioComp -= 1;
-          }
-        } else if (modoPresentacion === "COMPARATIVO_ANIO") {
-          anioComp -= 1;
-        }
-
-        const resComparativo = await obtenerBalanceGeneral(
+      try {
+        const resActual = await obtenerBalanceGeneral(
           Number(empresaId),
           sucursalId ? Number(sucursalId) : null,
-          anioComp,
-          mesComp,
+          Number(anio),
+          Number(mes),
           tipoReporte
         );
 
-        if (resComparativo.success) {
-          setBalanceComparativoData(resComparativo.data);
-        }
-      } else {
-        setBalanceComparativoData([]);
-      }
+        if (cancelado) return;
 
-      setLoading(false);
-    }
-    cargarBalances();
-  }, [empresaId, sucursalId, anio, mes, tipoReporte, modoPresentacion]);
+        if (resActual.success) {
+          setBalanceData((resActual.data || []) as BalanceRow[]);
+        } else {
+          alert("Error al cargar el balance actual: " + resActual.error);
+        }
+
+        if (modoPresentacion !== "NORMAL") {
+          let anioComp = Number(anio);
+          let mesComp = Number(mes);
+
+          if (modoPresentacion === "COMPARATIVO_MES") {
+            mesComp -= 1;
+            if (mesComp < 1) {
+              mesComp = 12;
+              anioComp -= 1;
+            }
+          } else if (modoPresentacion === "COMPARATIVO_ANIO") {
+            anioComp -= 1;
+          }
+
+          const resComparativo = await obtenerBalanceGeneral(
+            Number(empresaId),
+            sucursalId ? Number(sucursalId) : null,
+            anioComp,
+            mesComp,
+            tipoReporte
+          );
+
+          if (!cancelado && resComparativo.success) {
+            setBalanceComparativoData(
+              (resComparativo.data || []) as BalanceRow[]
+            );
+          }
+        } else {
+          setBalanceComparativoData([]);
+        }
+      } finally {
+        if (!cancelado) setLoading(false);
+      }
+    }, 80);
+
+    return () => {
+      cancelado = true;
+      clearTimeout(timer);
+    };
+  }, [
+    isMounted,
+    claveConsulta,
+    empresaId,
+    sucursalId,
+    anio,
+    mes,
+    tipoReporte,
+    modoPresentacion,
+  ]);
 
   const fmt = (v: number) =>
-    `$ ${Number(v || 0).toLocaleString("es-CO", { minimumFractionDigits: 2 })}`;
+    `$ ${Number(v || 0).toLocaleString("es-CO", {
+      minimumFractionDigits: 2,
+    })}`;
 
-  // Nombre de la empresa seleccionada para la IA
   const nombreEmpresaSel = useMemo(() => {
-    return empresas.find((e) => String(e.id) === String(empresaId))?.razon_social || "Empresa";
+    const emp = empresas.find((e) => String(e.id) === String(empresaId));
+    return emp ? obtenerNombreEmpresa(emp) : "Empresa";
   }, [empresas, empresaId]);
 
-  // Estructurar datos jerárquicamente por Elemento -> Clasificación (Corriente/No Corriente) -> Concepto -> Subconcepto
   const balanceAgrupado = useMemo(() => {
-    const estructura: { [elemento: string]: { [clasificacion: string]: { [conceptoId: string]: any } } } = {
+    const estructura: Record<
+      string,
+      Record<string, Record<string, ConceptoBalance>>
+    > = {
       Activo: {},
       Pasivo: {},
       Patrimonio: {},
     };
 
-    const mapComparativo: { [key: string]: number } = {};
+    const mapComparativo: Record<string, number> = {};
     balanceComparativoData.forEach((row) => {
-      const keySub = row.subconcepto_id ? `sub_${row.subconcepto_id}` : `con_${row.concepto_id}`;
+      const keySub = row.subconcepto_id
+        ? `sub_${row.subconcepto_id}`
+        : `con_${row.concepto_id}`;
       mapComparativo[keySub] = Number(row.saldo || 0);
     });
 
@@ -136,7 +530,7 @@ export default function BalanceGeneralPage() {
       const clasif = row.clasificacion_balance?.trim() || "OTROS";
       if (!estructura[el][clasif]) estructura[el][clasif] = {};
 
-      const cId = row.concepto_id;
+      const cId = String(row.concepto_id);
       if (!estructura[el][clasif][cId]) {
         estructura[el][clasif][cId] = {
           codigo: row.concepto_codigo,
@@ -148,7 +542,9 @@ export default function BalanceGeneralPage() {
       }
 
       const saldoActual = Number(row.saldo || 0);
-      const keySub = row.subconcepto_id ? `sub_${row.subconcepto_id}` : `con_${row.concepto_id}`;
+      const keySub = row.subconcepto_id
+        ? `sub_${row.subconcepto_id}`
+        : `con_${row.concepto_id}`;
       const saldoComp = mapComparativo[keySub] || 0;
 
       if (row.subconcepto_id) {
@@ -157,7 +553,7 @@ export default function BalanceGeneralPage() {
           codigo: row.subconcepto_codigo,
           nombre: row.subconcepto_nombre,
           saldo: saldoActual,
-          saldoComp: saldoComp,
+          saldoComp,
           variacion: saldoActual - saldoComp,
         });
       }
@@ -169,15 +565,20 @@ export default function BalanceGeneralPage() {
     return estructura;
   }, [balanceData, balanceComparativoData]);
 
-  // Totales y Subtotales por Elemento y Clasificación
   const calculosTotales = useMemo(() => {
-    const subtotalesClasif: { [elemento: string]: { [clasif: string]: { actual: number; comparativo: number } } } = {
+    const subtotalesClasif: Record<
+      string,
+      Record<string, { actual: number; comparativo: number }>
+    > = {
       Activo: {},
       Pasivo: {},
       Patrimonio: {},
     };
 
-    const totalesElementos: { [elemento: string]: { actual: number; comparativo: number } } = {
+    const totalesElementos: Record<
+      string,
+      { actual: number; comparativo: number }
+    > = {
       Activo: { actual: 0, comparativo: 0 },
       Pasivo: { actual: 0, comparativo: 0 },
       Patrimonio: { actual: 0, comparativo: 0 },
@@ -191,12 +592,15 @@ export default function BalanceGeneralPage() {
         let sumaClasifAct = 0;
         let sumaClasifComp = 0;
 
-        Object.values(balanceAgrupado[el][clasif]).forEach((con: any) => {
+        Object.values(balanceAgrupado[el][clasif]).forEach((con) => {
           sumaClasifAct += con.totalConcepto;
           sumaClasifComp += con.totalConceptoComp;
         });
 
-        subtotalesClasif[el][clasif] = { actual: sumaClasifAct, comparativo: sumaClasifComp };
+        subtotalesClasif[el][clasif] = {
+          actual: sumaClasifAct,
+          comparativo: sumaClasifComp,
+        };
         sumaElemAct += sumaClasifAct;
         sumaElemComp += sumaClasifComp;
       });
@@ -207,15 +611,28 @@ export default function BalanceGeneralPage() {
     return { subtotalesClasif, totalesElementos };
   }, [balanceAgrupado]);
 
-  // Prueba Contable: Activos - (Abs(Pasivo) + Abs(Patrimonio)) = 0
   const pruebaCuadre = useMemo(() => {
     const activo = calculosTotales.totalesElementos.Activo.actual;
     const pasivo = Math.abs(calculosTotales.totalesElementos.Pasivo.actual);
-    const patrimonio = Math.abs(calculosTotales.totalesElementos.Patrimonio.actual);
-    
+    const patrimonio = Math.abs(
+      calculosTotales.totalesElementos.Patrimonio.actual
+    );
+
+    const activoComp = calculosTotales.totalesElementos.Activo.comparativo;
+    const pasivoComp = Math.abs(
+      calculosTotales.totalesElementos.Pasivo.comparativo
+    );
+    const patrimonioComp = Math.abs(
+      calculosTotales.totalesElementos.Patrimonio.comparativo
+    );
+
     const diferencia = activo - (pasivo + patrimonio);
+    const diferenciaComp = activoComp - (pasivoComp + patrimonioComp);
+
     return {
       diferencia,
+      diferenciaComp,
+      variacion: diferencia - diferenciaComp,
       cuadra: Math.abs(diferencia) < 0.01,
     };
   }, [calculosTotales]);
@@ -226,25 +643,73 @@ export default function BalanceGeneralPage() {
       return;
     }
 
-    const dataExport: any[] = [];
+    const dataExport: FilaExportacionBalance[] = [];
     Object.entries(balanceAgrupado).forEach(([elemento, clasificaciones]) => {
-      dataExport.push({ Elemento: `=== ${elemento.toUpperCase()} ===`, Código: "", Nombre: "", Saldo: "" });
+      dataExport.push({
+        Elemento: `=== ${elemento.toUpperCase()} ===`,
+        Código: "",
+        Nombre: "",
+        Saldo: "",
+      });
       Object.entries(clasificaciones).forEach(([clasif, conceptos]) => {
-        dataExport.push({ Elemento: `--- ${clasif} ---`, Código: "", Nombre: "", Saldo: "" });
-        Object.values(conceptos).forEach((con: any) => {
-          dataExport.push({ Elemento: elemento, Código: con.codigo, Nombre: con.nombre, Saldo: con.totalConcepto });
-          con.subconceptos.forEach((sub: any) => {
-            dataExport.push({ Elemento: elemento, Código: `  ${sub.codigo}`, Nombre: `    ${sub.nombre}`, Saldo: sub.saldo });
+        dataExport.push({
+          Elemento: `--- ${clasif} ---`,
+          Código: "",
+          Nombre: "",
+          Saldo: "",
+        });
+        Object.values(conceptos).forEach((con) => {
+          dataExport.push({
+            Elemento: elemento,
+            Código: con.codigo,
+            Nombre: con.nombre,
+            Saldo: con.totalConcepto,
+            ...(modoPresentacion !== "NORMAL"
+              ? {
+                  Saldo_Comparativo: con.totalConceptoComp,
+                  Variacion: con.totalConcepto - con.totalConceptoComp,
+                }
+              : {}),
+          });
+          con.subconceptos.forEach((sub) => {
+            dataExport.push({
+              Elemento: elemento,
+              Código: `  ${sub.codigo || ""}`,
+              Nombre: `    ${sub.nombre || ""}`,
+              Saldo: sub.saldo,
+              ...(modoPresentacion !== "NORMAL"
+                ? {
+                    Saldo_Comparativo: sub.saldoComp,
+                    Variacion: sub.variacion,
+                  }
+                : {}),
+            });
           });
         });
       });
+    });
+
+    dataExport.push({
+      Elemento: "PRUEBA CONTABLE",
+      Código: "",
+      Nombre: "Diferencia (Activo - Pasivo - Patrimonio)",
+      Saldo: pruebaCuadre.diferencia,
+      ...(modoPresentacion !== "NORMAL"
+        ? {
+            Saldo_Comparativo: pruebaCuadre.diferenciaComp,
+            Variacion: pruebaCuadre.variacion,
+          }
+        : {}),
     });
 
     const worksheet = XLSX.utils.json_to_sheet(dataExport);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Balance General");
 
-    XLSX.writeFile(workbook, `Balance_General_${nombreEmpresaSel}_${anio}_M${mes}.xlsx`);
+    XLSX.writeFile(
+      workbook,
+      `Balance_General_${nombreEmpresaSel}_${anio}_M${mes}.xlsx`
+    );
   };
 
   const mesesAnio = [
@@ -268,15 +733,26 @@ export default function BalanceGeneralPage() {
     <div className="p-4 max-w-7xl mx-auto space-y-4 text-xs font-sans">
       {/* HEADER Y ACCIONES */}
       <div className="border-b pb-2 flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
-        <div>
-          <h1 className="text-base font-bold text-slate-800">Balance General NIIF</h1>
-          <p className="text-[11px] text-slate-500">
-            Estado de situación financiera clasificado por Activos, Pasivos y Patrimonio (Corriente y No Corriente).
-          </p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded text-xs transition border border-slate-200 cursor-pointer shrink-0"
+          >
+            ← Atrás
+          </button>
+          <div>
+            <h1 className="text-base font-bold text-slate-800">
+              Balance General NIIF
+            </h1>
+            <p className="text-[11px] text-slate-500">
+              Estado de situación financiera clasificado por Activos, Pasivos y
+              Patrimonio (Corriente y No Corriente).
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* BOTÓN DE ANÁLISIS DE IA */}
           <BotonAnalisisIA
             tipoReporte="BALANCE_GENERAL"
             datosReporte={balanceData}
@@ -284,13 +760,12 @@ export default function BalanceGeneralPage() {
             periodo={`${anio} - Mes ${mes}`}
           />
 
-          {/* BOTÓN DE EXPORTACIÓN A EXCEL */}
           <button
             type="button"
             onClick={handleExportarExcel}
             disabled={!isMounted || loading || balanceData.length === 0}
             suppressHydrationWarning
-            className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded shadow-sm transition flex items-center gap-1 text-xs"
+            className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded shadow-sm transition flex items-center gap-1 text-xs cursor-pointer"
           >
             📊 Exportar Balance a Excel (.xlsx)
           </button>
@@ -300,38 +775,44 @@ export default function BalanceGeneralPage() {
       {/* FILTROS SUPERIORES CON PROPORCIONES AJUSTADAS */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-12 gap-2.5 bg-slate-50 p-3 rounded-lg border border-slate-200 items-end">
         <div className="lg:col-span-3">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Empresa</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Empresa
+          </label>
           <select
             value={empresaId}
-            onChange={(e) => setEmpresaId(e.target.value)}
+            onChange={(e) => handleCambioEmpresa(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
           >
             {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>
-                {emp.razon_social || emp.nombre_comercial}
+                {obtenerNombreEmpresa(emp)}
               </option>
             ))}
           </select>
         </div>
 
         <div className="lg:col-span-3">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Sucursal</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Sucursal
+          </label>
           <select
             value={sucursalId}
-            onChange={(e) => setSucursalId(e.target.value)}
+            onChange={(e) => handleCambioSucursal(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
           >
             <option value="">-- Consolidado --</option>
             {sucursales.map((suc) => (
               <option key={suc.id} value={suc.id}>
-                {suc.nombre}
+                {obtenerNombreSucursal(suc)}
               </option>
             ))}
           </select>
         </div>
 
         <div className="lg:col-span-1">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Año</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Año
+          </label>
           <select
             value={anio}
             onChange={(e) => setAnio(e.target.value)}
@@ -344,7 +825,9 @@ export default function BalanceGeneralPage() {
         </div>
 
         <div className="lg:col-span-1">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Corte Mes</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Corte Mes
+          </label>
           <select
             value={mes}
             onChange={(e) => setMes(e.target.value)}
@@ -359,10 +842,14 @@ export default function BalanceGeneralPage() {
         </div>
 
         <div className="lg:col-span-2">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Tipo de Saldo</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Tipo de Saldo
+          </label>
           <select
             value={tipoReporte}
-            onChange={(e) => setTipoReporte(e.target.value as "ACUMULADO" | "MES")}
+            onChange={(e) =>
+              setTipoReporte(e.target.value as "ACUMULADO" | "MES")
+            }
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none"
           >
             <option value="ACUMULADO">Acumulado</option>
@@ -371,10 +858,19 @@ export default function BalanceGeneralPage() {
         </div>
 
         <div className="lg:col-span-2">
-          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">Presentación</label>
+          <label className="block font-semibold text-slate-600 uppercase mb-0.5 text-[10px]">
+            Presentación
+          </label>
           <select
             value={modoPresentacion}
-            onChange={(e) => setModoPresentacion(e.target.value as "NORMAL" | "COMPARATIVO_MES" | "COMPARATIVO_ANIO")}
+            onChange={(e) =>
+              setModoPresentacion(
+                e.target.value as
+                  | "NORMAL"
+                  | "COMPARATIVO_MES"
+                  | "COMPARATIVO_ANIO"
+              )
+            }
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
           >
             <option value="NORMAL">Normal</option>
@@ -388,36 +884,67 @@ export default function BalanceGeneralPage() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <div className="p-3 bg-white border rounded-lg shadow-sm flex justify-between items-center border-l-4 border-l-blue-600">
           <div>
-            <span className="text-slate-500 font-semibold uppercase text-[10px] block">Total Activos</span>
-            <span className="font-mono font-bold text-slate-900 text-sm">{fmt(calculosTotales.totalesElementos.Activo.actual)}</span>
+            <span className="text-slate-500 font-semibold uppercase text-[10px] block">
+              Total Activos
+            </span>
+            <span className="font-mono font-bold text-slate-900 text-sm">
+              {fmt(calculosTotales.totalesElementos.Activo.actual)}
+            </span>
           </div>
           <span className="text-xl">🏢</span>
         </div>
 
         <div className="p-3 bg-white border rounded-lg shadow-sm flex justify-between items-center border-l-4 border-l-amber-600">
           <div>
-            <span className="text-slate-500 font-semibold uppercase text-[10px] block">Total Pasivos</span>
-            <span className="font-mono font-bold text-slate-900 text-sm">{fmt(calculosTotales.totalesElementos.Pasivo.actual)}</span>
+            <span className="text-slate-500 font-semibold uppercase text-[10px] block">
+              Total Pasivos
+            </span>
+            <span className="font-mono font-bold text-slate-900 text-sm">
+              {fmt(calculosTotales.totalesElementos.Pasivo.actual)}
+            </span>
           </div>
           <span className="text-xl">📑</span>
         </div>
 
         <div className="p-3 bg-white border rounded-lg shadow-sm flex justify-between items-center border-l-4 border-l-emerald-600">
           <div>
-            <span className="text-slate-500 font-semibold uppercase text-[10px] block">Total Patrimonio</span>
-            <span className="font-mono font-bold text-slate-900 text-sm">{fmt(calculosTotales.totalesElementos.Patrimonio.actual)}</span>
+            <span className="text-slate-500 font-semibold uppercase text-[10px] block">
+              Total Patrimonio
+            </span>
+            <span className="font-mono font-bold text-slate-900 text-sm">
+              {fmt(calculosTotales.totalesElementos.Patrimonio.actual)}
+            </span>
           </div>
           <span className="text-xl">🏛️</span>
         </div>
 
-        <div className={`p-3 bg-white border rounded-lg shadow-sm flex justify-between items-center border-l-4 ${pruebaCuadre.cuadra ? 'border-l-emerald-700 bg-emerald-50/40' : 'border-l-rose-600 bg-rose-50/40'}`}>
+        <div
+          className={`p-3 bg-white border rounded-lg shadow-sm flex justify-between items-center border-l-4 ${
+            pruebaCuadre.cuadra
+              ? "border-l-emerald-700 bg-emerald-50/40"
+              : "border-l-rose-600 bg-rose-50/40"
+          }`}
+        >
           <div>
-            <span className="text-slate-500 font-semibold uppercase text-[10px] block">Prueba (Act - Pas - Pat)</span>
-            <span className={`font-mono font-bold text-sm ${pruebaCuadre.cuadra ? 'text-emerald-700' : 'text-rose-600'}`}>
+            <span className="text-slate-500 font-semibold uppercase text-[10px] block">
+              Prueba (Act - Pas - Pat)
+            </span>
+            <span
+              className={`font-mono font-bold text-sm ${
+                pruebaCuadre.cuadra ? "text-emerald-700" : "text-rose-600"
+              }`}
+            >
               {fmt(pruebaCuadre.diferencia)}
             </span>
           </div>
-          <span className="text-xl" title={pruebaCuadre.cuadra ? "Balance Cuadrado" : "Descuadre detectado"}>
+          <span
+            className="text-xl"
+            title={
+              pruebaCuadre.cuadra
+                ? "Balance Cuadrado"
+                : "Descuadre detectado"
+            }
+          >
             {pruebaCuadre.cuadra ? "✅" : "⚠️"}
           </span>
         </div>
@@ -425,10 +952,13 @@ export default function BalanceGeneralPage() {
 
       {/* TABLA PRINCIPAL */}
       {loading ? (
-        <div className="p-12 text-center text-slate-400 font-semibold">Generando Balance General NIIF...</div>
+        <div className="p-12 text-center text-slate-400 font-semibold">
+          Generando Balance General NIIF...
+        </div>
       ) : balanceData.length === 0 ? (
         <div className="p-12 text-center text-slate-400 italic bg-white border rounded-lg">
-          No se encontraron registros contables para los parámetros seleccionados.
+          No se encontraron registros contables para los parámetros
+          seleccionados.
         </div>
       ) : (
         <div className="bg-white border rounded-lg shadow-sm overflow-x-auto">
@@ -441,7 +971,9 @@ export default function BalanceGeneralPage() {
                 {esComparativo && (
                   <>
                     <th className="p-2.5 text-right w-48">
-                      {modoPresentacion === "COMPARATIVO_MES" ? "Periodo Ant. (Mes)" : "Periodo Ant. (Año)"}
+                      {modoPresentacion === "COMPARATIVO_MES"
+                        ? "Periodo Ant. (Mes)"
+                        : "Periodo Ant. (Año)"}
                     </th>
                     <th className="p-2.5 text-right w-44">Variación</th>
                   </>
@@ -451,7 +983,8 @@ export default function BalanceGeneralPage() {
             <tbody className="divide-y text-[10px]">
               {["Activo", "Pasivo", "Patrimonio"].map((elemento) => {
                 const clasificaciones = balanceAgrupado[elemento];
-                const tieneClasificaciones = Object.keys(clasificaciones).length > 0;
+                const tieneClasificaciones =
+                  Object.keys(clasificaciones).length > 0;
 
                 if (!tieneClasificaciones) return null;
 
@@ -459,76 +992,143 @@ export default function BalanceGeneralPage() {
 
                 return (
                   <React.Fragment key={elemento}>
-                    {/* ENCABEZADO PRINCIPAL DE ELEMENTO (ACTIVO, PASIVO, PATRIMONIO) */}
+                    {/* ENCABEZADO PRINCIPAL DE ELEMENTO */}
                     <tr className="bg-slate-900 text-white font-bold text-[11px]">
-                      <td colSpan={esComparativo ? 2 : 2} className="p-2.5 uppercase tracking-wider">
+                      <td colSpan={2} className="p-2.5 uppercase tracking-wider">
                         {elemento}
                       </td>
-                      <td className="p-2.5 text-right font-mono">{fmt(totElem.actual)}</td>
+                      <td className="p-2.5 text-right font-mono">
+                        {fmt(totElem.actual)}
+                      </td>
                       {esComparativo && (
                         <>
-                          <td className="p-2.5 text-right font-mono">{fmt(totElem.comparativo)}</td>
-                          <td className="p-2.5 text-right font-mono">{fmt(totElem.actual - totElem.comparativo)}</td>
+                          <td className="p-2.5 text-right font-mono">
+                            {fmt(totElem.comparativo)}
+                          </td>
+                          <td className="p-2.5 text-right font-mono">
+                            {fmt(totElem.actual - totElem.comparativo)}
+                          </td>
                         </>
                       )}
                     </tr>
 
-                    {/* RECORRER CLASIFICACIONES (Corriente, No Corriente, etc.) */}
-                    {Object.entries(clasificaciones).map(([clasif, conceptos]) => {
-                      const subClasif = calculosTotales.subtotalesClasif[elemento][clasif];
+                    {/* RECORRER CLASIFICACIONES */}
+                    {Object.entries(clasificaciones).map(
+                      ([clasif, conceptos]) => {
+                        const subClasif =
+                          calculosTotales.subtotalesClasif[elemento][clasif];
 
-                      return (
-                        <React.Fragment key={clasif}>
-                          {/* ENCABEZADO DE CLASIFICACIÓN (CORRIENTE / NO CORRIENTE) */}
-                          <tr className="bg-slate-200 text-slate-800 font-bold text-[10px]">
-                            <td colSpan={esComparativo ? 2 : 2} className="p-2 pl-4 uppercase tracking-wide text-slate-700">
-                              &nbsp;&nbsp;{clasif}
-                            </td>
-                            <td className="p-2 text-right font-mono">{fmt(subClasif.actual)}</td>
-                            {esComparativo && (
-                              <>
-                                <td className="p-2 text-right font-mono">{fmt(subClasif.comparativo)}</td>
-                                <td className="p-2 text-right font-mono">{fmt(subClasif.actual - subClasif.comparativo)}</td>
-                              </>
-                            )}
-                          </tr>
+                        return (
+                          <React.Fragment key={clasif}>
+                            <tr className="bg-slate-200 text-slate-800 font-bold text-[10px]">
+                              <td
+                                colSpan={2}
+                                className="p-2 pl-4 uppercase tracking-wide text-slate-700"
+                              >
+                                &nbsp;&nbsp;{clasif}
+                              </td>
+                              <td className="p-2 text-right font-mono">
+                                {fmt(subClasif.actual)}
+                              </td>
+                              {esComparativo && (
+                                <>
+                                  <td className="p-2 text-right font-mono">
+                                    {fmt(subClasif.comparativo)}
+                                  </td>
+                                  <td className="p-2 text-right font-mono">
+                                    {fmt(
+                                      subClasif.actual - subClasif.comparativo
+                                    )}
+                                  </td>
+                                </>
+                              )}
+                            </tr>
 
-                          {/* CONCEPTOS Y SUBCONCEPTOS */}
-                          {Object.entries(conceptos).map(([cId, con]: [string, any]) => (
-                            <React.Fragment key={cId}>
-                              <tr className="bg-slate-50 font-bold text-slate-800">
-                                <td className="p-2 pl-6 font-mono text-blue-700">{con.codigo}</td>
-                                <td className="p-2">{con.nombre}</td>
-                                <td className="p-2 text-right font-mono">{fmt(con.totalConcepto)}</td>
-                                {esComparativo && (
-                                  <>
-                                    <td className="p-2 text-right font-mono text-slate-600">{fmt(con.totalConceptoComp)}</td>
-                                    <td className="p-2 text-right font-mono text-slate-700">{fmt(con.totalConcepto - con.totalConceptoComp)}</td>
-                                  </>
-                                )}
-                              </tr>
-
-                              {con.subconceptos.map((sub: any) => (
-                                <tr key={sub.id} className="hover:bg-slate-50/80 text-slate-600">
-                                  <td className="p-1.5 pl-9 font-mono text-slate-500">{sub.codigo}</td>
-                                  <td className="p-1.5 pl-6">{sub.nombre}</td>
-                                  <td className="p-1.5 text-right font-mono text-slate-800">{fmt(sub.saldo)}</td>
+                            {Object.entries(conceptos).map(([cId, con]) => (
+                              <React.Fragment key={cId}>
+                                <tr className="bg-slate-50 font-bold text-slate-800">
+                                  <td className="p-2 pl-6 font-mono text-blue-700">
+                                    {con.codigo}
+                                  </td>
+                                  <td className="p-2">{con.nombre}</td>
+                                  <td className="p-2 text-right font-mono">
+                                    {fmt(con.totalConcepto)}
+                                  </td>
                                   {esComparativo && (
                                     <>
-                                      <td className="p-1.5 text-right font-mono text-slate-500">{fmt(sub.saldoComp)}</td>
-                                      <td className="p-1.5 text-right font-mono text-slate-700">{fmt(sub.variacion)}</td>
+                                      <td className="p-2 text-right font-mono text-slate-600">
+                                        {fmt(con.totalConceptoComp)}
+                                      </td>
+                                      <td className="p-2 text-right font-mono text-slate-700">
+                                        {fmt(
+                                          con.totalConcepto -
+                                            con.totalConceptoComp
+                                        )}
+                                      </td>
                                     </>
                                   )}
                                 </tr>
-                              ))}
-                            </React.Fragment>
-                          ))}
-                        </React.Fragment>
-                      );
-                    })}
+
+                                {con.subconceptos.map((sub) => (
+                                  <tr
+                                    key={sub.id}
+                                    className="hover:bg-slate-50/80 text-slate-600"
+                                  >
+                                    <td className="p-1.5 pl-9 font-mono text-slate-500">
+                                      {sub.codigo}
+                                    </td>
+                                    <td className="p-1.5 pl-6">{sub.nombre}</td>
+                                    <td className="p-1.5 text-right font-mono text-slate-800">
+                                      {fmt(sub.saldo)}
+                                    </td>
+                                    {esComparativo && (
+                                      <>
+                                        <td className="p-1.5 text-right font-mono text-slate-500">
+                                          {fmt(sub.saldoComp)}
+                                        </td>
+                                        <td className="p-1.5 text-right font-mono text-slate-700">
+                                          {fmt(sub.variacion)}
+                                        </td>
+                                      </>
+                                    )}
+                                  </tr>
+                                ))}
+                              </React.Fragment>
+                            ))}
+                          </React.Fragment>
+                        );
+                      }
+                    )}
                   </React.Fragment>
                 );
               })}
+
+              {/* PRUEBA CONTABLE FINAL */}
+              <tr
+                className={`font-bold text-[11px] border-t-2 border-slate-300 ${
+                  pruebaCuadre.cuadra
+                    ? "bg-emerald-50 text-emerald-900"
+                    : "bg-rose-50 text-rose-700"
+                }`}
+              >
+                <td colSpan={2} className="p-2.5 uppercase tracking-wide">
+                  PRUEBA CONTABLE (ACTIVO - PASIVO - PATRIMONIO){" "}
+                  {pruebaCuadre.cuadra ? "— CUADRADO ✓" : "— DESCUADRADO ⚠️"}
+                </td>
+                <td className="p-2.5 text-right font-mono">
+                  {fmt(pruebaCuadre.diferencia)}
+                </td>
+                {esComparativo && (
+                  <>
+                    <td className="p-2.5 text-right font-mono">
+                      {fmt(pruebaCuadre.diferenciaComp)}
+                    </td>
+                    <td className="p-2.5 text-right font-mono">
+                      {fmt(pruebaCuadre.variacion)}
+                    </td>
+                  </>
+                )}
+              </tr>
             </tbody>
           </table>
         </div>

@@ -3,7 +3,12 @@
 import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let supabaseAdminInstance: ReturnType<typeof createClient<any>> | null = null;
+
 function getSupabaseAdmin() {
+  if (supabaseAdminInstance) return supabaseAdminInstance;
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey) {
@@ -11,27 +16,40 @@ function getSupabaseAdmin() {
       "Faltan variables de entorno NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY."
     );
   }
-  return createClient(supabaseUrl, serviceRoleKey, {
+
+  supabaseAdminInstance = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  return supabaseAdminInstance;
 }
 
-async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
-  if (empresaId) return Number(empresaId);
+async function resolverEmpresaId(
+  empresaId?: number | string | null
+): Promise<number> {
+  if (
+    empresaId !== null &&
+    empresaId !== undefined &&
+    String(empresaId).trim() !== ""
+  ) {
+    const num = Number(empresaId);
+    return Number.isNaN(num) ? 0 : num;
+  }
   const cookieStore = await cookies();
   const idCookie = cookieStore.get("empresa_activa")?.value;
-  return Number(idCookie || 0);
+  const numCookie = Number(idCookie || 0);
+  return Number.isNaN(numCookie) ? 0 : numCookie;
 }
 
 /**
- * Obtener Empresas
+ * Obtener Empresas (respaldo)
  */
 export async function obtenerEmpresas() {
   try {
     const supabaseAdmin = getSupabaseAdmin();
     const { data, error } = await supabaseAdmin
       .from("empresas")
-      .select("*")
+      .select("id, razon_social, nombre_comercial, nit_identificacion, dv")
       .order("razon_social", { ascending: true });
 
     if (error) throw new Error(error.message);
@@ -43,17 +61,17 @@ export async function obtenerEmpresas() {
 }
 
 /**
- * Obtener Sucursales por empresa_id
+ * Obtener Sucursales por empresa_id (respaldo)
  */
 export async function obtenerSucursales(empresaId?: number | string | null) {
   try {
-    const supabaseAdmin = getSupabaseAdmin();
     const parsedEmpresaId = await resolverEmpresaId(empresaId);
     if (!parsedEmpresaId) return { success: true, data: [], error: null };
 
+    const supabaseAdmin = getSupabaseAdmin();
     const { data, error } = await supabaseAdmin
       .from("sucursales")
-      .select("*")
+      .select("id, empresa_id, nombre, codigo_sucursal")
       .eq("empresa_id", parsedEmpresaId)
       .order("codigo_sucursal", { ascending: true });
 
@@ -73,7 +91,6 @@ export async function obtenerFacturasEmitidas(
   sucursalId?: number | string | null
 ) {
   try {
-    const supabaseAdmin = getSupabaseAdmin();
     const parsedEmpresaId = await resolverEmpresaId(empresaId);
 
     if (!parsedEmpresaId) {
@@ -84,9 +101,11 @@ export async function obtenerFacturasEmitidas(
       };
     }
 
+    const supabaseAdmin = getSupabaseAdmin();
     let query = supabaseAdmin
       .from("facturas_emitidas")
-      .select(`
+      .select(
+        `
         id,
         numero_factura,
         prefijo,
@@ -104,8 +123,9 @@ export async function obtenerFacturasEmitidas(
         saldo_pendiente,
         estado_cobro,
         estado_dian,
-        cufe        
-      `)
+        cufe
+      `
+      )
       .eq("empresa_id", parsedEmpresaId);
 
     if (sucursalId && Number(sucursalId) > 0) {
@@ -118,14 +138,15 @@ export async function obtenerFacturasEmitidas(
 
     if (error) throw new Error(error.message);
 
-    const dataNormalizada = (data || []).map((f) => {
+    const dataNormalizada = (data || []).map((f: Record<string, unknown>) => {
       const valorIva = Number(f.iva || 0);
       const valorOtros = Number(f.otros_impuestos || 0);
       const totalFactura = Number(f.total_factura || 0);
       const totalAbonos = Number(f.total_abonos || 0);
-      const saldoPendiente = Number(f.saldo_pendiente ?? (totalFactura - totalAbonos));
+      const saldoPendiente = Number(
+        f.saldo_pendiente ?? totalFactura - totalAbonos
+      );
 
-      // Determinación dinámica de estado_pago
       let estadoPago = "PENDIENTE";
       if (saldoPendiente <= 0 && totalFactura > 0) {
         estadoPago = "PAGADA";
@@ -147,7 +168,10 @@ export async function obtenerFacturasEmitidas(
 
     return { success: true, data: dataNormalizada, error: null };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : "Error al obtener las facturas emitidas.";
+    const errorMsg =
+      err instanceof Error
+        ? err.message
+        : "Error al obtener las facturas emitidas.";
     return {
       success: false,
       data: [],
@@ -161,12 +185,20 @@ export async function obtenerFacturasEmitidas(
  */
 export async function obtenerDetalleFacturaEmitida(facturaId: string | number) {
   try {
-    const supabaseAdmin = getSupabaseAdmin();
     const uuidFactura = String(facturaId).trim();
+    if (!uuidFactura) {
+      return {
+        success: false,
+        data: [],
+        error: "ID de factura no válido.",
+      };
+    }
 
+    const supabaseAdmin = getSupabaseAdmin();
     const { data, error } = await supabaseAdmin
       .from("detalle_facturas_emitidas")
-      .select(`
+      .select(
+        `
         id,
         factura_id,
         item_id,
@@ -178,7 +210,8 @@ export async function obtenerDetalleFacturaEmitida(facturaId: string | number) {
         porcentaje_iva,
         valor_iva,
         total
-      `)
+      `
+      )
       .eq("factura_id", uuidFactura)
       .order("id", { ascending: true });
 
@@ -186,7 +219,10 @@ export async function obtenerDetalleFacturaEmitida(facturaId: string | number) {
 
     return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : "Error al consultar el detalle de la factura.";
+    const errorMsg =
+      err instanceof Error
+        ? err.message
+        : "Error al consultar el detalle de la factura.";
     return {
       success: false,
       data: [],
@@ -200,12 +236,20 @@ export async function obtenerDetalleFacturaEmitida(facturaId: string | number) {
  */
 export async function obtenerAsientoPorFactura(facturaId: string | number) {
   try {
-    const supabaseAdmin = getSupabaseAdmin();
     const uuidFactura = String(facturaId).trim();
+    if (!uuidFactura) {
+      return {
+        success: false,
+        data: null,
+        error: "ID de factura no válido.",
+      };
+    }
 
+    const supabaseAdmin = getSupabaseAdmin();
     const { data: transaccion, error: errorTx } = await supabaseAdmin
       .from("transacciones")
-      .select(`
+      .select(
+        `
         id,
         numero_documento,
         fecha_emision,
@@ -216,7 +260,8 @@ export async function obtenerAsientoPorFactura(facturaId: string | number) {
           codigo_clase,
           nombre_clase
         )
-      `)
+      `
+      )
       .eq("modulo_origen", "FACTURAS_EMITIDAS")
       .eq("referencia_origen_id", uuidFactura)
       .maybeSingle();
@@ -233,7 +278,8 @@ export async function obtenerAsientoPorFactura(facturaId: string | number) {
 
     const { data: detalles, error: errorDetalles } = await supabaseAdmin
       .from("detalle_transacciones")
-      .select(`
+      .select(
+        `
         id,
         concepto_auxiliar_id,
         debito,
@@ -242,12 +288,24 @@ export async function obtenerAsientoPorFactura(facturaId: string | number) {
           codigo_auxiliar,
           nombre
         )
-      `)
+      `
+      )
       .eq("transaccion_id", transaccion.id)
       .order("debito", { ascending: false })
       .order("id", { ascending: true });
 
     if (errorDetalles) throw new Error(errorDetalles.message);
+
+    const listaDetalles = Array.isArray(detalles) ? detalles : [];
+    const totalDebito = listaDetalles.reduce(
+      (acc: number, d: Record<string, unknown>) => acc + Number(d.debito || 0),
+      0
+    );
+    const totalCredito = listaDetalles.reduce(
+      (acc: number, d: Record<string, unknown>) => acc + Number(d.credito || 0),
+      0
+    );
+    const cuadrado = Math.abs(totalDebito - totalCredito) <= 0.01;
 
     return {
       success: true,
@@ -257,12 +315,18 @@ export async function obtenerAsientoPorFactura(facturaId: string | number) {
           fecha_contable: transaccion.fecha_contable || transaccion.fecha_emision,
           fecha: transaccion.fecha_contable || transaccion.fecha_emision,
         },
-        detalles: detalles || [],
+        detalles: listaDetalles,
+        totalDebito,
+        totalCredito,
+        cuadrado,
       },
       error: null,
     };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : "Error al consultar el asiento contable.";
+    const errorMsg =
+      err instanceof Error
+        ? err.message
+        : "Error al consultar el asiento contable.";
     return {
       success: false,
       data: null,

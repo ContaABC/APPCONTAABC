@@ -1,19 +1,117 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
+import { supabase } from "@/lib/supabaseClient";
 import {
-  obtenerEmpresas,
-  obtenerSucursales,
+  getEmpresasPermitidas,
+  getSucursalesPermitidas,
+  getEmpresaActivaUsuario,
+  getSucursalActivaUsuario,
+  setEmpresaActivaUsuario,
+  setSucursalActivaUsuario,
+  type Empresa,
+  type Sucursal,
+} from "@/app/actions/accionesEmpresas";
+import {
   obtenerFacturasEmitidas,
   obtenerDetalleFacturaEmitida,
   obtenerAsientoPorFactura,
 } from "./actions";
 
+type EmpresaExtendida = Empresa & {
+  nombre?: string;
+  nombre_comercial?: string;
+  nit?: string;
+  nit_identificacion?: string;
+  numero_identificacion?: string;
+};
+
+type SucursalExtendida = Sucursal & {
+  codigo?: string;
+  codigo_sucursal?: string;
+};
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+function setCookieValue(name: string, value: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=86400; SameSite=Lax`;
+}
+
+function clearCookieValue(name: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`;
+}
+
+function obtenerNombreEmpresa(emp: Empresa): string {
+  const e = emp as EmpresaExtendida;
+  return String(e.razon_social || e.nombre_comercial || e.nombre || "Empresa");
+}
+
+function obtenerEtiquetaEmpresa(emp: Empresa): string {
+  const e = emp as EmpresaExtendida;
+  const nombre = obtenerNombreEmpresa(emp);
+  const nit = e.nit_identificacion || e.nit || e.numero_identificacion || "";
+  return nit ? `${nombre} (${nit})` : nombre;
+}
+
+function obtenerNombreSucursal(suc: Sucursal): string {
+  const s = suc as SucursalExtendida;
+  const base = String(s.nombre || `Sucursal ${s.id}`);
+  const cod = s.codigo || s.codigo_sucursal || "";
+  return cod ? `${base} (${cod})` : base;
+}
+
+function obtenerUsuarioIdDesdeLocalStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  for (const clave of ["usuario_id", "user_id", "uid"]) {
+    const val = localStorage.getItem(clave);
+    if (val && val.trim()) return val.trim();
+  }
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.includes("auth-token") || k.includes("supabase")) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const idEncontrado =
+          parsed?.user?.id ||
+          parsed?.currentSession?.user?.id ||
+          parsed?.session?.user?.id ||
+          null;
+        if (idEncontrado && typeof idEncontrado === "string") {
+          return idEncontrado;
+        }
+      } catch {
+        // Ignorar
+      }
+    }
+  }
+  return null;
+}
+
 export default function ConsultarFacturasEmitidasPage() {
+  const router = useRouter();
+  const usuarioIdRef = useRef<string | null>(null);
+  const primeraCargaRef = useRef<boolean>(true);
+
+  const [isMounted, setIsMounted] = useState<boolean>(false);
+  const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(true);
+
   // Selectores de Empresa y Sucursal
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [empresaId, setEmpresaId] = useState<string>("");
   const [sucursalId, setSucursalId] = useState<string>("");
 
@@ -24,74 +122,249 @@ export default function ConsultarFacturasEmitidasPage() {
   const [estadoPago, setEstadoPago] = useState<string>("todos");
   const [mostrarSubtotales, setMostrarSubtotales] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
- // const [pdfUrlGenerada, setPdfUrlGenerada] = useState<string | null>(null);
 
   // Modal para ver Asiento Contable
   const [facturaAsientoSeleccionada, setFacturaAsientoSeleccionada] = useState<any | null>(null);
   const [asiento, setAsiento] = useState<any | null>(null);
   const [loadingAsiento, setLoadingAsiento] = useState<boolean>(false);
+  const [errorAsiento, setErrorAsiento] = useState<string | null>(null);
 
   // Modal para ver Detalle de Ítems
   const [facturaItemsSeleccionada, setFacturaItemsSeleccionada] = useState<any | null>(null);
   const [itemsFactura, setItemsFactura] = useState<any[]>([]);
   const [loadingItems, setLoadingItems] = useState<boolean>(false);
+  const [errorItems, setErrorItems] = useState<string | null>(null);
 
-  // 1. Cargar Empresas al montar
-  useEffect(() => {
-    async function cargarEmpresas() {
-      const res = await obtenerEmpresas();
-      if (res.success && res.data.length > 0) {
-        setEmpresas(res.data);
-        setEmpresaId(String(res.data[0].id));
+  const cargarFacturas = useCallback(
+    async (empTarget?: string, sucTarget?: string) => {
+      const empId = empTarget ?? empresaId;
+      const sucId = sucTarget ?? sucursalId;
+      if (!empId) {
+        setFacturas([]);
+        return;
       }
-    }
-    cargarEmpresas();
+      setLoading(true);
+      setErrorMsg(null);
+      try {
+        const res = await obtenerFacturasEmitidas(empId, sucId || null);
+        if (res.success) {
+          setFacturas(res.data || []);
+        } else {
+          setErrorMsg(res.error);
+          setFacturas([]);
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [empresaId, sucursalId]
+  );
+
+  useEffect(() => {
+    setIsMounted(true);
   }, []);
 
-  // 2. Cargar Sucursales cuando cambia Empresa
+  // 1. Cargar Empresas permitidas y contexto activo al montar
   useEffect(() => {
-    if (!empresaId) return;
-    async function cargarSucursales() {
-      setSucursalId("");
-      const res = await obtenerSucursales(empresaId);
-      if (res.success) {
-        setSucursales(res.data);
+    if (!isMounted || !primeraCargaRef.current) return;
+    primeraCargaRef.current = false;
+
+    async function initContexto() {
+      setLoadingEmpresas(true);
+      try {
+        let uid: string | null = null;
+        try {
+          const { data } = await supabase.auth.getUser();
+          if (data?.user?.id) uid = data.user.id;
+        } catch {
+          // Ignorar
+        }
+        if (!uid) {
+          uid = obtenerUsuarioIdDesdeLocalStorage();
+        }
+        usuarioIdRef.current = uid;
+
+        const permitidas = await getEmpresasPermitidas(uid);
+        const listaEmp: Empresa[] = Array.isArray(permitidas) ? permitidas : [];
+        if (listaEmp.length === 0) {
+          setEmpresas([]);
+          setEmpresaId("");
+          setSucursales([]);
+          setSucursalId("");
+          return;
+        }
+
+        const ordenadas = [...listaEmp].sort((a, b) =>
+          obtenerNombreEmpresa(a).localeCompare(obtenerNombreEmpresa(b), "es", {
+            sensitivity: "base",
+          })
+        );
+        setEmpresas(ordenadas);
+
+        let empBD: string | null = null;
+        try {
+          const valBD = await getEmpresaActivaUsuario(uid);
+          if (valBD !== null && valBD !== undefined && String(valBD).trim() !== "") {
+            empBD = String(valBD).trim();
+          }
+        } catch {
+          // Ignorar
+        }
+
+        const empLocal =
+          typeof window !== "undefined"
+            ? localStorage.getItem("empresa_activa") ||
+              localStorage.getItem("empresa_id")
+            : null;
+        const empCookie = getCookieValue("empresa_activa");
+
+        const candidata = empBD || empLocal || empCookie;
+        const empElegida = candidata
+          ? ordenadas.find((e) => String(e.id) === String(candidata)) ||
+            ordenadas[0]
+          : ordenadas[0];
+
+        const idEmpFinal = String(empElegida.id);
+        setEmpresaId(idEmpFinal);
+
+        if (typeof window !== "undefined") {
+          localStorage.setItem("empresa_activa", idEmpFinal);
+          localStorage.setItem("empresa_id", idEmpFinal);
+          localStorage.setItem(
+            "empresa_activa_nombre",
+            obtenerNombreEmpresa(empElegida)
+          );
+        }
+        setCookieValue("empresa_activa", idEmpFinal);
+
+        const resSuc = await getSucursalesPermitidas(idEmpFinal, uid);
+        const listaSuc: Sucursal[] = Array.isArray(resSuc) ? resSuc : [];
+        setSucursales(listaSuc);
+
+        let idSucFinal = "";
+        if (listaSuc.length > 0) {
+          let sucBD: string | null = null;
+          try {
+            const valSuc = await getSucursalActivaUsuario(uid);
+            if (valSuc !== null && valSuc !== undefined && String(valSuc).trim() !== "") {
+              sucBD = String(valSuc).trim();
+            }
+          } catch {
+            // Ignorar
+          }
+
+          const sucLocal =
+            typeof window !== "undefined"
+              ? localStorage.getItem("sucursal_activa") ||
+                localStorage.getItem("sucursal_id")
+              : null;
+          const sucCookie = getCookieValue("sucursal_activa");
+          const candidataSuc = sucBD || sucLocal || sucCookie;
+
+          const sucElegida = candidataSuc
+            ? listaSuc.find((s) => String(s.id) === String(candidataSuc))
+            : undefined;
+
+          if (sucElegida) {
+            idSucFinal = String(sucElegida.id);
+            setSucursalId(idSucFinal);
+            if (typeof window !== "undefined") {
+              localStorage.setItem("sucursal_activa", idSucFinal);
+              localStorage.setItem("sucursal_id", idSucFinal);
+              localStorage.setItem("sucursal_activa_nombre", sucElegida.nombre);
+            }
+            setCookieValue("sucursal_activa", idSucFinal);
+          }
+        }
+
+        await cargarFacturas(idEmpFinal, idSucFinal);
+      } finally {
+        setLoadingEmpresas(false);
       }
     }
-    cargarSucursales();
-  }, [empresaId]);
 
-  // 3. Cargar Facturas Emitidas de Empresa/Sucursal
-  useEffect(() => {
-    if (empresaId) {
-      cargarFacturas();
-    }
-  }, [empresaId, sucursalId]);
+    initContexto();
+  }, [isMounted, cargarFacturas]);
 
-  async function cargarFacturas() {
-    if (!empresaId) return;
-    setLoading(true);
+  const handleCambioEmpresa = async (nuevaEmp: string) => {
+    setEmpresaId(nuevaEmp);
+    setSucursalId("");
+    setSucursales([]);
+    setFacturas([]);
     setErrorMsg(null);
-    const res = await obtenerFacturasEmitidas(empresaId, sucursalId);
-    if (res.success) {
-      setFacturas(res.data);
-    } else {
-      setErrorMsg(res.error);
+
+    if (typeof window !== "undefined") {
+      if (nuevaEmp) {
+        const empSel = empresas.find((e) => String(e.id) === String(nuevaEmp));
+        localStorage.setItem("empresa_activa", nuevaEmp);
+        localStorage.setItem("empresa_id", nuevaEmp);
+        if (empSel) {
+          localStorage.setItem(
+            "empresa_activa_nombre",
+            obtenerNombreEmpresa(empSel)
+          );
+        }
+        setCookieValue("empresa_activa", nuevaEmp);
+      } else {
+        localStorage.removeItem("empresa_activa");
+        localStorage.removeItem("empresa_id");
+        localStorage.removeItem("empresa_activa_nombre");
+        clearCookieValue("empresa_activa");
+      }
+
+      localStorage.removeItem("sucursal_activa");
+      localStorage.removeItem("sucursal_id");
+      localStorage.removeItem("sucursal_activa_nombre");
+      clearCookieValue("sucursal_activa");
     }
-    setLoading(false);
-  }
+
+    if (!nuevaEmp) return;
+
+    setEmpresaActivaUsuario(nuevaEmp, usuarioIdRef.current, null).catch(() => {});
+
+    const resSuc = await getSucursalesPermitidas(nuevaEmp, usuarioIdRef.current);
+    const listaSuc: Sucursal[] = Array.isArray(resSuc) ? resSuc : [];
+    setSucursales(listaSuc);
+
+    await cargarFacturas(nuevaEmp, "");
+  };
+
+  const handleCambioSucursal = async (nuevaSuc: string) => {
+    setSucursalId(nuevaSuc);
+
+    if (typeof window !== "undefined") {
+      if (nuevaSuc) {
+        const sucSel = sucursales.find((s) => String(s.id) === String(nuevaSuc));
+        localStorage.setItem("sucursal_activa", nuevaSuc);
+        localStorage.setItem("sucursal_id", nuevaSuc);
+        if (sucSel?.nombre) {
+          localStorage.setItem("sucursal_activa_nombre", sucSel.nombre);
+        }
+        setCookieValue("sucursal_activa", nuevaSuc);
+      } else {
+        localStorage.removeItem("sucursal_activa");
+        localStorage.removeItem("sucursal_id");
+        localStorage.removeItem("sucursal_activa_nombre");
+        clearCookieValue("sucursal_activa");
+      }
+    }
+
+    setSucursalActivaUsuario(nuevaSuc || null, usuarioIdRef.current).catch(() => {});
+    await cargarFacturas(empresaId, nuevaSuc);
+  };
 
   // Abrir Modal de Asiento Contable
   async function abrirAsiento(factura: any) {
     setFacturaAsientoSeleccionada(factura);
     setLoadingAsiento(true);
     setAsiento(null);
+    setErrorAsiento(null);
 
     const res = await obtenerAsientoPorFactura(factura.id);
     if (res.success && res.data) {
       setAsiento(res.data);
     } else {
-      alert(res.error || "No se pudo cargar el asiento contable.");
+      setErrorAsiento(res.error || "No se pudo cargar el asiento contable.");
     }
     setLoadingAsiento(false);
   }
@@ -101,17 +374,18 @@ export default function ConsultarFacturasEmitidasPage() {
     setFacturaItemsSeleccionada(factura);
     setLoadingItems(true);
     setItemsFactura([]);
+    setErrorItems(null);
 
     const res = await obtenerDetalleFacturaEmitida(factura.id);
     if (res.success) {
       setItemsFactura(res.data);
     } else {
-      alert(res.error || "No se pudo cargar el detalle de los ítems.");
+      setErrorItems(res.error || "No se pudo cargar el detalle de los ítems.");
     }
     setLoadingItems(false);
   }
 
-  // 4. Filtrado (Búsqueda + Estado Pago)
+  // Filtrado (Búsqueda + Estado Pago)
   const facturasFiltradas = useMemo(() => {
     return facturas.filter((f) => {
       const estadoF = (f.estado_pago || "pendiente").toLowerCase();
@@ -131,7 +405,7 @@ export default function ConsultarFacturasEmitidasPage() {
     });
   }, [facturas, busqueda, estadoPago]);
 
-  // 5. Agrupar, Ordenar por Cliente y Subtotalizar
+  // Agrupar, Ordenar por Cliente y Subtotalizar
   const { gruposPorCliente, totalesGenerales } = useMemo(() => {
     const grupos: {
       [key: string]: {
@@ -189,7 +463,7 @@ export default function ConsultarFacturasEmitidasPage() {
     };
   }, [facturasFiltradas]);
 
-  // 6. Exportación a Excel
+  // Exportación a Excel (.xlsx)
   const exportarAExcel = () => {
     const filasExcel: any[] = [];
 
@@ -249,27 +523,54 @@ export default function ConsultarFacturasEmitidasPage() {
     );
   };
 
+  if (!isMounted) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto space-y-6">
+        <div className="h-24 bg-slate-100 rounded-xl animate-pulse"></div>
+        <div className="h-64 bg-slate-100 rounded-xl animate-pulse"></div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       {/* Encabezado */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">Facturas Emitidas</h1>
-          <p className="text-sm text-slate-500">
-            Consulta de facturas de venta emitidas, detalle de artículos, PDF del comprobante y auditoría contable.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 self-start md:self-auto">
+        <div className="flex items-center gap-3">
           <button
+            type="button"
+            onClick={() => router.back()}
+            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition cursor-pointer border border-slate-200 shrink-0 flex items-center gap-1.5"
+          >
+            <span>←</span>
+            <span>Atrás</span>
+          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">Facturas Emitidas</h1>
+            <p className="text-sm text-slate-500">
+              Consulta de facturas de venta emitidas, detalle de artículos, PDF del comprobante y auditoría contable.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+          <Link
+            href="/items/movimientos"
+            className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold rounded-md transition"
+          >
+            📈 Mov. Acumulados Ítems
+          </Link>
+          <button
+            type="button"
             onClick={exportarAExcel}
             disabled={facturasFiltradas.length === 0}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium rounded-md transition shadow-sm flex items-center gap-2"
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium rounded-md transition shadow-sm flex items-center gap-2 cursor-pointer"
           >
             📊 Exportar a Excel
           </button>
           <button
-            onClick={cargarFacturas}
-            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-md transition"
+            type="button"
+            onClick={() => cargarFacturas(empresaId, sucursalId)}
+            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-md transition cursor-pointer"
           >
             🔄 Actualizar
           </button>
@@ -284,14 +585,18 @@ export default function ConsultarFacturasEmitidasPage() {
           </label>
           <select
             value={empresaId}
-            onChange={(e) => setEmpresaId(e.target.value)}
+            onChange={(e) => handleCambioEmpresa(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 font-medium outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            {empresas.map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                {emp.razon_social || emp.nombre_comercial || emp.nombre} ({emp.nit || emp.numero_identificacion || ""})
-              </option>
-            ))}
+            {loadingEmpresas ? (
+              <option value="">-- Cargando empresas --</option>
+            ) : (
+              empresas.map((emp) => (
+                <option key={emp.id} value={emp.id}>
+                  {obtenerEtiquetaEmpresa(emp)}
+                </option>
+              ))
+            )}
           </select>
         </div>
 
@@ -301,13 +606,14 @@ export default function ConsultarFacturasEmitidasPage() {
           </label>
           <select
             value={sucursalId}
-            onChange={(e) => setSucursalId(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 font-medium outline-none focus:ring-2 focus:ring-indigo-500"
+            disabled={!empresaId}
+            onChange={(e) => handleCambioSucursal(e.target.value)}
+            className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100"
           >
             <option value="">Todas las sucursales</option>
             {sucursales.map((suc) => (
               <option key={suc.id} value={suc.id}>
-                {suc.nombre} {suc.codigo ? `(${suc.codigo})` : ""}
+                {obtenerNombreSucursal(suc)}
               </option>
             ))}
           </select>
@@ -446,16 +752,18 @@ export default function ConsultarFacturasEmitidasPage() {
                             )}
 
                             <button
+                              type="button"
                               onClick={() => abrirItems(f)}
-                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded text-xs transition border border-slate-300 flex items-center gap-1"
+                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded text-xs transition border border-slate-300 flex items-center gap-1 cursor-pointer"
                               title="Ver detalle de ítems"
                             >
                               📦 Ítems
                             </button>
 
                             <button
+                              type="button"
                               onClick={() => abrirAsiento(f)}
-                              className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-medium rounded text-xs transition border border-indigo-200 flex items-center gap-1"
+                              className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-medium rounded text-xs transition border border-indigo-200 flex items-center gap-1 cursor-pointer"
                               title="Ver asiento contable"
                             >
                               📖 Asiento
@@ -527,8 +835,9 @@ export default function ConsultarFacturasEmitidasPage() {
                 )}
               </div>
               <button
+                type="button"
                 onClick={() => setFacturaItemsSeleccionada(null)}
-                className="text-slate-400 hover:text-slate-600 text-xl font-bold"
+                className="text-slate-400 hover:text-slate-600 text-xl font-bold cursor-pointer"
               >
                 ✕
               </button>
@@ -536,6 +845,8 @@ export default function ConsultarFacturasEmitidasPage() {
 
             {loadingItems ? (
               <div className="py-12 text-center text-slate-500 text-sm">Cargando productos / servicios...</div>
+            ) : errorItems ? (
+              <div className="py-8 text-center text-rose-600 text-sm">{errorItems}</div>
             ) : itemsFactura.length > 0 ? (
               <div className="overflow-x-auto space-y-3">
                 <table className="w-full text-left text-xs border-collapse border">
@@ -624,8 +935,9 @@ export default function ConsultarFacturasEmitidasPage() {
                 )}
               </div>
               <button
+                type="button"
                 onClick={() => setFacturaItemsSeleccionada(null)}
-                className="px-4 py-2 bg-slate-800 text-white rounded-md text-xs font-medium hover:bg-slate-700"
+                className="px-4 py-2 bg-slate-800 text-white rounded-md text-xs font-medium hover:bg-slate-700 cursor-pointer"
               >
                 Cerrar
               </button>
@@ -648,8 +960,9 @@ export default function ConsultarFacturasEmitidasPage() {
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => setFacturaAsientoSeleccionada(null)}
-                className="text-slate-400 hover:text-slate-600 text-xl font-bold"
+                className="text-slate-400 hover:text-slate-600 text-xl font-bold cursor-pointer"
               >
                 ✕
               </button>
@@ -657,6 +970,8 @@ export default function ConsultarFacturasEmitidasPage() {
 
             {loadingAsiento ? (
               <div className="py-12 text-center text-slate-500 text-sm">Cargando partida doble...</div>
+            ) : errorAsiento ? (
+              <div className="py-8 text-center text-rose-600 text-sm">{errorAsiento}</div>
             ) : asiento ? (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-lg border text-xs">
@@ -733,8 +1048,9 @@ export default function ConsultarFacturasEmitidasPage() {
 
             <div className="flex justify-end pt-2">
               <button
+                type="button"
                 onClick={() => setFacturaAsientoSeleccionada(null)}
-                className="px-4 py-2 bg-slate-800 text-white rounded-md text-xs font-medium hover:bg-slate-700"
+                className="px-4 py-2 bg-slate-800 text-white rounded-md text-xs font-medium hover:bg-slate-700 cursor-pointer"
               >
                 Cerrar
               </button>

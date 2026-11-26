@@ -1,8 +1,19 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import {
+  getEmpresasPermitidas,
+  getSucursalesPermitidas,
+  getEmpresaActivaUsuario,
+  getSucursalActivaUsuario,
+  setEmpresaActivaUsuario,
+  setSucursalActivaUsuario,
+  type Empresa,
+  type Sucursal,
+} from "@/app/actions/accionesEmpresas";
 import {
   obtenerFacturasParaNota,
   obtenerItemsFacturaEmitida,
@@ -26,19 +37,17 @@ interface ItemFacturaOriginal {
   valorUnitarioNota: number;
 }
 
-interface Empresa {
-  id: number | string;
-  razon_social?: string;
+type EmpresaExtendida = Empresa & {
+  nombre?: string;
   nombre_comercial?: string;
-  nombre?: string;
-}
+  nit?: string;
+  nit_identificacion?: string;
+};
 
-interface Sucursal {
-  id: number | string;
-  empresa_id: number | string;
+type SucursalExtendida = Sucursal & {
   nombre_sucursal?: string;
-  nombre?: string;
-}
+  codigo_sucursal?: string;
+};
 
 interface ClaseDocumento {
   id: number | string;
@@ -77,23 +86,104 @@ interface NotaEmitidaFormProps {
   sucursalIdInicial?: string;
 }
 
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+function setCookieValue(name: string, value: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=${encodeURIComponent(
+    value
+  )}; path=/; max-age=86400; SameSite=Lax`;
+}
+
+function clearCookieValue(name: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`;
+}
+
+function obtenerNombreEmpresa(emp: Empresa): string {
+  const e = emp as EmpresaExtendida;
+  return String(e.razon_social || e.nombre_comercial || e.nombre || "Empresa");
+}
+
+function obtenerEtiquetaEmpresa(emp: Empresa): string {
+  const e = emp as EmpresaExtendida;
+  const nombre = obtenerNombreEmpresa(emp);
+  const nit = e.nit_identificacion || e.nit || "";
+  return nit ? `${nombre} (${nit})` : nombre;
+}
+
+function obtenerNombreSucursal(suc: Sucursal): string {
+  const s = suc as SucursalExtendida;
+  const base = String(s.nombre_sucursal || s.nombre || `Sucursal ${s.id}`);
+  return s.codigo_sucursal ? `${base} (${s.codigo_sucursal})` : base;
+}
+
+function obtenerUsuarioIdDesdeLocalStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  for (const clave of ["usuario_id", "user_id", "uid"]) {
+    const val = localStorage.getItem(clave);
+    if (val && val.trim()) return val.trim();
+  }
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.includes("auth-token") || k.includes("supabase")) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const idEncontrado =
+          parsed?.user?.id ||
+          parsed?.currentSession?.user?.id ||
+          parsed?.session?.user?.id ||
+          null;
+        if (idEncontrado && typeof idEncontrado === "string") {
+          return idEncontrado;
+        }
+      } catch {
+        // Ignorar
+      }
+    }
+  }
+  return null;
+}
+
 export default function NotaEmitidaForm({
-  empresas,
-  sucursales,
+  empresas: empresasIniciales,
+  sucursales: sucursalesIniciales,
   clasesDocumento,
   empresaIdInicial = "",
   sucursalIdInicial = "",
 }: NotaEmitidaFormProps) {
-  const [isMounted, setIsMounted] = useState(false);
+  const router = useRouter();
+  const usuarioIdRef = useRef<string | null>(null);
+  const inicializadoContextoRef = useRef<boolean>(false);
 
-  const [empresaId, setEmpresaId] = useState<string>(String(empresaIdInicial || ""));
-  const [sucursalId, setSucursalId] = useState<string>(String(sucursalIdInicial || ""));
+  const [isMounted, setIsMounted] = useState(false);
+  const [empresas, setEmpresas] = useState<Empresa[]>(empresasIniciales || []);
+  const [sucursales, setSucursales] = useState<Sucursal[]>(
+    sucursalesIniciales || []
+  );
+
+  const [empresaId, setEmpresaId] = useState<string>(
+    String(empresaIdInicial || "")
+  );
+  const [sucursalId, setSucursalId] = useState<string>(
+    String(sucursalIdInicial || "")
+  );
   const [claseDocId, setClaseDocId] = useState<string>("");
 
   const [clientes, setClientes] = useState<Tercero[]>([]);
   const [clienteIdSeleccionado, setClienteIdSeleccionado] = useState<string>("");
   const [facturas, setFacturas] = useState<FacturaEmitida[]>([]);
-  const [facturaSeleccionada, setFacturaSeleccionada] = useState<FacturaEmitida | null>(null);
+  const [facturaSeleccionada, setFacturaSeleccionada] =
+    useState<FacturaEmitida | null>(null);
 
   const [items, setItems] = useState<ItemFacturaOriginal[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
@@ -105,65 +195,191 @@ export default function NotaEmitidaForm({
 
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
+  const [bloqueoAnulacionConNotas, setBloqueoAnulacionConNotas] =
+    useState<boolean>(false);
 
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<{ tipo: "error" | "exito"; texto: string } | null>(null);
-  
-  const [notaCreadaExito, setNotaCreadaExito] = useState<{ numeroNota: string; facturaOriginal: string; tipo: string } | null>(null);
+  const [msg, setMsg] = useState<{
+    tipo: "error" | "exito";
+    texto: string;
+  } | null>(null);
+
+  const [notaCreadaExito, setNotaCreadaExito] = useState<{
+    numeroNota: string;
+    facturaOriginal: string;
+    tipo: string;
+  } | null>(null);
 
   useEffect(() => {
     setIsMounted(true);
     const hoyStr = new Date().toISOString().split("T")[0];
     setFechaEmision(hoyStr);
     setFechaContable(hoyStr);
+  }, []);
 
-    // Leer cookie corporativa empresa_activa si no venía prop inicial
-    if (!empresaId) {
-      const match = document.cookie.match(new RegExp('(^| )empresa_activa=([^;]+)'));
-      if (match) {
-        setEmpresaId(match[2]);
-      } else if (empresas.length > 0) {
-        setEmpresaId(String(empresas[0].id));
+  // Resolver empresas permitidas, empresa activa y sucursales permitidas en cliente
+  useEffect(() => {
+    if (!isMounted || inicializadoContextoRef.current) return;
+    inicializadoContextoRef.current = true;
+
+    async function cargarContextoCliente() {
+      let uid: string | null = null;
+      try {
+        const { data } = await supabase.auth.getUser();
+        if (data?.user?.id) uid = data.user.id;
+      } catch {
+        // Ignorar
+      }
+      if (!uid) {
+        uid = obtenerUsuarioIdDesdeLocalStorage();
+      }
+      usuarioIdRef.current = uid;
+
+      const permitidas = await getEmpresasPermitidas(uid);
+      const listaEmp: Empresa[] =
+        Array.isArray(permitidas) && permitidas.length > 0
+          ? permitidas
+          : empresasIniciales || [];
+
+      if (listaEmp.length === 0) {
+        setEmpresas([]);
+        return;
+      }
+
+      const ordenadas = [...listaEmp].sort((a, b) =>
+        obtenerNombreEmpresa(a).localeCompare(obtenerNombreEmpresa(b), "es", {
+          sensitivity: "base",
+        })
+      );
+      setEmpresas(ordenadas);
+
+      let empBD: string | null = null;
+      try {
+        const valBD = await getEmpresaActivaUsuario(uid);
+        if (valBD !== null && valBD !== undefined && String(valBD).trim() !== "") {
+          empBD = String(valBD).trim();
+        }
+      } catch {
+        // Ignorar
+      }
+
+      const empLocal =
+        typeof window !== "undefined"
+          ? localStorage.getItem("empresa_activa") ||
+            localStorage.getItem("empresa_id")
+          : null;
+      const empCookie = getCookieValue("empresa_activa");
+
+      const candidata = empresaIdInicial || empBD || empLocal || empCookie;
+      const empElegida = candidata
+        ? ordenadas.find((e) => String(e.id) === String(candidata)) ||
+          ordenadas[0]
+        : ordenadas[0];
+
+      const idEmpFinal = String(empElegida.id);
+      setEmpresaId(idEmpFinal);
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem("empresa_activa", idEmpFinal);
+        localStorage.setItem("empresa_id", idEmpFinal);
+        localStorage.setItem(
+          "empresa_activa_nombre",
+          obtenerNombreEmpresa(empElegida)
+        );
+      }
+      setCookieValue("empresa_activa", idEmpFinal);
+
+      const resSuc = await getSucursalesPermitidas(idEmpFinal, uid);
+      const listaSuc: Sucursal[] = Array.isArray(resSuc) ? resSuc : [];
+      setSucursales(listaSuc);
+
+      if (listaSuc.length > 0) {
+        let sucBD: string | null = null;
+        try {
+          const valSuc = await getSucursalActivaUsuario(uid);
+          if (valSuc !== null && valSuc !== undefined && String(valSuc).trim() !== "") {
+            sucBD = String(valSuc).trim();
+          }
+        } catch {
+          // Ignorar
+        }
+
+        const sucLocal =
+          typeof window !== "undefined"
+            ? localStorage.getItem("sucursal_activa") ||
+              localStorage.getItem("sucursal_id")
+            : null;
+        const sucCookie = getCookieValue("sucursal_activa");
+        const candidataSuc = sucursalIdInicial || sucBD || sucLocal || sucCookie;
+
+        const sucElegida = candidataSuc
+          ? listaSuc.find((s) => String(s.id) === String(candidataSuc))
+          : undefined;
+
+        if (sucElegida) {
+          const idSucFinal = String(sucElegida.id);
+          setSucursalId(idSucFinal);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("sucursal_activa", idSucFinal);
+            localStorage.setItem("sucursal_id", idSucFinal);
+            localStorage.setItem("sucursal_activa_nombre", sucElegida.nombre);
+          }
+          setCookieValue("sucursal_activa", idSucFinal);
+        }
       }
     }
-  }, [empresas, empresaId]);
 
-  const verificarPeriodo = async (fecha: string) => {
-    if (!empresaId || !sucursalId || !fecha) {
+    cargarContextoCliente();
+  }, [isMounted, empresaIdInicial, sucursalIdInicial, empresasIniciales]);
+
+  const verificarPeriodo = useCallback(
+    async (fecha: string) => {
+      if (!empresaId || !sucursalId || !fecha) {
+        setErrorPeriodo(null);
+        return;
+      }
+
+      setValidandoPeriodo(true);
       setErrorPeriodo(null);
-      return;
-    }
 
-    setValidandoPeriodo(true);
-    setErrorPeriodo(null);
-
-    const res = await validarPeriodoContable(empresaId, sucursalId, fecha);
-    if (!res.valido) {
-      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
-    }
-
-    setValidandoPeriodo(false);
-  };
+      try {
+        const res = await validarPeriodoContable(empresaId, sucursalId, fecha);
+        if (!res.valido) {
+          setErrorPeriodo(
+            res.mensaje || "Periodo no habilitado para transacciones."
+          );
+        }
+      } finally {
+        setValidandoPeriodo(false);
+      }
+    },
+    [empresaId, sucursalId]
+  );
 
   useEffect(() => {
     if (empresaId && sucursalId && fechaContable) {
       verificarPeriodo(fechaContable);
     }
-  }, [empresaId, sucursalId, fechaContable]);
+  }, [empresaId, sucursalId, fechaContable, verificarPeriodo]);
 
   const sucursalesFiltradas = useMemo(() => {
     if (!empresaId) return [];
-    return sucursales.filter((s) => String(s.empresa_id) === String(empresaId));
+    return sucursales.filter(
+      (s) => String(s.empresa_id) === String(empresaId)
+    );
   }, [empresaId, sucursales]);
 
   const clasesFiltradas = useMemo(() => {
     if (!empresaId) return [];
-    return clasesDocumento.filter((c) => String(c.empresa_id) === String(empresaId));
+    return clasesDocumento.filter(
+      (c) => String(c.empresa_id) === String(empresaId)
+    );
   }, [empresaId, clasesDocumento]);
 
-  const handleEmpresaChange = (nuevaEmpresaId: string) => {
+  const handleEmpresaChange = async (nuevaEmpresaId: string) => {
     setEmpresaId(nuevaEmpresaId);
     setSucursalId("");
+    setSucursales([]);
     setClaseDocId("");
     setClientes([]);
     setClienteIdSeleccionado("");
@@ -171,15 +387,82 @@ export default function NotaEmitidaForm({
     setFacturaSeleccionada(null);
     setItems([]);
     setNotaCreadaExito(null);
+    setBloqueoAnulacionConNotas(false);
+    setMsg(null);
 
-    if (nuevaEmpresaId) {
-      localStorage.setItem("empresa_activa", nuevaEmpresaId);
-      document.cookie = `empresa_activa=${nuevaEmpresaId}; path=/; max-age=86400; SameSite=Lax`;
+    if (typeof window !== "undefined") {
+      if (nuevaEmpresaId) {
+        const empSel = empresas.find(
+          (e) => String(e.id) === String(nuevaEmpresaId)
+        );
+        localStorage.setItem("empresa_activa", nuevaEmpresaId);
+        localStorage.setItem("empresa_id", nuevaEmpresaId);
+        if (empSel) {
+          localStorage.setItem(
+            "empresa_activa_nombre",
+            obtenerNombreEmpresa(empSel)
+          );
+        }
+        setCookieValue("empresa_activa", nuevaEmpresaId);
+      } else {
+        localStorage.removeItem("empresa_activa");
+        localStorage.removeItem("empresa_id");
+        localStorage.removeItem("empresa_activa_nombre");
+        clearCookieValue("empresa_activa");
+      }
+
+      localStorage.removeItem("sucursal_activa");
+      localStorage.removeItem("sucursal_id");
+      localStorage.removeItem("sucursal_activa_nombre");
+      clearCookieValue("sucursal_activa");
     }
+
+    if (!nuevaEmpresaId) return;
+
+    setEmpresaActivaUsuario(nuevaEmpresaId, usuarioIdRef.current, null).catch(
+      () => {}
+    );
+
+    const resSuc = await getSucursalesPermitidas(
+      nuevaEmpresaId,
+      usuarioIdRef.current
+    );
+    const listaSuc: Sucursal[] = Array.isArray(resSuc) ? resSuc : [];
+    setSucursales(listaSuc);
+  };
+
+  const handleSucursalChange = (nuevaSucursalId: string) => {
+    setSucursalId(nuevaSucursalId);
+    setNotaCreadaExito(null);
+
+    if (typeof window !== "undefined") {
+      if (nuevaSucursalId) {
+        const sucSel = sucursales.find(
+          (s) => String(s.id) === String(nuevaSucursalId)
+        );
+        localStorage.setItem("sucursal_activa", nuevaSucursalId);
+        localStorage.setItem("sucursal_id", nuevaSucursalId);
+        if (sucSel?.nombre) {
+          localStorage.setItem("sucursal_activa_nombre", sucSel.nombre);
+        }
+        setCookieValue("sucursal_activa", nuevaSucursalId);
+      } else {
+        localStorage.removeItem("sucursal_activa");
+        localStorage.removeItem("sucursal_id");
+        localStorage.removeItem("sucursal_activa_nombre");
+        clearCookieValue("sucursal_activa");
+      }
+    }
+
+    setSucursalActivaUsuario(
+      nuevaSucursalId || null,
+      usuarioIdRef.current
+    ).catch(() => {});
   };
 
   useEffect(() => {
     if (!isMounted) return;
+    let cancelado = false;
 
     async function cargarDatosDependientes() {
       if (!empresaId || !sucursalId) {
@@ -198,6 +481,8 @@ export default function NotaEmitidaForm({
         .eq("es_cliente", true)
         .order("razon_social", { ascending: true });
 
+      if (cancelado) return;
+
       setClientes(terData || []);
       setClienteIdSeleccionado("");
       setFacturas([]);
@@ -205,6 +490,8 @@ export default function NotaEmitidaForm({
       setItems([]);
 
       const res = await obtenerFacturasParaNota(empresaId, sucursalId);
+      if (cancelado) return;
+
       if (res.success) {
         const facturasValidas = (res.data || []).filter(
           (f: FacturaEmitida) =>
@@ -216,38 +503,56 @@ export default function NotaEmitidaForm({
     }
 
     cargarDatosDependientes();
+    return () => {
+      cancelado = true;
+    };
   }, [empresaId, sucursalId, isMounted]);
 
   const facturasFiltradasPorCliente = useMemo(() => {
     if (!clienteIdSeleccionado) return [];
-    return facturas.filter((f) => String(f.cliente_id) === String(clienteIdSeleccionado));
+    return facturas.filter(
+      (f) => String(f.cliente_id) === String(clienteIdSeleccionado)
+    );
   }, [facturas, clienteIdSeleccionado]);
 
   const esAnulacionTotal = tipoNota === "CREDITO" && conceptoDian === "2";
 
   useEffect(() => {
+    let cancelado = false;
+
     async function validarAnulacionConNotas() {
       if (esAnulacionTotal && facturaSeleccionada) {
         const res = await verificarNotasFactura(facturaSeleccionada.id);
+        if (cancelado) return;
+
         if (res.success && res.data && res.data.length > 0) {
+          setBloqueoAnulacionConNotas(true);
           setMsg({
             tipo: "error",
             texto: `La factura N° ${facturaSeleccionada.numero_factura} ya cuenta con ${res.data.length} nota(s) previa(s). No se puede realizar una anulación total directa hasta anular o limpiar las notas existentes.`,
           });
         } else {
+          setBloqueoAnulacionConNotas(false);
           setMsg(null);
         }
       } else {
+        setBloqueoAnulacionConNotas(false);
         setMsg(null);
       }
     }
+
     validarAnulacionConNotas();
+    return () => {
+      cancelado = true;
+    };
   }, [esAnulacionTotal, facturaSeleccionada]);
 
   const handleFacturaChange = async (facturaId: string) => {
-    const fact = facturas.find((f) => String(f.id) === String(facturaId)) || null;
+    const fact =
+      facturas.find((f) => String(f.id) === String(facturaId)) || null;
     setFacturaSeleccionada(fact);
     setMsg(null);
+    setBloqueoAnulacionConNotas(false);
 
     if (!fact) {
       setItems([]);
@@ -257,6 +562,7 @@ export default function NotaEmitidaForm({
     if (esAnulacionTotal) {
       const resNotas = await verificarNotasFactura(fact.id);
       if (resNotas.success && resNotas.data && resNotas.data.length > 0) {
+        setBloqueoAnulacionConNotas(true);
         setMsg({
           tipo: "error",
           texto: `La factura N° ${fact.numero_factura} ya cuenta con notas previas. No se permite anulación total.`,
@@ -279,7 +585,9 @@ export default function NotaEmitidaForm({
         valor_iva?: number;
       }
 
-      const itemsMapeados: ItemFacturaOriginal[] = (res.data as DetalleFacturaEmitida[]).map((i) => {
+      const itemsMapeados: ItemFacturaOriginal[] = (
+        res.data as DetalleFacturaEmitida[]
+      ).map((i) => {
         const cant = Number(i.cantidad) || 1;
         const vUnit = Number(i.valor_unitario) || 0;
         const sub = Number(i.subtotal) || cant * vUnit;
@@ -329,17 +637,24 @@ export default function NotaEmitidaForm({
         prev.map((i) => ({
           ...i,
           cantidadNota: esAnulacionTotal ? i.cantidadOriginal : i.cantidadNota,
-          valorUnitarioNota: esAnulacionTotal ? i.valorUnitarioOriginal : i.valorUnitarioNota,
+          valorUnitarioNota: esAnulacionTotal
+            ? i.valorUnitarioOriginal
+            : i.valorUnitarioNota,
         }))
       );
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [esAnulacionTotal]);
 
-  const handleItemNotaChange = (index: number, field: "cantidadNota" | "valorUnitarioNota", val: number) => {
+  const handleItemNotaChange = (
+    index: number,
+    field: "cantidadNota" | "valorUnitarioNota",
+    val: number
+  ) => {
     if (esAnulacionTotal) return;
 
     const itemActual = items[index];
-    let valorValidado = val < 0 ? 0 : val;
+    let valorValidado = Number.isNaN(val) || val < 0 ? 0 : val;
 
     if (field === "cantidadNota" && valorValidado > itemActual.cantidadOriginal) {
       valorValidado = itemActual.cantidadOriginal;
@@ -347,11 +662,16 @@ export default function NotaEmitidaForm({
         tipo: "error",
         texto: `La cantidad de la nota no puede superar la cantidad original (${itemActual.cantidadOriginal}) del ítem.`,
       });
-    } else if (field === "valorUnitarioNota" && valorValidado > itemActual.valorUnitarioOriginal) {
+    } else if (
+      field === "valorUnitarioNota" &&
+      valorValidado > itemActual.valorUnitarioOriginal
+    ) {
       valorValidado = itemActual.valorUnitarioOriginal;
       setMsg({
         tipo: "error",
-        texto: `El valor unitario de la nota no puede superar el valor unitario original ($${itemActual.valorUnitarioOriginal.toLocaleString("es-CO")}) del ítem.`,
+        texto: `El valor unitario de la nota no puede superar el valor unitario original ($${itemActual.valorUnitarioOriginal.toLocaleString(
+          "es-CO"
+        )}) del ítem.`,
       });
     } else {
       setMsg(null);
@@ -378,14 +698,16 @@ export default function NotaEmitidaForm({
 
     const totalNota = subtotalNota + ivaNota;
 
-    const subtotalOriginalFactura = facturaSeleccionada 
-      ? Number(facturaSeleccionada.subtotal || facturaSeleccionada.total_factura || 0) 
+    const subtotalOriginalFactura = facturaSeleccionada
+      ? Number(
+          facturaSeleccionada.subtotal || facturaSeleccionada.total_factura || 0
+        )
       : 0;
-    const ivaOriginalFactura = facturaSeleccionada 
-      ? Number(facturaSeleccionada.iva || 0) 
+    const ivaOriginalFactura = facturaSeleccionada
+      ? Number(facturaSeleccionada.iva || 0)
       : 0;
-    const totalOriginalFactura = facturaSeleccionada 
-      ? Number(facturaSeleccionada.total_factura || 0) 
+    const totalOriginalFactura = facturaSeleccionada
+      ? Number(facturaSeleccionada.total_factura || 0)
       : 0;
 
     return {
@@ -402,10 +724,29 @@ export default function NotaEmitidaForm({
     e.preventDefault();
     if (!facturaSeleccionada) return;
 
+    if (!empresaId || !sucursalId || !claseDocId) {
+      setMsg({
+        tipo: "error",
+        texto:
+          "Debe seleccionar Empresa, Sucursal y Clase de Documento antes de generar la nota.",
+      });
+      return;
+    }
+
     if (errorPeriodo) {
       setMsg({
         tipo: "error",
-        texto: "No se puede registrar la nota porque el periodo contable no es válido o está cerrado.",
+        texto:
+          "No se puede registrar la nota porque el periodo contable no es válido o está cerrado.",
+      });
+      return;
+    }
+
+    if (bloqueoAnulacionConNotas) {
+      setMsg({
+        tipo: "error",
+        texto:
+          "No se permite la anulación total de una factura que ya tiene notas registradas.",
       });
       return;
     }
@@ -452,7 +793,7 @@ export default function NotaEmitidaForm({
       setMsg({ tipo: "error", texto: res.error });
     } else {
       setNotaCreadaExito({
-        numeroNota: res.numeroNota ?? '',
+        numeroNota: res.numeroNota ?? "",
         facturaOriginal: numeroFacturaOriginal,
         tipo: tipoNota,
       });
@@ -466,11 +807,28 @@ export default function NotaEmitidaForm({
   if (!isMounted) return null;
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-6">
+    <form
+      onSubmit={handleSubmit}
+      className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-6"
+    >
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-800">Registrar Nota a Factura Emitida</h2>
-          <p className="text-xs text-slate-500">Ajuste de crédito o débito aplicado a la facturación de venta.</p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition cursor-pointer border border-slate-200 shrink-0 flex items-center gap-1.5"
+          >
+            <span>←</span>
+            <span>Atrás</span>
+          </button>
+          <div>
+            <h2 className="text-xl font-bold text-slate-800">
+              Registrar Nota a Factura Emitida
+            </h2>
+            <p className="text-xs text-slate-500">
+              Ajuste de crédito o débito aplicado a la facturación de venta.
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -503,16 +861,21 @@ export default function NotaEmitidaForm({
         <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-lg shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <h4 className="text-emerald-900 font-bold text-sm flex items-center gap-2">
-              <span>✅</span> ¡Nota {notaCreadaExito.tipo} N° {notaCreadaExito.numeroNota} generada exitosamente!
+              <span>✅</span> ¡Nota {notaCreadaExito.tipo} N°{" "}
+              {notaCreadaExito.numeroNota} generada exitosamente!
             </h4>
             <p className="text-emerald-700 text-xs mt-1">
-              Aplicada correctamente a la Factura N° <span className="font-semibold">{notaCreadaExito.facturaOriginal}</span>. El formulario está listo para registrar otra nota.
+              Aplicada correctamente a la Factura N°{" "}
+              <span className="font-semibold">
+                {notaCreadaExito.facturaOriginal}
+              </span>
+              . El formulario está listo para registrar otra nota.
             </p>
           </div>
           <button
             type="button"
             onClick={() => setNotaCreadaExito(null)}
-            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded transition shrink-0"
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded transition shrink-0 cursor-pointer"
           >
             Cerrar aviso
           </button>
@@ -533,7 +896,9 @@ export default function NotaEmitidaForm({
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Empresa *</label>
+          <label className="block text-xs font-bold text-slate-600 mb-1">
+            Empresa *
+          </label>
           <select
             value={empresaId}
             onChange={(e) => handleEmpresaChange(e.target.value)}
@@ -543,20 +908,19 @@ export default function NotaEmitidaForm({
             <option value="">-- Seleccione Empresa --</option>
             {empresas.map((e) => (
               <option key={e.id} value={e.id}>
-                {e.razon_social || e.nombre_comercial || e.nombre}
+                {obtenerEtiquetaEmpresa(e)}
               </option>
             ))}
           </select>
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Sucursal *</label>
+          <label className="block text-xs font-bold text-slate-600 mb-1">
+            Sucursal *
+          </label>
           <select
             value={sucursalId}
-            onChange={(e) => {
-              setSucursalId(e.target.value);
-              setNotaCreadaExito(null);
-            }}
+            onChange={(e) => handleSucursalChange(e.target.value)}
             required
             disabled={!empresaId}
             className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-slate-100"
@@ -564,14 +928,16 @@ export default function NotaEmitidaForm({
             <option value="">-- Seleccione Sucursal --</option>
             {sucursalesFiltradas.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.nombre_sucursal || s.nombre}
+                {obtenerNombreSucursal(s)}
               </option>
             ))}
           </select>
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Clase de Documento *</label>
+          <label className="block text-xs font-bold text-slate-600 mb-1">
+            Clase de Documento *
+          </label>
           <select
             value={claseDocId}
             onChange={(e) => setClaseDocId(e.target.value)}
@@ -592,7 +958,9 @@ export default function NotaEmitidaForm({
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
         <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Concepto DIAN *</label>
+          <label className="block text-xs font-bold text-slate-600 mb-1">
+            Concepto DIAN *
+          </label>
           <select
             value={conceptoDian}
             onChange={(e) => setConceptoDian(e.target.value)}
@@ -600,8 +968,12 @@ export default function NotaEmitidaForm({
           >
             {tipoNota === "CREDITO" ? (
               <>
-                <option value="1">1 - Devolución parcial / total de bienes</option>
-                <option value="2">2 - Anulación de factura electrónica</option>
+                <option value="1">
+                  1 - Devolución parcial / total de bienes
+                </option>
+                <option value="2">
+                  2 - Anulación de factura electrónica
+                </option>
                 <option value="3">3 - Rebaja o descuento</option>
                 <option value="4">4 - Ajuste de precio</option>
               </>
@@ -616,7 +988,9 @@ export default function NotaEmitidaForm({
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Cliente *</label>
+          <label className="block text-xs font-bold text-slate-600 mb-1">
+            Cliente *
+          </label>
           <select
             value={clienteIdSeleccionado}
             onChange={(e) => {
@@ -632,7 +1006,9 @@ export default function NotaEmitidaForm({
             <option value="">-- Seleccione Cliente --</option>
             {clientes.map((cli) => (
               <option key={cli.id} value={cli.id}>
-                {cli.numero_identificacion || cli.nit ? `${cli.numero_identificacion || cli.nit} - ` : ""}
+                {cli.numero_identificacion || cli.nit
+                  ? `${cli.numero_identificacion || cli.nit} - `
+                  : ""}
                 {cli.razon_social || cli.nombre_comercial}
               </option>
             ))}
@@ -640,7 +1016,9 @@ export default function NotaEmitidaForm({
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Factura Emitida Afectada *</label>
+          <label className="block text-xs font-bold text-slate-600 mb-1">
+            Factura Emitida Afectada *
+          </label>
           <select
             value={facturaSeleccionada?.id ? String(facturaSeleccionada.id) : ""}
             onChange={(e) => {
@@ -660,14 +1038,20 @@ export default function NotaEmitidaForm({
             </option>
             {facturasFiltradasPorCliente.map((f) => (
               <option key={f.id} value={f.id}>
-                N° {f.numero_factura} (Saldo: ${Number(f.saldo_pendiente ?? f.total_factura).toLocaleString("es-CO")})
+                N° {f.numero_factura} (Saldo: $
+                {Number(
+                  f.saldo_pendiente ?? f.total_factura ?? 0
+                ).toLocaleString("es-CO")}
+                )
               </option>
             ))}
           </select>
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Fecha Contable *</label>
+          <label className="block text-xs font-bold text-slate-600 mb-1">
+            Fecha Contable *
+          </label>
           <input
             type="date"
             value={fechaContable}
@@ -680,7 +1064,9 @@ export default function NotaEmitidaForm({
             className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none"
           />
           {validandoPeriodo && (
-            <p className="text-[10px] text-blue-500 mt-1 animate-pulse">Verificando estado del periodo...</p>
+            <p className="text-[10px] text-blue-500 mt-1 animate-pulse">
+              Verificando estado del periodo...
+            </p>
           )}
           {errorPeriodo && (
             <p className="text-[11px] font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1.5 rounded mt-1">
@@ -695,37 +1081,57 @@ export default function NotaEmitidaForm({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <div>
               <h3 className="text-sm font-bold text-slate-800">
-                Detalle de Factura N° {facturaSeleccionada.numero_factura} y Valores de Ajuste
+                Detalle de Factura N° {facturaSeleccionada.numero_factura} y
+                Valores de Ajuste
               </h3>
               {esAnulacionTotal && (
                 <span className="text-xs text-amber-600 font-semibold">
-                  ⚠️ Anulación Activa: Los valores de la nota están bloqueados al 100% de la factura original.
+                  ⚠️ Anulación Activa: Los valores de la nota están bloqueados
+                  al 100% de la factura original.
                 </span>
               )}
             </div>
           </div>
 
           {loadingItems ? (
-            <div className="p-8 text-center text-slate-500 text-xs">Cargando detalle de ítems...</div>
+            <div className="p-8 text-center text-slate-500 text-xs">
+              Cargando detalle de ítems...
+            </div>
           ) : (
             <div className="overflow-x-auto border rounded-xl">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-100 border-b text-slate-600 font-semibold">
                   <tr>
                     <th className="p-3 border-r">Ítem / Descripción</th>
-                    <th className="p-3 text-center border-r bg-slate-200/60 w-20">Cant. Orig.</th>
-                    <th className="p-3 text-right border-r bg-slate-200/60 w-24">V. Unit. Orig.</th>
-                    <th className="p-3 text-right border-r bg-slate-200/60 w-16">IVA %</th>
-                    <th className="p-3 text-right border-r bg-slate-200/60 w-24">V. IVA Orig.</th>
-                    <th className="p-3 text-center border-r w-20 text-blue-700">Cant. Nota</th>
-                    <th className="p-3 text-right border-r w-28 text-blue-700">V. Unit. Nota</th>
-                    <th className="p-3 text-right w-28 font-bold">Total Nota</th>
+                    <th className="p-3 text-center border-r bg-slate-200/60 w-20">
+                      Cant. Orig.
+                    </th>
+                    <th className="p-3 text-right border-r bg-slate-200/60 w-24">
+                      V. Unit. Orig.
+                    </th>
+                    <th className="p-3 text-right border-r bg-slate-200/60 w-16">
+                      IVA %
+                    </th>
+                    <th className="p-3 text-right border-r bg-slate-200/60 w-24">
+                      V. IVA Orig.
+                    </th>
+                    <th className="p-3 text-center border-r w-20 text-blue-700">
+                      Cant. Nota
+                    </th>
+                    <th className="p-3 text-right border-r w-28 text-blue-700">
+                      V. Unit. Nota
+                    </th>
+                    <th className="p-3 text-right w-28 font-bold">
+                      Total Nota
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {items.map((item, idx) => {
-                    const subtotalLineaNota = item.cantidadNota * item.valorUnitarioNota;
-                    const ivaLineaNota = (subtotalLineaNota * item.porcentajeIva) / 100;
+                    const subtotalLineaNota =
+                      item.cantidadNota * item.valorUnitarioNota;
+                    const ivaLineaNota =
+                      (subtotalLineaNota * item.porcentajeIva) / 100;
                     const totalLineaNota = subtotalLineaNota + ivaLineaNota;
 
                     return (
@@ -758,7 +1164,13 @@ export default function NotaEmitidaForm({
                             step="0.01"
                             disabled={esAnulacionTotal}
                             value={item.cantidadNota}
-                            onChange={(e) => handleItemNotaChange(idx, "cantidadNota", Number(e.target.value))}
+                            onChange={(e) =>
+                              handleItemNotaChange(
+                                idx,
+                                "cantidadNota",
+                                Number(e.target.value)
+                              )
+                            }
                             className="w-full p-1.5 border rounded text-center font-mono font-bold text-blue-900 bg-white disabled:bg-slate-100"
                           />
                         </td>
@@ -770,12 +1182,21 @@ export default function NotaEmitidaForm({
                             step="0.01"
                             disabled={esAnulacionTotal}
                             value={item.valorUnitarioNota}
-                            onChange={(e) => handleItemNotaChange(idx, "valorUnitarioNota", Number(e.target.value))}
+                            onChange={(e) =>
+                              handleItemNotaChange(
+                                idx,
+                                "valorUnitarioNota",
+                                Number(e.target.value)
+                              )
+                            }
                             className="w-full p-1.5 border rounded text-right font-mono font-bold text-blue-900 bg-white disabled:bg-slate-100"
                           />
                         </td>
                         <td className="p-3 text-right font-mono font-bold text-slate-900">
-                          ${totalLineaNota.toLocaleString("es-CO", { minimumFractionDigits: 2 })}
+                          $
+                          {totalLineaNota.toLocaleString("es-CO", {
+                            minimumFractionDigits: 2,
+                          })}
                         </td>
                       </tr>
                     );
@@ -788,19 +1209,37 @@ export default function NotaEmitidaForm({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
               <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                Totales Factura Original (N° {facturaSeleccionada.numero_factura})
+                Totales Factura Original (N°{" "}
+                {facturaSeleccionada.numero_factura})
               </h4>
               <div className="flex justify-between text-xs text-slate-600">
                 <span>Subtotal Original:</span>
-                <span className="font-mono">${totalesCalculados.subtotalOriginalFactura.toLocaleString("es-CO", { minimumFractionDigits: 2 })}</span>
+                <span className="font-mono">
+                  $
+                  {totalesCalculados.subtotalOriginalFactura.toLocaleString(
+                    "es-CO",
+                    { minimumFractionDigits: 2 }
+                  )}
+                </span>
               </div>
               <div className="flex justify-between text-xs text-slate-600">
                 <span>IVA Original:</span>
-                <span className="font-mono">${totalesCalculados.ivaOriginalFactura.toLocaleString("es-CO", { minimumFractionDigits: 2 })}</span>
+                <span className="font-mono">
+                  $
+                  {totalesCalculados.ivaOriginalFactura.toLocaleString("es-CO", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
               </div>
               <div className="flex justify-between text-sm font-bold text-slate-800 border-t pt-1">
                 <span>Total Factura:</span>
-                <span className="font-mono">${totalesCalculados.totalOriginalFactura.toLocaleString("es-CO", { minimumFractionDigits: 2 })}</span>
+                <span className="font-mono">
+                  $
+                  {totalesCalculados.totalOriginalFactura.toLocaleString(
+                    "es-CO",
+                    { minimumFractionDigits: 2 }
+                  )}
+                </span>
               </div>
             </div>
 
@@ -810,15 +1249,30 @@ export default function NotaEmitidaForm({
               </h4>
               <div className="flex justify-between text-xs text-slate-700">
                 <span>Subtotal Nota:</span>
-                <span className="font-mono">${totalesCalculados.subtotalNota.toLocaleString("es-CO", { minimumFractionDigits: 2 })}</span>
+                <span className="font-mono">
+                  $
+                  {totalesCalculados.subtotalNota.toLocaleString("es-CO", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
               </div>
               <div className="flex justify-between text-xs text-slate-700">
                 <span>IVA Nota:</span>
-                <span className="font-mono">${totalesCalculados.ivaNota.toLocaleString("es-CO", { minimumFractionDigits: 2 })}</span>
+                <span className="font-mono">
+                  $
+                  {totalesCalculados.ivaNota.toLocaleString("es-CO", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
               </div>
               <div className="flex justify-between text-sm font-bold text-blue-900 border-t border-blue-200 pt-1">
                 <span>Total Nota:</span>
-                <span className="font-mono">${totalesCalculados.totalNota.toLocaleString("es-CO", { minimumFractionDigits: 2 })}</span>
+                <span className="font-mono">
+                  $
+                  {totalesCalculados.totalNota.toLocaleString("es-CO", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
               </div>
             </div>
           </div>
@@ -828,8 +1282,14 @@ export default function NotaEmitidaForm({
       <div className="pt-4 flex justify-end">
         <button
           type="submit"
-          disabled={loading || !facturaSeleccionada || items.length === 0 || Boolean(errorPeriodo) || (msg?.tipo === "error" && msg.texto.includes("cuenta con"))}
-          className="w-full md:w-auto px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={
+            loading ||
+            !facturaSeleccionada ||
+            items.length === 0 ||
+            Boolean(errorPeriodo) ||
+            bloqueoAnulacionConNotas
+          }
+          className="w-full md:w-auto px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           {loading ? "Procesando Nota..." : `Generar Nota ${tipoNota}`}
         </button>

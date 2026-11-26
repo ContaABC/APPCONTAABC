@@ -3,7 +3,12 @@
 import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let supabaseAdminInstance: ReturnType<typeof createClient<any>> | null = null;
+
 function getSupabaseAdmin() {
+  if (supabaseAdminInstance) return supabaseAdminInstance;
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey) {
@@ -11,16 +16,29 @@ function getSupabaseAdmin() {
       "Faltan variables de entorno NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY."
     );
   }
-  return createClient(supabaseUrl, serviceRoleKey, {
+
+  supabaseAdminInstance = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  return supabaseAdminInstance;
 }
 
-async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
-  if (empresaId) return Number(empresaId);
+async function resolverEmpresaId(
+  empresaId?: number | string | null
+): Promise<number> {
+  if (
+    empresaId !== null &&
+    empresaId !== undefined &&
+    String(empresaId).trim() !== ""
+  ) {
+    const num = Number(empresaId);
+    return Number.isNaN(num) ? 0 : num;
+  }
   const cookieStore = await cookies();
   const idCookie = cookieStore.get("empresa_activa")?.value;
-  return Number(idCookie || 0);
+  const numCookie = Number(idCookie || 0);
+  return Number.isNaN(numCookie) ? 0 : numCookie;
 }
 
 /**
@@ -49,10 +67,10 @@ export async function obtenerEmpresas() {
  */
 export async function obtenerSucursales(empresaId?: number | string | null) {
   try {
-    const supabase = getSupabaseAdmin();
     const empId = await resolverEmpresaId(empresaId);
     if (!empId) return { success: true, data: [], error: null };
 
+    const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from("sucursales")
       .select("*")
@@ -77,13 +95,14 @@ export async function obtenerNotasEmitidas(
   sucursalId?: number | string | null
 ) {
   try {
-    const supabase = getSupabaseAdmin();
     const empId = await resolverEmpresaId(empresaId);
     if (!empId) return { success: true, data: [], error: null };
 
+    const supabase = getSupabaseAdmin();
     let query = supabase
       .from("notas_facturas_emitidas")
-      .select(`
+      .select(
+        `
         *,
         facturas_emitidas (
           id,
@@ -95,11 +114,13 @@ export async function obtenerNotasEmitidas(
           cliente_nit,
           cliente_nombre
         )
-      `)
+      `
+      )
       .eq("empresa_id", empId)
-      .order("fecha_emision", { ascending: false });
+      .order("fecha_emision", { ascending: false })
+      .order("id", { ascending: false });
 
-    if (sucursalId && sucursalId !== "") {
+    if (sucursalId && String(sucursalId).trim() !== "") {
       query = query.eq("sucursal_id", Number(sucursalId));
     }
 
@@ -126,11 +147,16 @@ export async function obtenerAsientoPorNota(notaId: string) {
       .from("transacciones")
       .select("*")
       .eq("referencia_origen_id", notaId)
+      .eq("modulo_origen", "FACTURAS_EMITIDAS")
       .maybeSingle();
 
     if (errTrans) throw new Error(errTrans.message);
     if (!transaccion) {
-      return { success: false, data: null, error: "No se encontró el registro contable de la nota." };
+      return {
+        success: false,
+        data: null,
+        error: "No se encontró el registro contable de la nota.",
+      };
     }
 
     interface DetalleTransaccion {
@@ -146,18 +172,26 @@ export async function obtenerAsientoPorNota(notaId: string) {
 
     const { data: detallesRaw, error: errDetalles } = await supabase
       .from("detalle_transacciones")
-      .select("id, transaccion_id, concepto_auxiliar_id, tercero_id, cuenta_financiera_id, debito, credito")
+      .select(
+        "id, transaccion_id, concepto_auxiliar_id, tercero_id, cuenta_financiera_id, debito, credito"
+      )
       .eq("transaccion_id", transaccion.id);
 
     if (errDetalles) throw new Error(errDetalles.message);
 
-    const detalles: DetalleTransaccion[] = detallesRaw || [];
+    const detalles: DetalleTransaccion[] = Array.isArray(detallesRaw)
+      ? detallesRaw
+      : [];
 
     const auxiliarIds = Array.from(
       new Set(detalles.map((d) => d.concepto_auxiliar_id).filter(Boolean))
     );
 
-    const conceptosMap: Record<string, { codigo: string; nombre: string }> = {};
+    const conceptosMap: Record<
+      string,
+      { codigo: string; codigo_auxiliar: string; nombre: string }
+    > = {};
+
     if (auxiliarIds.length > 0) {
       const { data: conceptosData } = await supabase
         .from("conceptos_auxiliares")
@@ -165,17 +199,24 @@ export async function obtenerAsientoPorNota(notaId: string) {
         .in("id", auxiliarIds);
 
       if (conceptosData) {
-        conceptosData.forEach((c: { id: number | string; codigo: string; nombre: string }) => {
-          conceptosMap[String(c.id)] = { codigo: c.codigo, nombre: c.nombre };
-        });
+        conceptosData.forEach(
+          (c: { id: number | string; codigo: string; nombre: string }) => {
+            conceptosMap[String(c.id)] = {
+              codigo: c.codigo,
+              codigo_auxiliar: c.codigo,
+              nombre: c.nombre,
+            };
+          }
+        );
       }
     }
 
-    // Mapear y ordenar correctamente los detalles
     const detallesConConceptos = detalles
       .map((d) => ({
         ...d,
-        conceptos_auxiliares: d.concepto_auxiliar_id ? conceptosMap[String(d.concepto_auxiliar_id)] || null : null,
+        conceptos_auxiliares: d.concepto_auxiliar_id
+          ? conceptosMap[String(d.concepto_auxiliar_id)] || null
+          : null,
       }))
       .sort((a, b) => {
         const debA = Number(a.debito || 0);

@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, FormEvent, ChangeEvent, MouseEvent } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  FormEvent,
+  ChangeEvent,
+  MouseEvent,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -17,12 +24,13 @@ import {
   X,
   Building2,
 } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
-import { crearOActualizarUsuarioAdmin, UsuarioFormData } from "./actions";
+import { supabase } from "@/lib/supabaseClient";
+import {
+  crearOActualizarUsuarioAdmin,
+  obtenerUsuariosAdmin,
+  type UsuarioFormData,
+} from "./actions";
 
-// ==========================================
-// INTERFACES Y TIPOS
-// ==========================================
 interface UsuarioPerfil {
   id: string;
   nombres: string;
@@ -57,7 +65,12 @@ export default function UsuariosPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [cargandoLista, setCargandoLista] = useState<boolean>(true);
 
-  const [usuarioSeleccionadoId, setUsuarioSeleccionadoId] = useState<string | null>(null);
+  const [usuarioSeleccionadoId, setUsuarioSeleccionadoId] = useState<
+    string | null
+  >(null);
+  const [ultimoUsuarioCreadoId, setUltimoUsuarioCreadoId] = useState<
+    string | null
+  >(null);
 
   const [busqueda, setBusqueda] = useState<string>("");
   const [filtroTipo, setFiltroTipo] = useState<string>("");
@@ -76,95 +89,35 @@ export default function UsuariosPage() {
       .split("T")[0],
   });
 
-  const [mensaje, setMensaje] = useState<MensajeEstado>({ texto: "", tipo: "" });
+  const [mensaje, setMensaje] = useState<MensajeEstado>({
+    texto: "",
+    tipo: "",
+  });
 
   const cargarUsuarios = useCallback(async () => {
     setCargandoLista(true);
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    if (supabaseUrl && supabaseAnonKey) {
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+    const res = await obtenerUsuariosAdmin(user?.id || null);
 
-      if (!user) {
-        setUsuarios([]);
-        setEmpresasAdminIds([]);
-        setCargandoLista(false);
-        return;
-      }
-
-      // 1. Obtener empresas permitidas al administrador actual
-      const { data: permisosAdmin, error: errPermisosAdmin } = await supabase
-        .from("usuario_permisos_tx")
-        .select("empresa_id")
-        .eq("usuario_id", user.id);
-
-      const idsEmpresasAdmin = Array.from(
-        new Set(
-          (permisosAdmin || [])
-            .map((p: { empresa_id?: string | number | null }) =>
-              p.empresa_id != null ? String(p.empresa_id).trim() : ""
-            )
-            .filter(Boolean)
-        )
+    if (res.success) {
+      setUsuarios(res.usuarios);
+      setEmpresasAdminIds(res.empresasAdminIds);
+      setMensaje((prev) =>
+        prev.tipo === "error" ? { texto: "", tipo: "" } : prev
       );
-
-      setEmpresasAdminIds(idsEmpresasAdmin);
-
-      // Si el administrador no tiene empresas asignadas en usuario_permisos_tx, no debe ver usuarios de otras empresas
-      if (errPermisosAdmin || idsEmpresasAdmin.length === 0) {
-        setUsuarios([]);
-        setCargandoLista(false);
-        return;
-      }
-
-      // 2. Obtener IDs de usuarios asignados a las empresas del administrador
-      const { data: permisosUsuariosEmpresa, error: errPermisosUsuarios } = await supabase
-        .from("usuario_permisos_tx")
-        .select("usuario_id")
-        .in("empresa_id", idsEmpresasAdmin);
-
-      if (errPermisosUsuarios) {
-        setUsuarios([]);
-        setCargandoLista(false);
-        return;
-      }
-
-      const idsUsuariosPermitidos = Array.from(
-        new Set(
-          [
-            ...(permisosUsuariosEmpresa || []).map(
-              (p: { usuario_id?: string | null }) =>
-                p.usuario_id ? String(p.usuario_id).trim() : ""
-            ),
-            String(user.id),
-          ].filter(Boolean)
-        )
-      );
-
-      if (idsUsuariosPermitidos.length === 0) {
-        setUsuarios([]);
-        setCargandoLista(false);
-        return;
-      }
-
-      // 3. Consultar únicamente los perfiles dentro del alcance de empresas del administrador
-      const { data, error } = await supabase
-        .from("usuarios_perfiles")
-        .select("*")
-        .in("id", idsUsuariosPermitidos)
-        .order("created_at", { ascending: false });
-
-      if (!error && data) {
-        setUsuarios(data as UsuarioPerfil[]);
-      } else {
-        setUsuarios([]);
-      }
+    } else {
+      setUsuarios([]);
+      setEmpresasAdminIds([]);
+      setMensaje({
+        texto: res.error || "No se pudieron cargar los usuarios.",
+        tipo: "error",
+      });
     }
+
     setCargandoLista(false);
   }, []);
 
@@ -174,6 +127,7 @@ export default function UsuariosPage() {
 
   const seleccionarUsuarioParaEditar = (u: UsuarioPerfil) => {
     setUsuarioSeleccionadoId(u.id);
+    setUltimoUsuarioCreadoId(null);
     setFormData({
       nombres: u.nombres || "",
       apellidos: u.apellidos || "",
@@ -186,7 +140,10 @@ export default function UsuariosPage() {
         ? u.fecha_expiracion_password.split("T")[0]
         : "",
     });
-    setMensaje({ texto: `Editando al usuario: ${u.nombres} ${u.apellidos}`, tipo: "info" });
+    setMensaje({
+      texto: `Editando al usuario: ${u.nombres} ${u.apellidos}`,
+      tipo: "info",
+    });
   };
 
   const limpiarFormulario = () => {
@@ -206,6 +163,28 @@ export default function UsuariosPage() {
     setMensaje({ texto: "", tipo: "" });
   };
 
+  const usuarioObjetivoPermisos =
+    usuarioSeleccionadoId || ultimoUsuarioCreadoId || "";
+
+  const construirRutaPermisos = (idUsuario?: string | null) => {
+    const idFinal = (idUsuario || usuarioObjetivoPermisos || "").trim();
+    if (!idFinal) {
+      return "/usuarios/permisos?from=/usuarios";
+    }
+    return `/usuarios/permisos?from=/usuarios&usuarioId=${encodeURIComponent(
+      idFinal
+    )}`;
+  };
+
+  const handleIrAPermisos = () => {
+    if (typeof window !== "undefined" && usuarioObjetivoPermisos) {
+      sessionStorage.setItem(
+        "nuevo_usuario_permisos_id",
+        String(usuarioObjetivoPermisos)
+      );
+    }
+  };
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
@@ -213,103 +192,64 @@ export default function UsuariosPage() {
 
     try {
       const esCreacionNueva = !usuarioSeleccionadoId;
+
+      const empresaActivaLocal =
+        typeof window !== "undefined"
+          ? localStorage.getItem("empresa_activa") ||
+            localStorage.getItem("empresa_id")
+          : null;
+      const empresaActivaCookie = getCookieValue("empresa_activa");
+      const empresaCandidata = String(
+        empresaActivaLocal || empresaActivaCookie || ""
+      ).trim();
+
+      const empresaAsignar = empresasAdminIds.includes(empresaCandidata)
+        ? empresaCandidata
+        : empresasAdminIds[0] || null;
+
       const resultado = await crearOActualizarUsuarioAdmin({
         id: usuarioSeleccionadoId || undefined,
         ...formData,
+        empresa_id_inicial: esCreacionNueva ? empresaAsignar : undefined,
       });
 
       if (!resultado.success) {
         throw new Error(resultado.message);
       }
 
-      let nuevoUsuarioId: string | undefined;
+      const nuevoUsuarioId = resultado.userId || null;
+      const idParaPermisos =
+        usuarioSeleccionadoId || nuevoUsuarioId || ultimoUsuarioCreadoId;
 
-      if (esCreacionNueva) {
-        nuevoUsuarioId =
-          (resultado as { userId?: string; id?: string; data?: { id?: string } })?.userId ||
-          (resultado as { id?: string })?.id ||
-          (resultado as { data?: { id?: string } })?.data?.id;
-
-        if (!nuevoUsuarioId && formData.email) {
-          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-          if (supabaseUrl && supabaseAnonKey) {
-            const supabase = createClient(supabaseUrl, supabaseAnonKey);
-            const { data: perfilCreado } = await supabase
-              .from("usuarios_perfiles")
-              .select("id")
-              .eq("email", formData.email.trim())
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
-            if (perfilCreado?.id) {
-              nuevoUsuarioId = String(perfilCreado.id);
-            }
-          }
-        }
-
-        if (empresasAdminIds.length > 0 && nuevoUsuarioId) {
-          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-          const empresaActivaLocal =
-            typeof window !== "undefined"
-              ? localStorage.getItem("empresa_activa") || localStorage.getItem("empresa_id")
-              : null;
-          const empresaActivaCookie = getCookieValue("empresa_activa");
-          const empresaCandidata = String(empresaActivaLocal || empresaActivaCookie || "").trim();
-
-          const empresaAsignar = empresasAdminIds.includes(empresaCandidata)
-            ? empresaCandidata
-            : empresasAdminIds[0];
-
-          if (supabaseUrl && supabaseAnonKey && empresaAsignar) {
-            const supabase = createClient(supabaseUrl, supabaseAnonKey);
-            const { data: sucursalesEmp } = await supabase
-              .from("sucursales")
-              .select("id")
-              .eq("empresa_id", Number(empresaAsignar))
-              .order("id", { ascending: true })
-              .limit(1);
-
-            const primeraSucursalId =
-              sucursalesEmp && sucursalesEmp.length > 0 ? Number(sucursalesEmp[0].id) : null;
-
-            await supabase.from("usuario_permisos_tx").insert([
-              {
-                usuario_id: nuevoUsuarioId,
-                empresa_id: Number(empresaAsignar),
-                sucursal_id: primeraSucursalId,
-              },
-            ]);
-          }
-        }
+      if (esCreacionNueva && nuevoUsuarioId) {
+        setUltimoUsuarioCreadoId(String(nuevoUsuarioId));
       }
 
       setMensaje({ texto: resultado.message, tipo: "success" });
       limpiarFormulario();
       await cargarUsuarios();
 
-      if (esCreacionNueva && nuevoUsuarioId) {
+      if (esCreacionNueva && idParaPermisos) {
         if (typeof window !== "undefined") {
-          sessionStorage.setItem("nuevo_usuario_permisos_id", String(nuevoUsuarioId));
+          sessionStorage.setItem(
+            "nuevo_usuario_permisos_id",
+            String(idParaPermisos)
+          );
         }
-        router.push(
-          `/usuarios/permisos?from=/usuarios&usuarioId=${encodeURIComponent(String(nuevoUsuarioId))}`
-        );
+        router.push(construirRutaPermisos(String(idParaPermisos)));
       }
-    } catch (error: any) {
-      setMensaje({ texto: error.message || "Error al procesar la solicitud.", tipo: "error" });
+    } catch (error: unknown) {
+      const msg =
+        error instanceof Error
+          ? error.message
+          : "Error al procesar la solicitud.";
+      setMensaje({ texto: msg, tipo: "error" });
     } finally {
       setLoading(false);
     }
   };
 
   const handleToggleEstado = async (id: string, estadoActual: boolean) => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !supabaseAnonKey) return;
-
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
     const { error } = await supabase
       .from("usuarios_perfiles")
       .update({ activo: !estadoActual })
@@ -321,15 +261,14 @@ export default function UsuariosPage() {
   const handleEliminarUsuario = async (id: string) => {
     if (!confirm("¿Está seguro de eliminar este perfil de usuario?")) return;
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !supabaseAnonKey) return;
-
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-    const { error } = await supabase.from("usuarios_perfiles").delete().eq("id", id);
+    const { error } = await supabase
+      .from("usuarios_perfiles")
+      .delete()
+      .eq("id", id);
 
     if (!error) {
       if (usuarioSeleccionadoId === id) limpiarFormulario();
+      if (ultimoUsuarioCreadoId === id) setUltimoUsuarioCreadoId(null);
       cargarUsuarios();
     } else {
       alert("Error al eliminar el usuario.");
@@ -341,7 +280,8 @@ export default function UsuariosPage() {
       .toLowerCase()
       .includes(busqueda.toLowerCase());
     const tipoMatch = filtroTipo ? u.tipo_usuario === filtroTipo : true;
-    const estadoMatch = filtroEstado !== "" ? String(u.activo) === filtroEstado : true;
+    const estadoMatch =
+      filtroEstado !== "" ? String(u.activo) === filtroEstado : true;
     return textoMatch && tipoMatch && estadoMatch;
   });
 
@@ -363,12 +303,14 @@ export default function UsuariosPage() {
             <div>
               <h1 className="text-xl font-bold">Gestión de Usuarios y Accesos</h1>
               <p className="text-xs text-zinc-500">
-                Control de perfiles, clasificaciones temporales/permanentes y vigencias
+                Control de perfiles, clasificaciones temporales/permanentes y
+                vigencias
               </p>
             </div>
           </div>
           <Link
-            href="/usuarios/permisos?from=/usuarios"
+            href={construirRutaPermisos()}
+            onClick={handleIrAPermisos}
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-semibold text-xs transition shadow-sm flex items-center gap-2 cursor-pointer"
           >
             <Building2 className="w-4 h-4" />
@@ -377,7 +319,6 @@ export default function UsuariosPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Formulario Compacto en 2 Columnas (Izquierda - 5 columnas) */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm lg:col-span-5 h-fit">
             <div className="flex justify-between items-center mb-3">
               <h2 className="text-sm font-bold flex items-center gap-2">
@@ -410,9 +351,9 @@ export default function UsuariosPage() {
                 }`}
               >
                 {mensaje.tipo === "success" ? (
-                  <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                 ) : (
-                  <XCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                  <XCircle className="w-3.5 h-3.5 shrink-0" />
                 )}
                 <span>{mensaje.texto}</span>
               </div>
@@ -421,7 +362,9 @@ export default function UsuariosPage() {
             <form onSubmit={handleSubmit} className="space-y-3 text-xs">
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block font-semibold text-zinc-500 mb-1">Nombres</label>
+                  <label className="block font-semibold text-zinc-500 mb-1">
+                    Nombres
+                  </label>
                   <input
                     type="text"
                     required
@@ -434,7 +377,9 @@ export default function UsuariosPage() {
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-zinc-500 mb-1">Apellidos</label>
+                  <label className="block font-semibold text-zinc-500 mb-1">
+                    Apellidos
+                  </label>
                   <input
                     type="text"
                     required
@@ -450,7 +395,9 @@ export default function UsuariosPage() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block font-semibold text-zinc-500 mb-1">Cédula</label>
+                  <label className="block font-semibold text-zinc-500 mb-1">
+                    Cédula
+                  </label>
                   <input
                     type="text"
                     required
@@ -463,7 +410,9 @@ export default function UsuariosPage() {
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-zinc-500 mb-1">Tipo Usuario</label>
+                  <label className="block font-semibold text-zinc-500 mb-1">
+                    Tipo Usuario
+                  </label>
                   <select
                     value={formData.tipo_usuario}
                     onChange={(e: ChangeEvent<HTMLSelectElement>) =>
@@ -488,7 +437,9 @@ export default function UsuariosPage() {
               </div>
 
               <div>
-                <label className="block font-semibold text-zinc-500 mb-1">Correo Electrónico</label>
+                <label className="block font-semibold text-zinc-500 mb-1">
+                  Correo Electrónico
+                </label>
                 <input
                   type="email"
                   required
@@ -504,7 +455,9 @@ export default function UsuariosPage() {
 
               <div>
                 <label className="block font-semibold text-zinc-500 mb-1">
-                  {usuarioSeleccionadoId ? "Nueva Contraseña (Opcional)" : "Contraseña Temporal"}
+                  {usuarioSeleccionadoId
+                    ? "Nueva Contraseña (Opcional)"
+                    : "Contraseña Temporal"}
                 </label>
                 <input
                   type="password"
@@ -515,11 +468,14 @@ export default function UsuariosPage() {
                     setFormData({ ...formData, password: e.target.value })
                   }
                   className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600"
-                  placeholder={usuarioSeleccionadoId ? "Mantener actual (en blanco)" : "Mínimo 6 caracteres"}
+                  placeholder={
+                    usuarioSeleccionadoId
+                      ? "Mantener actual (en blanco)"
+                      : "Mínimo 6 caracteres"
+                  }
                 />
               </div>
 
-              {/* BLOQUE DE CONTROL DE SEGURIDAD Y VIGENCIA */}
               <div className="border-t border-zinc-200 dark:border-zinc-800 pt-2.5 mt-2 space-y-2.5">
                 <h3 className="text-[11px] font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wide">
                   Seguridad y Vigencia
@@ -527,11 +483,16 @@ export default function UsuariosPage() {
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block font-semibold text-zinc-500 mb-1">Clasificación</label>
+                    <label className="block font-semibold text-zinc-500 mb-1">
+                      Clasificación
+                    </label>
                     <select
                       value={formData.es_temporal ? "temporal" : "permanente"}
                       onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-                        setFormData({ ...formData, es_temporal: e.target.value === "temporal" })
+                        setFormData({
+                          ...formData,
+                          es_temporal: e.target.value === "temporal",
+                        })
                       }
                       className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 text-[11px] cursor-pointer"
                     >
@@ -545,13 +506,18 @@ export default function UsuariosPage() {
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-zinc-500 mb-1">Fecha Vencimiento</label>
+                    <label className="block font-semibold text-zinc-500 mb-1">
+                      Fecha Vencimiento
+                    </label>
                     <input
                       type="date"
                       required
                       value={formData.fecha_expiracion_password}
                       onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setFormData({ ...formData, fecha_expiracion_password: e.target.value })
+                        setFormData({
+                          ...formData,
+                          fecha_expiracion_password: e.target.value,
+                        })
                       }
                       className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 text-[11px]"
                     />
@@ -579,11 +545,11 @@ export default function UsuariosPage() {
             </form>
           </div>
 
-          {/* Listado de Usuarios (Derecha - 7 columnas) */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm lg:col-span-7">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
               <h2 className="text-sm font-bold flex items-center gap-2">
-                <Shield className="w-4 h-4 text-blue-600" /> Usuarios Registrados ({usuariosFiltrados.length})
+                <Shield className="w-4 h-4 text-blue-600" /> Usuarios
+                Registrados ({usuariosFiltrados.length})
               </h2>
 
               <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
@@ -593,14 +559,18 @@ export default function UsuariosPage() {
                     type="text"
                     placeholder="Buscar..."
                     value={busqueda}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setBusqueda(e.target.value)}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setBusqueda(e.target.value)
+                    }
                     className="w-full pl-8 pr-2 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600"
                   />
                 </div>
 
                 <select
                   value={filtroTipo}
-                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFiltroTipo(e.target.value)}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) =>
+                    setFiltroTipo(e.target.value)
+                  }
                   className="px-2.5 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 cursor-pointer"
                 >
                   <option value="" className="dark:bg-zinc-900">
@@ -622,7 +592,9 @@ export default function UsuariosPage() {
 
                 <select
                   value={filtroEstado}
-                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFiltroEstado(e.target.value)}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) =>
+                    setFiltroEstado(e.target.value)
+                  }
                   className="px-2.5 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:outline-none focus:border-blue-600 cursor-pointer"
                 >
                   <option value="" className="dark:bg-zinc-900">
@@ -639,10 +611,13 @@ export default function UsuariosPage() {
             </div>
 
             {cargandoLista ? (
-              <p className="text-xs text-zinc-400 py-6 text-center">Cargando usuarios...</p>
+              <p className="text-xs text-zinc-400 py-6 text-center">
+                Cargando usuarios...
+              </p>
             ) : usuariosFiltrados.length === 0 ? (
               <p className="text-xs text-zinc-400 py-6 text-center">
-                No se encontraron usuarios asignados a las empresas de su alcance.
+                No se encontraron usuarios asignados a las empresas de su
+                alcance.
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -654,7 +629,9 @@ export default function UsuariosPage() {
                       <th className="pb-2.5 font-semibold">Tipo</th>
                       <th className="pb-2.5 font-semibold">Vigencia</th>
                       <th className="pb-2.5 font-semibold">Estado</th>
-                      <th className="pb-2.5 font-semibold text-right">Acciones</th>
+                      <th className="pb-2.5 font-semibold text-right">
+                        Acciones
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
@@ -674,9 +651,13 @@ export default function UsuariosPage() {
                             <p className="font-medium">
                               {u.nombres} {u.apellidos}
                             </p>
-                            <span className="text-[11px] text-zinc-400">CC: {u.cedula}</span>
+                            <span className="text-[11px] text-zinc-400">
+                              CC: {u.cedula}
+                            </span>
                           </td>
-                          <td className="py-2.5 text-zinc-500 truncate max-w-[120px]">{u.email}</td>
+                          <td className="py-2.5 text-zinc-500 truncate max-w-[120px]">
+                            {u.email}
+                          </td>
                           <td className="py-2.5">
                             <span className="bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-md font-semibold text-[11px]">
                               {u.tipo_usuario}
@@ -687,7 +668,9 @@ export default function UsuariosPage() {
                               <span className="text-amber-600 font-medium">
                                 Temp (
                                 {u.fecha_expiracion_password
-                                  ? new Date(u.fecha_expiracion_password).toLocaleDateString()
+                                  ? new Date(
+                                      u.fecha_expiracion_password
+                                    ).toLocaleDateString()
                                   : "N/A"}
                                 )
                               </span>
@@ -695,7 +678,9 @@ export default function UsuariosPage() {
                               <span className="text-emerald-600 font-medium">
                                 Perm (
                                 {u.fecha_expiracion_password
-                                  ? new Date(u.fecha_expiracion_password).toLocaleDateString()
+                                  ? new Date(
+                                      u.fecha_expiracion_password
+                                    ).toLocaleDateString()
                                   : "N/A"}
                                 )
                               </span>
@@ -714,7 +699,9 @@ export default function UsuariosPage() {
                           </td>
                           <td
                             className="py-2.5 text-right space-x-1"
-                            onClick={(e: MouseEvent<HTMLTableCellElement>) => e.stopPropagation()}
+                            onClick={(e: MouseEvent<HTMLTableCellElement>) =>
+                              e.stopPropagation()
+                            }
                           >
                             <button
                               type="button"
@@ -724,7 +711,11 @@ export default function UsuariosPage() {
                                   ? "bg-amber-50 text-amber-600 hover:bg-amber-100"
                                   : "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
                               }`}
-                              title={u.activo ? "Deshabilitar usuario" : "Activar usuario"}
+                              title={
+                                u.activo
+                                  ? "Deshabilitar usuario"
+                                  : "Activar usuario"
+                              }
                             >
                               <Power className="w-3.5 h-3.5" />
                             </button>

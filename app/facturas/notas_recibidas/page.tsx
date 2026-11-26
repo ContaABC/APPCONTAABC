@@ -5,13 +5,23 @@ import React, {
   useEffect,
   useCallback,
   useRef,
+  useMemo,
   Suspense,
   ChangeEvent,
 } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
 import { ArrowLeft } from "lucide-react";
-import { supabase } from "@/lib/supabaseClient";
+import {
+  obtenerEmpresas,
+  obtenerSucursales,
+} from "@/app/consultas/movimientos/actions";
+import {
+  getEmpresasPermitidas,
+  getEmpresaActivaUsuario,
+  setEmpresaActivaUsuario,
+} from "@/app/actions/accionesEmpresas";
 import { validarPeriodoContable } from "@/lib/accounting-validations";
 import {
   listarFacturasProveedorParaNota,
@@ -29,15 +39,13 @@ interface Company {
   razon_social?: string;
   nombre_comercial?: string;
   nombre?: string;
-  nit_identificacion?: string;
-  estado?: string;
 }
 
 interface Branch {
   id: number | string;
-  nombre?: string;
+  empresa_id?: number | string;
   codigo_sucursal?: string;
-  estado?: string;
+  nombre?: string;
 }
 
 interface FacturaRecibidaItem {
@@ -59,6 +67,11 @@ function getCookieValue(name: string): string | null {
     .split("; ")
     .find((row) => row.startsWith(`${name}=`));
   return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+function setCookieValue(name: string, value: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=86400; SameSite=Lax`;
 }
 
 function getFirstByLocalName(
@@ -163,7 +176,7 @@ function NotasRecibidasContent() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [rutaRetorno, setRutaRetorno] = useState<string>("/modulos/contabilidad/proveedores");
+  const [rutaRetorno, setRutaRetorno] = useState<string>("/modulos/proveedores");
   const [tituloRetorno, setTituloRetorno] = useState<string>(
     "Volver a Proveedores"
   );
@@ -175,6 +188,17 @@ function NotasRecibidasContent() {
     FacturaRecibidaItem[]
   >([]);
 
+  const companiesRef = useRef<Company[]>([]);
+  const branchesRef = useRef<Branch[]>([]);
+
+  useEffect(() => {
+    companiesRef.current = companies;
+  }, [companies]);
+
+  useEffect(() => {
+    branchesRef.current = branches;
+  }, [branches]);
+
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>(() => {
     if (typeof window !== "undefined") {
       return (
@@ -185,7 +209,18 @@ function NotasRecibidasContent() {
     }
     return "";
   });
-  const [selectedBranchId, setSelectedBranchId] = useState<string>("");
+
+  const [selectedBranchId, setSelectedBranchId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return (
+        localStorage.getItem("sucursal_activa") ||
+        localStorage.getItem("sucursal_id") ||
+        ""
+      );
+    }
+    return "";
+  });
+
   const [facturaRecibidaId, setFacturaRecibidaId] = useState<string>("");
 
   const [proveedorXml, setProveedorXml] = useState<{
@@ -261,100 +296,148 @@ function NotasRecibidasContent() {
       maximumFractionDigits: 0,
     }).format(val || 0);
 
-  const persistirContextoUsuario = useCallback(
-    async (
-      empresaIdStr: string,
-      sucursalIdStr?: string | null,
-      userIdOverride?: string
-    ) => {
-      if (!empresaIdStr) return;
+  const formatDecimalCOP = (val: number) =>
+    new Intl.NumberFormat("es-CO", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(val || 0);
 
-      const empNum = Number(empresaIdStr);
-      const sucNum =
-        sucursalIdStr &&
-        !Number.isNaN(Number(sucursalIdStr)) &&
-        Number(sucursalIdStr) > 0
-          ? Number(sucursalIdStr)
-          : null;
+  const persistirContexto = useCallback(
+    async (empId: string, sucId?: string, actualizarPerfil = false) => {
+      if (!empId) return;
+
+      const empEncontrada = companiesRef.current.find(
+        (e) => String(e.id || e.empresa_id) === String(empId)
+      );
+      const nombreEmpresa =
+        empEncontrada?.razon_social ||
+        empEncontrada?.nombre_comercial ||
+        empEncontrada?.nombre ||
+        "";
 
       if (typeof window !== "undefined") {
-        localStorage.setItem("empresa_activa", String(empresaIdStr));
-        localStorage.setItem("empresa_id", String(empresaIdStr));
-
-        if (sucNum) {
-          localStorage.setItem("sucursal_activa", String(sucNum));
-          localStorage.setItem("sucursal_id", String(sucNum));
-          document.cookie = `sucursal_activa=${sucNum}; path=/; max-age=86400; SameSite=Lax`;
-        } else if (sucursalIdStr === null) {
-          localStorage.removeItem("sucursal_activa");
-          localStorage.removeItem("sucursal_id");
-          document.cookie =
-            "sucursal_activa=; path=/; max-age=0; SameSite=Lax";
+        localStorage.setItem("empresa_activa", String(empId));
+        localStorage.setItem("empresa_id", String(empId));
+        if (nombreEmpresa) {
+          localStorage.setItem("empresa_activa_nombre", nombreEmpresa);
         }
       }
-      document.cookie = `empresa_activa=${empresaIdStr}; path=/; max-age=86400; SameSite=Lax`;
+      setCookieValue("empresa_activa", String(empId));
 
-      const targetUserId = userIdOverride || user?.id;
-      if (targetUserId && !Number.isNaN(empNum) && empNum > 0) {
-        const payloadUpdate: Record<string, unknown> = {
-          empresa_activa: empNum,
-        };
-        if (sucursalIdStr !== undefined) {
-          payloadUpdate.sucursal_activa = sucNum;
+      if (sucId) {
+        const sucEncontrada = branchesRef.current.find(
+          (s) => String(s.id) === String(sucId)
+        );
+        if (typeof window !== "undefined") {
+          localStorage.setItem("sucursal_activa", String(sucId));
+          localStorage.setItem("sucursal_id", String(sucId));
+          if (sucEncontrada?.nombre) {
+            localStorage.setItem("sucursal_activa_nombre", sucEncontrada.nombre);
+          }
         }
+        setCookieValue("sucursal_activa", String(sucId));
+      } else if (typeof window !== "undefined") {
+        localStorage.removeItem("sucursal_activa");
+        localStorage.removeItem("sucursal_id");
+        localStorage.removeItem("sucursal_activa_nombre");
+        document.cookie = "sucursal_activa=; path=/; max-age=0; SameSite=Lax";
+      }
 
-        const { error: perfilErr } = await supabase
-          .from("usuarios_perfiles")
-          .update(payloadUpdate)
-          .eq("id", targetUserId);
+      try {
+        await setEmpresaActivaUsuario(empId);
+      } catch {
+        // Ignorar si no aplica
+      }
 
-        if (perfilErr) {
-          console.error(
-            "Error al actualizar empresa_activa y sucursal_activa en usuarios_perfiles:",
-            perfilErr
-          );
+      if (actualizarPerfil) {
+        try {
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+          if (supabaseUrl && supabaseAnonKey) {
+            const client = createClient(supabaseUrl, supabaseAnonKey);
+            const {
+              data: { user: authUser },
+            } = await client.auth.getUser();
+            if (authUser) {
+              const payloadPerfil: Record<string, unknown> = {
+                empresa_activa: Number(empId),
+              };
+              if (sucId && Number(sucId) > 0) {
+                payloadPerfil.sucursal_activa = Number(sucId);
+              } else if (sucId === "") {
+                payloadPerfil.sucursal_activa = null;
+              }
+              await client
+                .from("usuarios_perfiles")
+                .update(payloadPerfil)
+                .eq("id", authUser.id);
+            }
+          }
+        } catch (err) {
+          console.error("Error al actualizar perfil en Notas Recibidas:", err);
         }
       }
     },
-    [user?.id]
+    []
   );
 
-  const verificarPeriodo = useCallback(
-    async (fecha: string) => {
-      if (!selectedCompanyId || !selectedBranchId || !fecha) {
+  const verificarPeriodoPorEmpresa = useCallback(
+    async (fecha: string, empIdActual: string, sucIdActual?: string) => {
+      const empNum = Number(empIdActual);
+      if (!empIdActual || Number.isNaN(empNum) || empNum <= 0 || !fecha) {
         setErrorPeriodo(null);
+        setValidandoPeriodo(false);
         return;
       }
 
       setValidandoPeriodo(true);
       setErrorPeriodo(null);
 
-      const res = await validarPeriodoContable(
-        selectedCompanyId,
-        selectedBranchId,
-        fecha
-      );
-      if (!res.valido) {
-        setErrorPeriodo(
-          res.mensaje || "Periodo no habilitado para transacciones."
+      try {
+        const res = await validarPeriodoContable(
+          String(empNum),
+          sucIdActual || "",
+          fecha
         );
+        if (!res.valido) {
+          setErrorPeriodo(
+            res.mensaje ||
+              "Periodo no habilitado para transacciones en la empresa seleccionada."
+          );
+        } else {
+          setErrorPeriodo(null);
+        }
+      } catch (err) {
+        console.error("Error al validar periodo contable por empresa:", err);
+        setErrorPeriodo(null);
+      } finally {
+        setValidandoPeriodo(false);
       }
-
-      setValidandoPeriodo(false);
     },
-    [selectedCompanyId, selectedBranchId]
+    []
   );
 
   useEffect(() => {
-    if (selectedCompanyId && selectedBranchId && fechaContabilizacion && isMounted) {
-      verificarPeriodo(fechaContabilizacion);
+    if (!isMounted || loadingInitial) return;
+
+    if (!selectedCompanyId || !fechaContabilizacion) {
+      setErrorPeriodo(null);
+      setValidandoPeriodo(false);
+      return;
     }
+
+    verificarPeriodoPorEmpresa(
+      fechaContabilizacion,
+      selectedCompanyId,
+      selectedBranchId
+    );
   }, [
+    isMounted,
+    loadingInitial,
     selectedCompanyId,
     selectedBranchId,
     fechaContabilizacion,
-    isMounted,
-    verificarPeriodo,
+    verificarPeriodoPorEmpresa,
   ]);
 
   const fetchFacturasRecibidas = useCallback(
@@ -418,200 +501,125 @@ function NotasRecibidasContent() {
     []
   );
 
-  const cargarSucursalesParaEmpresa = useCallback(
-    async (companyId: string, userId?: string) => {
-      try {
-        const { data: branchRows, error: branchErr } = await supabase
-          .from("sucursales")
-          .select("id, nombre, codigo_sucursal, estado")
-          .eq("empresa_id", Number(companyId))
-          .eq("estado", "Activa")
-          .order("id", { ascending: true });
+  const cargarEmpresasIniciales = useCallback(async () => {
+    setLoadingInitial(true);
+    setError(null);
+    setErrorPeriodo(null);
+    try {
+      let listaEmpresas: Company[] = [];
 
-        if (branchErr) throw branchErr;
-
-        let sucursalesList = ((branchRows || []) as Branch[]).filter(
-          (b) => b.estado === "Activa"
-        );
-
-        let sucursalPreferida =
-          typeof window !== "undefined"
-            ? localStorage.getItem("sucursal_activa") ||
-              localStorage.getItem("sucursal_id") ||
-              getCookieValue("sucursal_activa") ||
-              ""
-            : "";
-
-        if (userId) {
-          const { data: permisosSuc } = await supabase
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      if (supabaseUrl && supabaseAnonKey) {
+        const client = createClient(supabaseUrl, supabaseAnonKey);
+        const {
+          data: { user: authUser },
+        } = await client.auth.getUser();
+        if (authUser) {
+          setUser({ id: authUser.id, email: authUser.email });
+          const { data: permisosTx } = await client
             .from("usuario_permisos_tx")
-            .select("sucursal_id")
-            .eq("usuario_id", userId)
-            .eq("empresa_id", Number(companyId))
-            .not("sucursal_id", "is", null);
+            .select("empresa_id")
+            .eq("usuario_id", authUser.id);
 
-          const idsSucAsignadas = Array.from(
+          const idsPermitidos = Array.from(
             new Set(
-              (permisosSuc || [])
-                .map((r: { sucursal_id?: string | number | null }) =>
-                  r.sucursal_id != null ? String(r.sucursal_id) : ""
+              (permisosTx || [])
+                .map((p: { empresa_id?: string | number | null }) =>
+                  p.empresa_id != null ? String(p.empresa_id) : ""
                 )
                 .filter(Boolean)
             )
           );
 
-          if (idsSucAsignadas.length > 0) {
-            sucursalesList = sucursalesList.filter((b) =>
-              idsSucAsignadas.includes(String(b.id))
-            );
-            sucursalPreferida = idsSucAsignadas.includes(sucursalPreferida)
-              ? sucursalPreferida
-              : idsSucAsignadas[0];
+          if (idsPermitidos.length > 0) {
+            const { data: rowsEmp } = await client
+              .from("empresas")
+              .select("id, razon_social, nombre_comercial")
+              .in("id", idsPermitidos);
+
+            if (rowsEmp && rowsEmp.length > 0) {
+              listaEmpresas = rowsEmp as Company[];
+            }
           }
         }
+      }
 
-        setBranches(sucursalesList);
+      if (listaEmpresas.length === 0) {
+        const resPermitidas: unknown = await getEmpresasPermitidas();
+        if (Array.isArray(resPermitidas)) {
+          listaEmpresas = resPermitidas as Company[];
+        } else if (
+          resPermitidas &&
+          typeof resPermitidas === "object" &&
+          Array.isArray((resPermitidas as { datos?: unknown }).datos)
+        ) {
+          listaEmpresas = (resPermitidas as { datos: Company[] }).datos;
+        }
+      }
 
-        if (sucursalesList.length === 0) {
-          setSelectedBranchId("");
-          return null;
+      if (listaEmpresas.length === 0) {
+        const res = await obtenerEmpresas();
+        if (res.success && Array.isArray(res.data)) {
+          listaEmpresas = res.data as Company[];
+        }
+      }
+
+      if (listaEmpresas.length > 0) {
+        const ordenadas = [...listaEmpresas].sort((a, b) => {
+          const nomA = a.razon_social || a.nombre_comercial || a.nombre || "";
+          const nomB = b.razon_social || b.nombre_comercial || b.nombre || "";
+          return nomA.localeCompare(nomB, "es", { sensitivity: "base" });
+        });
+
+        setCompanies(ordenadas);
+
+        let empresaActivaBD: string | null = null;
+        try {
+          const bdVal = await getEmpresaActivaUsuario();
+          if (bdVal) empresaActivaBD = String(bdVal);
+        } catch {
+          // Ignorar
         }
 
-        const existeSuc = sucursalesList.some(
-          (b) => String(b.id) === String(sucursalPreferida)
-        );
-        const sucElegida =
-          existeSuc && sucursalPreferida
-            ? String(sucursalPreferida)
-            : String(sucursalesList[0].id);
-
-        setSelectedBranchId(sucElegida);
-        return sucElegida;
-      } catch (err) {
-        console.error("Error al cargar sucursales:", err);
-        setBranches([]);
-        setSelectedBranchId("");
-        return null;
-      }
-    },
-    []
-  );
-
-  const cargarEmpresasIniciales = useCallback(async () => {
-    setLoadingInitial(true);
-    setError(null);
-    try {
-      const { data: authData } = await supabase.auth.getSession();
-      const sessionUser = authData?.session?.user || null;
-      const currentUserId = sessionUser?.id;
-
-      if (sessionUser) {
-        setUser({ id: sessionUser.id, email: sessionUser.email });
-      }
-
-      if (!currentUserId) {
-        setCompanies([]);
-        setSelectedCompanyId("");
-        setBranches([]);
-        setSelectedBranchId("");
-        setFacturasRecibidas([]);
-        return;
-      }
-
-      const { data: permisosTx, error: permErr } = await supabase
-        .from("usuario_permisos_tx")
-        .select("empresa_id")
-        .eq("usuario_id", currentUserId);
-
-      if (permErr) throw permErr;
-
-      const empresaIds = Array.from(
-        new Set(
-          (permisosTx || [])
-            .map((p: { empresa_id?: string | number | null }) =>
-              p.empresa_id != null ? String(p.empresa_id) : ""
-            )
-            .filter(Boolean)
-        )
-      );
-
-      if (empresaIds.length === 0) {
-        setCompanies([]);
-        setSelectedCompanyId("");
-        setBranches([]);
-        setSelectedBranchId("");
-        setFacturasRecibidas([]);
-        return;
-      }
-
-      const { data: empRows, error: empErr } = await supabase
-        .from("empresas")
-        .select("id, razon_social, nombre_comercial, estado")
-        .eq("estado", "Activa")
-        .in("id", empresaIds);
-
-      if (empErr) throw empErr;
-
-      const empresasActivas = ((empRows || []) as Company[]).filter(
-        (emp) => emp.estado === "Activa"
-      );
-
-      if (empresasActivas.length > 0) {
-        const empresasOrdenadas = [...empresasActivas].sort(
-          (a: Company, b: Company) => {
-            const nombreA = a.razon_social || a.nombre_comercial || a.nombre || "";
-            const nombreB = b.razon_social || b.nombre_comercial || b.nombre || "";
-            return nombreA.localeCompare(nombreB, "es", { sensitivity: "base" });
-          }
-        );
-
-        setCompanies(empresasOrdenadas);
-
-        const cookieEmpresa = getCookieValue("empresa_activa");
-        const localEmpresa =
+        const localEmp =
           typeof window !== "undefined"
             ? localStorage.getItem("empresa_activa") ||
               localStorage.getItem("empresa_id")
             : null;
+        const cookieEmp = getCookieValue("empresa_activa");
 
-        const empresaIdParaSeleccionar = localEmpresa || cookieEmpresa;
-        const existeEmpresa = empresasOrdenadas.some(
-          (emp) =>
-            String(emp.id || emp.empresa_id) === String(empresaIdParaSeleccionar)
+        const candidata = localEmp || cookieEmp || empresaActivaBD;
+        const existe = ordenadas.some(
+          (e) => String(e.id || e.empresa_id) === String(candidata)
         );
 
-        const elegidaId =
-          existeEmpresa && empresaIdParaSeleccionar
-            ? String(empresaIdParaSeleccionar)
-            : String(
-                empresasOrdenadas[0].id || empresasOrdenadas[0].empresa_id
-              );
+        const idFinal =
+          existe && candidata
+            ? String(candidata)
+            : String(ordenadas[0].id || ordenadas[0].empresa_id);
 
-        setSelectedCompanyId(elegidaId);
-        const sucId = await cargarSucursalesParaEmpresa(elegidaId, currentUserId);
-        await persistirContextoUsuario(elegidaId, sucId, currentUserId);
-        await fetchFacturasRecibidas(elegidaId);
+        setSelectedCompanyId(idFinal);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("empresa_activa", idFinal);
+          localStorage.setItem("empresa_id", idFinal);
+        }
+        setCookieValue("empresa_activa", idFinal);
       } else {
         setCompanies([]);
         setSelectedCompanyId("");
-        setBranches([]);
-        setSelectedBranchId("");
-        setFacturasRecibidas([]);
+        setErrorPeriodo(null);
       }
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Error al cargar empresas.";
-      console.error("Error al cargar empresas:", err);
+      console.error("Error al cargar empresas en Notas Recibidas:", err);
       setError(msg);
-      setCompanies([]);
+      setErrorPeriodo(null);
     } finally {
       setLoadingInitial(false);
     }
-  }, [
-    cargarSucursalesParaEmpresa,
-    persistirContextoUsuario,
-    fetchFacturasRecibidas,
-  ]);
+  }, []);
 
   useEffect(() => {
     setIsMounted(true);
@@ -622,34 +630,111 @@ function NotasRecibidasContent() {
     cargarEmpresasIniciales();
   }, [isMounted, cargarEmpresasIniciales]);
 
-  const handleEmpresaChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const id = e.target.value;
-    setSelectedCompanyId(id);
-    setSelectedBranchId("");
-    setErrorPeriodo(null);
-    setStatusMessage(null);
-    limpiarCamposNota();
-
-    if (!id) {
+  useEffect(() => {
+    if (!selectedCompanyId || !isMounted) {
       setBranches([]);
+      setSelectedBranchId("");
       setFacturasRecibidas([]);
+      setFacturaRecibidaId("");
+      setErrorPeriodo(null);
       return;
     }
 
-    const sucId = await cargarSucursalesParaEmpresa(id, user?.id);
-    await persistirContextoUsuario(id, sucId, user?.id);
-    await fetchFacturasRecibidas(id);
-  };
+    let cancelado = false;
 
-  const handleBranchChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const sucId = e.target.value;
-    setSelectedBranchId(sucId);
+    async function cargarSucursalesYFacturas() {
+      try {
+        const sucRes = await obtenerSucursales(Number(selectedCompanyId));
+        if (cancelado) return;
+
+        let sucursalElegidaId = "";
+
+        if (sucRes.success) {
+          const listaSuc = (sucRes.data || []) as Branch[];
+          setBranches(listaSuc);
+
+          if (listaSuc.length === 1) {
+            sucursalElegidaId = String(listaSuc[0].id);
+          } else if (listaSuc.length > 1) {
+            const sucGuardada =
+              (typeof window !== "undefined"
+                ? localStorage.getItem("sucursal_activa") ||
+                  localStorage.getItem("sucursal_id")
+                : null) || getCookieValue("sucursal_activa");
+
+            const coincideGuardada = listaSuc.some(
+              (s) => String(s.id) === String(sucGuardada)
+            );
+
+            sucursalElegidaId =
+              coincideGuardada && sucGuardada
+                ? String(sucGuardada)
+                : String(listaSuc[0].id);
+          }
+
+          setSelectedBranchId(sucursalElegidaId);
+        } else {
+          setBranches([]);
+          setSelectedBranchId("");
+        }
+
+        await persistirContexto(
+          selectedCompanyId,
+          sucursalElegidaId || "",
+          true
+        );
+
+        if (!cancelado) {
+          await fetchFacturasRecibidas(selectedCompanyId);
+        }
+      } catch (err) {
+        console.error("Error al cargar sucursales y facturas:", err);
+      }
+    }
+
+    cargarSucursalesYFacturas();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [
+    selectedCompanyId,
+    isMounted,
+    persistirContexto,
+    fetchFacturasRecibidas,
+  ]);
+
+  const handleCambioEmpresa = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const nuevaEmpresa = e.target.value;
     setErrorPeriodo(null);
     setStatusMessage(null);
     limpiarCamposNota();
+    setSelectedCompanyId(nuevaEmpresa);
+    setSelectedBranchId("");
+
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("sucursal_activa");
+      localStorage.removeItem("sucursal_id");
+      localStorage.removeItem("sucursal_activa_nombre");
+    }
+
+    if (nuevaEmpresa) {
+      await persistirContexto(nuevaEmpresa, "", true);
+    } else {
+      setBranches([]);
+      setFacturasRecibidas([]);
+    }
+  };
+
+  const handleCambioSucursal = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const nuevaSucursal = e.target.value;
+    setErrorPeriodo(null);
+    setStatusMessage(null);
+    limpiarCamposNota();
+    setSelectedBranchId(nuevaSucursal);
 
     if (selectedCompanyId) {
-      await persistirContextoUsuario(selectedCompanyId, sucId || null, user?.id);
+      await persistirContexto(selectedCompanyId, nuevaSucursal || "", true);
       await fetchFacturasRecibidas(selectedCompanyId);
     }
   };
@@ -739,7 +824,9 @@ function NotasRecibidasContent() {
         setSubtotal(formatearMontoEditable(subVal || 0));
         setImpuestos(formatearMontoEditable(impVal || 0));
         setMontoTotal(
-          formatearMontoEditable(totVal > 0 ? totVal : (subVal || 0) + (impVal || 0))
+          formatearMontoEditable(
+            totVal > 0 ? totVal : (subVal || 0) + (impVal || 0)
+          )
         );
         if (notaMsg) setMotivo(notaMsg);
 
@@ -779,6 +866,71 @@ function NotasRecibidasContent() {
     reader.readAsText(file);
   };
 
+  // Asiento contable inverso al de notas emitidas (proveedores / compras)
+  const asientoContablePreview = useMemo(() => {
+    const subNum = parsearMontoInput(subtotal);
+    const impNum = parsearMontoInput(impuestos);
+    const totNum = parsearMontoInput(montoTotal);
+    const totalEfectivo = totNum > 0 ? totNum : subNum + impNum;
+
+    if (tipoNota === "CREDITO") {
+      // Nota Crédito recibida: Débito a Proveedores (CxP) / Crédito a Gasto o Costo e IVA
+      const lineas: Array<{
+        concepto: string;
+        debito: number;
+        credito: number;
+      }> = [
+        {
+          concepto: "Proveedores / Cuentas por Pagar (Reducción saldo)",
+          debito: totalEfectivo,
+          credito: 0,
+        },
+      ];
+      if (subNum > 0) {
+        lineas.push({
+          concepto: "Gasto / Costo / Inventario (Ajuste crédito)",
+          debito: 0,
+          credito: subNum,
+        });
+      }
+      if (impNum > 0) {
+        lineas.push({
+          concepto: "IVA Descontable / Impuestos (Ajuste crédito)",
+          debito: 0,
+          credito: impNum,
+        });
+      }
+      return lineas;
+    }
+
+    // Nota Débito recibida: Débito a Gasto o Costo e IVA / Crédito a Proveedores (CxP)
+    const lineas: Array<{
+      concepto: string;
+      debito: number;
+      credito: number;
+    }> = [];
+    if (subNum > 0) {
+      lineas.push({
+        concepto: "Gasto / Costo / Inventario (Mayor valor débito)",
+        debito: subNum,
+        credito: 0,
+      });
+    }
+    if (impNum > 0) {
+      lineas.push({
+        concepto: "IVA Descontable / Impuestos (Mayor valor débito)",
+        debito: impNum,
+        credito: 0,
+      });
+    }
+    lineas.push({
+      concepto: "Proveedores / Cuentas por Pagar (Aumento saldo)",
+      debito: 0,
+      credito: totalEfectivo,
+    });
+    return lineas;
+  }, [tipoNota, subtotal, impuestos, montoTotal]);
+
   const handleRegistrarNota = async (e: React.FormEvent) => {
     e.preventDefault();
     setStatusMessage(null);
@@ -787,6 +939,14 @@ function NotasRecibidasContent() {
       setStatusMessage({
         type: "error",
         text: "Debe seleccionar una empresa activa.",
+      });
+      return;
+    }
+
+    if (errorPeriodo) {
+      setStatusMessage({
+        type: "error",
+        text: errorPeriodo,
       });
       return;
     }
@@ -833,7 +993,7 @@ function NotasRecibidasContent() {
 
       setStatusMessage({
         type: "success",
-        text: `Nota ${tipoNota} N° ${numeroNota.trim()} registrada y saldo de factura actualizado.`,
+        text: `Nota ${tipoNota} N° ${numeroNota.trim()} registrada, asiento contable aplicado y saldo de factura actualizado.`,
       });
 
       limpiarCamposNota();
@@ -876,7 +1036,7 @@ function NotasRecibidasContent() {
               Notas Crédito / Débito de Proveedores
             </h1>
             <p className="text-xs md:text-sm text-gray-500">
-              Facturas Recibidas &amp; Ajuste Contable
+              Facturas Recibidas &amp; Ajuste Contable (Asiento Inverso a Notas Emitidas)
             </p>
           </div>
         </div>
@@ -902,29 +1062,30 @@ function NotasRecibidasContent() {
           </label>
           <select
             value={selectedCompanyId}
-            onChange={handleEmpresaChange}
-            disabled={!isMounted || loadingInitial || companies.length === 0}
+            onChange={handleCambioEmpresa}
+            disabled={!isMounted || loadingInitial || companies.length <= 1}
             suppressHydrationWarning
             className="w-full bg-white border border-gray-300 rounded-md px-3 py-1.5 text-xs md:text-sm font-medium text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:bg-gray-100"
           >
-            <option value="">
-              {companies.length === 0
-                ? "Sin empresas asignadas"
-                : "-- Seleccione --"}
-            </option>
-            {companies.map((comp) => {
-              const id = String(comp.id || comp.empresa_id);
-              const nombre =
-                comp.razon_social ||
-                comp.nombre_comercial ||
-                comp.nombre ||
-                "Sin Nombre";
-              return (
-                <option key={id} value={id}>
-                  {nombre}
-                </option>
-              );
-            })}
+            {!isMounted || loadingInitial ? (
+              <option value="">Cargando empresas...</option>
+            ) : companies.length === 0 ? (
+              <option value="">Sin empresas asignadas</option>
+            ) : (
+              <>
+                {companies.length !== 1 && (
+                  <option value="">-- Seleccione Empresa --</option>
+                )}
+                {companies.map((emp) => {
+                  const id = String(emp.id || emp.empresa_id);
+                  return (
+                    <option key={id} value={id}>
+                      {emp.razon_social || emp.nombre_comercial || emp.nombre}
+                    </option>
+                  );
+                })}
+              </>
+            )}
           </select>
         </div>
 
@@ -934,19 +1095,21 @@ function NotasRecibidasContent() {
           </label>
           <select
             value={selectedBranchId}
-            onChange={handleBranchChange}
+            onChange={handleCambioSucursal}
             disabled={!isMounted || !selectedCompanyId || branches.length === 0}
             suppressHydrationWarning
             className="w-full bg-white border border-gray-300 rounded-md px-3 py-1.5 text-xs md:text-sm font-medium text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:bg-gray-100"
           >
-            <option value="">
-              {branches.length === 0 ? "Sin sucursales" : "-- Seleccione --"}
-            </option>
-            {branches.map((b) => (
-              <option key={b.id} value={String(b.id)}>
-                {b.nombre || b.codigo_sucursal}
-              </option>
-            ))}
+            {branches.length === 0 ? (
+              <option value="">-- Sin sucursales disponibles --</option>
+            ) : (
+              branches.map((b) => (
+                <option key={String(b.id)} value={String(b.id)}>
+                  {b.nombre}
+                  {b.codigo_sucursal ? ` (${b.codigo_sucursal})` : ""}
+                </option>
+              ))
+            )}
           </select>
         </div>
 
@@ -971,7 +1134,7 @@ function NotasRecibidasContent() {
                 : "-- Seleccione factura --"}
             </option>
             {facturasRecibidas.map((f) => (
-              <option key={f.id} value={String(f.id)}>
+              <option key={String(f.id)} value={String(f.id)}>
                 {`${f.numero_factura || "S/N"} — ${
                   f.emisor_nombre || "Proveedor"
                 } (Saldo: ${formatCOP(
@@ -989,20 +1152,29 @@ function NotasRecibidasContent() {
           <input
             type="date"
             value={fechaContabilizacion}
+            disabled={!isMounted || !selectedCompanyId}
             onChange={(e) => {
               const nuevaFecha = e.target.value;
               setFechaContabilizacion(nuevaFecha);
-              if (errorPeriodo) setErrorPeriodo(null);
+              setErrorPeriodo(null);
             }}
-            onBlur={() => verificarPeriodo(fechaContabilizacion)}
-            className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs md:text-sm text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            onBlur={() => {
+              if (selectedCompanyId && fechaContabilizacion) {
+                verificarPeriodoPorEmpresa(
+                  fechaContabilizacion,
+                  selectedCompanyId,
+                  selectedBranchId
+                );
+              }
+            }}
+            className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs md:text-sm text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:bg-gray-100"
           />
-          {validandoPeriodo && (
+          {selectedCompanyId && validandoPeriodo && (
             <p className="text-xs text-blue-500 mt-1 animate-pulse">
               Verificando...
             </p>
           )}
-          {errorPeriodo && (
+          {selectedCompanyId && errorPeriodo && (
             <p className="text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-200 p-1.5 rounded mt-1">
               ⚠️ {errorPeriodo}
             </p>
@@ -1022,10 +1194,11 @@ function NotasRecibidasContent() {
         </div>
       )}
 
-      {errorPeriodo ? (
+      {selectedCompanyId && errorPeriodo ? (
         <div className="p-4 bg-rose-50 border border-rose-300 text-rose-800 rounded-lg text-xs md:text-sm font-semibold">
           🛑 No es posible registrar notas porque el periodo contable
-          seleccionado no se encuentra habilitado o está cerrado.
+          seleccionado no se encuentra habilitado o está cerrado para la
+          empresa activa.
         </div>
       ) : (
         <form
@@ -1223,6 +1396,44 @@ function NotasRecibidasContent() {
             </div>
           </div>
 
+          {/* Vista previa del asiento contable inverso */}
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-700 uppercase">
+                Asiento Contable Proyectado ({tipoNota} Proveedor)
+              </span>
+              <span className="text-[11px] text-slate-500">
+                Sentido inverso a notas emitidas
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-600">
+                    <th className="py-1.5 pr-3">Concepto / Cuenta</th>
+                    <th className="py-1.5 px-3 text-right">Débito</th>
+                    <th className="py-1.5 pl-3 text-right">Crédito</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200/70 font-mono">
+                  {asientoContablePreview.map((fila, idx) => (
+                    <tr key={idx}>
+                      <td className="py-1.5 pr-3 font-sans text-slate-700">
+                        {fila.concepto}
+                      </td>
+                      <td className="py-1.5 px-3 text-right text-slate-800">
+                        {fila.debito > 0 ? `$${formatDecimalCOP(fila.debito)}` : "-"}
+                      </td>
+                      <td className="py-1.5 pl-3 text-right text-slate-800">
+                        {fila.credito > 0 ? `$${formatDecimalCOP(fila.credito)}` : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
             <div>
               <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
@@ -1267,7 +1478,12 @@ function NotasRecibidasContent() {
           <div className="flex justify-end pt-3 border-t border-gray-100">
             <button
               type="submit"
-              disabled={isSaving || !selectedCompanyId || !facturaRecibidaId}
+              disabled={
+                isSaving ||
+                !selectedCompanyId ||
+                !facturaRecibidaId ||
+                Boolean(errorPeriodo)
+              }
               className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-md text-xs md:text-sm disabled:bg-blue-300 transition-colors cursor-pointer"
             >
               {isSaving ? "Registrando Nota..." : "Registrar y Aplicar Nota"}

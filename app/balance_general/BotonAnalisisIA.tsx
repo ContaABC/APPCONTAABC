@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
-import { analizarReporteFinanciero } from "./analisis-financiero-actions"; // Ajusta tu ruta de importación si es necesario
+import React, { useState, useEffect } from "react";
+import { analizarReporteFinanciero } from "./analisis-financiero-actions";
 
 interface BotonAnalisisIAProps {
   tipoReporte: "BALANCE_GENERAL" | "ESTADO_RESULTADOS";
-  datosReporte: any[];
-  empresaNombre?: string; // Opcional por si llega a venir undefined
-  periodo?: string;       // Opcional por si llega a venir undefined
+  datosReporte: unknown[];
+  empresaNombre?: string;
+  periodo?: string;
 }
 
 export default function BotonAnalisisIA({
@@ -16,8 +16,13 @@ export default function BotonAnalisisIA({
   empresaNombre,
   periodo,
 }: BotonAnalisisIAProps) {
+  const [isMounted, setIsMounted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [analisis, setAnalisis] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   const handleAnalizar = async () => {
     if (!datosReporte || datosReporte.length === 0) {
@@ -28,7 +33,6 @@ export default function BotonAnalisisIA({
     setLoading(true);
     setAnalisis(null);
 
-    // Aseguramos valores string por defecto con (??) para evitar el error de TypeScript
     const empresaSegura = empresaNombre ?? "Empresa";
     const periodoSeguro = periodo ?? "Periodo Actual";
 
@@ -40,21 +44,26 @@ export default function BotonAnalisisIA({
     );
 
     if (res.success) {
-      // Forzamos que si el texto viene indefinido, se guarde como cadena vacía o null
       setAnalisis(res.analisis ?? null);
     } else {
-      alert("No se pudo generar el análisis: " + (res.error ?? "Error desconocido"));
+      alert(
+        "No se pudo generar el análisis: " + (res.error ?? "Error desconocido")
+      );
     }
     setLoading(false);
   };
+
+  const sinDatos = !datosReporte || datosReporte.length === 0;
+  const estaDeshabilitado = !isMounted || loading || sinDatos;
 
   return (
     <>
       <button
         type="button"
         onClick={handleAnalizar}
-        disabled={loading || !datosReporte || datosReporte.length === 0}
-        className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded shadow-sm transition flex items-center gap-1.5 text-xs"
+        disabled={estaDeshabilitado}
+        suppressHydrationWarning
+        className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded shadow-sm transition flex items-center gap-1.5 text-xs cursor-pointer"
       >
         {loading ? "⌛ Analizando..." : "🤖 Analizar con IA"}
       </button>
@@ -67,12 +76,16 @@ export default function BotonAnalisisIA({
               <div className="flex items-center gap-2">
                 <span className="text-lg">🤖</span>
                 <h3 className="font-bold text-sm">
-                  Diagnóstico Financiero - {tipoReporte === "BALANCE_GENERAL" ? "Balance General" : "Estado de Resultados"}
+                  Diagnóstico Financiero -{" "}
+                  {tipoReporte === "BALANCE_GENERAL"
+                    ? "Balance General"
+                    : "Estado de Resultados"}
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => setAnalisis(null)}
-                className="text-indigo-200 hover:text-white font-bold text-sm px-2"
+                className="text-indigo-200 hover:text-white font-bold text-sm px-2 cursor-pointer"
               >
                 ✕
               </button>
@@ -84,8 +97,9 @@ export default function BotonAnalisisIA({
 
             <div className="p-3 bg-slate-50 border-t text-right">
               <button
+                type="button"
                 onClick={() => setAnalisis(null)}
-                className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white font-semibold rounded text-xs"
+                className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white font-semibold rounded text-xs cursor-pointer"
               >
                 Cerrar Diagnóstico
               </button>

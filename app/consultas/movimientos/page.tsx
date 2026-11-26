@@ -1,18 +1,108 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
+import { supabase } from "@/lib/supabaseClient";
 import {
-  obtenerEmpresas,
-  obtenerSucursales,
+  getEmpresasPermitidas,
+  getSucursalesPermitidas,
+  getEmpresaActivaUsuario,
+  getSucursalActivaUsuario,
+  setEmpresaActivaUsuario,
+  setSucursalActivaUsuario,
+  type Empresa as EmpresaPermitida,
+  type Sucursal as SucursalPermitida,
+} from "@/app/actions/accionesEmpresas";
+import {
   consultarMovimientosTransacciones,
   obtenerComprobanteTransaccion,
-} from "./movimientos-actions";
+} from "./actions";
+
+type EmpresaItem = EmpresaPermitida & {
+  nombre?: string;
+  nombre_comercial?: string;
+};
+
+type SucursalItem = SucursalPermitida & {
+  nombre_sucursal?: string;
+  codigo_sucursal?: string;
+};
+
+interface MovimientoRow {
+  detalle_id?: string | number;
+  transaccion_id: number | string;
+  fecha_contable?: string;
+  numero_documento?: string;
+  clase_documento?: string;
+  numero_titulo_valor?: string | null;
+  tercero_id?: string | number | null;
+  tercero_nit?: string | null;
+  tercero_nombre?: string | null;
+  concepto_auxiliar_codigo?: string;
+  concepto_auxiliar_nombre?: string;
+  debito?: number | string;
+  credito?: number | string;
+  glosa_concepto?: string | null;
+  [key: string]: unknown;
+}
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+function obtenerNombreEmpresa(emp: EmpresaItem): string {
+  return String(
+    emp.razon_social || emp.nombre_comercial || emp.nombre || "Empresa"
+  );
+}
+
+function obtenerNombreSucursal(suc: SucursalItem): string {
+  return String(suc.nombre || suc.nombre_sucursal || `Sucursal ${suc.id}`);
+}
+
+function obtenerUsuarioIdDesdeLocalStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  for (const clave of ["usuario_id", "user_id", "uid"]) {
+    const val = localStorage.getItem(clave);
+    if (val && val.trim()) return val.trim();
+  }
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.includes("auth-token") || k.includes("supabase")) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const idEncontrado =
+          parsed?.user?.id ||
+          parsed?.currentSession?.user?.id ||
+          parsed?.session?.user?.id ||
+          null;
+        if (idEncontrado && typeof idEncontrado === "string") {
+          return idEncontrado;
+        }
+      } catch {
+        // Ignorar
+      }
+    }
+  }
+  return null;
+}
 
 export default function ConsultaMovimientosPage() {
+  const router = useRouter();
+  const usuarioIdRef = useRef<string | null>(null);
+  const inicializadoRef = useRef<boolean>(false);
+
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<EmpresaItem[]>([]);
+  const [sucursales, setSucursales] = useState<SucursalItem[]>([]);
 
   // Filtros
   const [empresaId, setEmpresaId] = useState<string>("");
@@ -23,45 +113,303 @@ export default function ConsultaMovimientosPage() {
 
   // Estados de datos
   const [loading, setLoading] = useState<boolean>(false);
-  const [movimientos, setMovimientos] = useState<any[]>([]);
+  const [consultado, setConsultado] = useState<boolean>(false);
+  const [movimientos, setMovimientos] = useState<MovimientoRow[]>([]);
 
   // Estado para Modal de Comprobante Contable
   const [modalOpen, setModalOpen] = useState<boolean>(false);
   const [loadingComprobante, setLoadingComprobante] = useState<boolean>(false);
-  const [comprobanteLineas, setComprobanteLineas] = useState<any[]>([]);
+  const [comprobanteLineas, setComprobanteLineas] = useState<MovimientoRow[]>(
+    []
+  );
+
+  const resolverUsuarioId = useCallback(async (): Promise<string | null> => {
+    if (usuarioIdRef.current) return usuarioIdRef.current;
+    try {
+      const { data } = await supabase.auth.getUser();
+      if (data?.user?.id) {
+        usuarioIdRef.current = data.user.id;
+        return data.user.id;
+      }
+    } catch {
+      // Ignorar
+    }
+    const localUid = obtenerUsuarioIdDesdeLocalStorage();
+    if (localUid) {
+      usuarioIdRef.current = localUid;
+    }
+    return localUid;
+  }, []);
+
+  const persistirContextoEnPerfil = useCallback(
+    async (empVal: string | null, sucVal: string | null) => {
+      const uid = await resolverUsuarioId();
+      if (!uid) return;
+
+      const empNormalizado =
+        empVal && empVal.trim() !== ""
+          ? Number.isNaN(Number(empVal))
+            ? empVal
+            : Number(empVal)
+          : null;
+
+      const sucNormalizado =
+        sucVal && sucVal.trim() !== ""
+          ? Number.isNaN(Number(sucVal))
+            ? sucVal
+            : Number(sucVal)
+          : null;
+
+      try {
+        if (empVal && empVal.trim() !== "") {
+          await setEmpresaActivaUsuario(empVal, uid, sucVal || null);
+        }
+        if (sucVal !== undefined) {
+          await setSucursalActivaUsuario(sucVal || null, uid);
+        }
+      } catch {
+        // Continuar con actualización directa si la action falla
+      }
+
+      const payload: {
+        empresa_activa?: string | number | null;
+        sucursal_activa?: string | number | null;
+      } = {};
+      if (empVal !== undefined) payload.empresa_activa = empNormalizado;
+      if (sucVal !== undefined) payload.sucursal_activa = sucNormalizado;
+
+      if (Object.keys(payload).length > 0) {
+        await supabase
+          .from("usuarios_perfiles")
+          .update(payload)
+          .eq("id", uid);
+      }
+    },
+    [resolverUsuarioId]
+  );
 
   useEffect(() => {
     setIsMounted(true);
   }, []);
 
   useEffect(() => {
-    if (!isMounted) return;
-    async function init() {
-      const res = await obtenerEmpresas();
-      if (res.success && res.data.length > 0) {
-        setEmpresas(res.data);
-        setEmpresaId(String(res.data[0].id));
+    if (!isMounted || inicializadoRef.current) return;
+    inicializadoRef.current = true;
+    let cancelado = false;
+
+    async function initContexto() {
+      try {
+        const uid = await resolverUsuarioId();
+        const permitidas = await getEmpresasPermitidas(uid);
+        if (cancelado) return;
+
+        const listaEmpresas: EmpresaItem[] = Array.isArray(permitidas)
+          ? (permitidas as EmpresaItem[])
+          : [];
+
+        if (listaEmpresas.length > 0) {
+          setEmpresas(listaEmpresas);
+
+          let empBD: string | null = null;
+          try {
+            const valBD = await getEmpresaActivaUsuario(uid);
+            if (
+              valBD !== null &&
+              valBD !== undefined &&
+              String(valBD).trim() !== ""
+            ) {
+              empBD = String(valBD).trim();
+            }
+          } catch {
+            // Ignorar
+          }
+
+          const empCookie = getCookieValue("empresa_activa");
+          const empLocal =
+            typeof window !== "undefined"
+              ? localStorage.getItem("empresa_activa") ||
+                localStorage.getItem("empresa_id")
+              : null;
+
+          let empresaIdAUsar = String(listaEmpresas[0].id);
+          const candidataEmp = empBD || empCookie || empLocal;
+          if (
+            candidataEmp &&
+            listaEmpresas.some((e) => String(e.id) === String(candidataEmp))
+          ) {
+            empresaIdAUsar = String(candidataEmp);
+          }
+
+          const empElegida =
+            listaEmpresas.find((e) => String(e.id) === empresaIdAUsar) ||
+            listaEmpresas[0];
+
+          setEmpresaId(empresaIdAUsar);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("empresa_activa", empresaIdAUsar);
+            localStorage.setItem("empresa_id", empresaIdAUsar);
+            localStorage.setItem(
+              "empresa_activa_nombre",
+              obtenerNombreEmpresa(empElegida)
+            );
+          }
+          document.cookie = `empresa_activa=${encodeURIComponent(
+            empresaIdAUsar
+          )}; path=/; max-age=86400; SameSite=Lax`;
+
+          const sucPermitidas = await getSucursalesPermitidas(
+            empresaIdAUsar,
+            uid
+          );
+          if (cancelado) return;
+
+          const listaSuc: SucursalItem[] = Array.isArray(sucPermitidas)
+            ? (sucPermitidas as SucursalItem[])
+            : [];
+          setSucursales(listaSuc);
+
+          if (listaSuc.length > 0) {
+            let sucBD: string | null = null;
+            try {
+              const valSuc = await getSucursalActivaUsuario(uid);
+              if (
+                valSuc !== null &&
+                valSuc !== undefined &&
+                String(valSuc).trim() !== ""
+              ) {
+                sucBD = String(valSuc).trim();
+              }
+            } catch {
+              // Ignorar
+            }
+
+            const sucCookie = getCookieValue("sucursal_activa");
+            const sucLocal =
+              typeof window !== "undefined"
+                ? localStorage.getItem("sucursal_activa") ||
+                  localStorage.getItem("sucursal_id")
+                : null;
+            const candidataSuc = sucBD || sucCookie || sucLocal;
+
+            if (candidataSuc) {
+              const sucElegida = listaSuc.find(
+                (s) => String(s.id) === String(candidataSuc)
+              );
+              if (sucElegida) {
+                const idSucFinal = String(sucElegida.id);
+                setSucursalId(idSucFinal);
+                if (typeof window !== "undefined") {
+                  localStorage.setItem("sucursal_activa", idSucFinal);
+                  localStorage.setItem("sucursal_id", idSucFinal);
+                  localStorage.setItem(
+                    "sucursal_activa_nombre",
+                    obtenerNombreSucursal(sucElegida)
+                  );
+                }
+                document.cookie = `sucursal_activa=${encodeURIComponent(
+                  idSucFinal
+                )}; path=/; max-age=86400; SameSite=Lax`;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error inicializando contexto de movimientos:", err);
       }
     }
-    init();
-  }, [isMounted]);
 
-  useEffect(() => {
-    if (!empresaId || !isMounted) return;
-    async function cargarSuc() {
-      setSucursalId("");
-      const res = await obtenerSucursales(Number(empresaId));
-      if (res.success) {
-        setSucursales(res.data || []);
+    initContexto();
+    return () => {
+      cancelado = true;
+    };
+  }, [isMounted, resolverUsuarioId]);
+
+  const handleCambioEmpresa = async (nuevoId: string) => {
+    setEmpresaId(nuevoId);
+    setSucursalId("");
+    setSucursales([]);
+    setConsultado(false);
+    setMovimientos([]);
+
+    if (typeof window !== "undefined") {
+      if (nuevoId) {
+        const empSel = empresas.find((e) => String(e.id) === nuevoId);
+        localStorage.setItem("empresa_activa", nuevoId);
+        localStorage.setItem("empresa_id", nuevoId);
+        if (empSel) {
+          localStorage.setItem(
+            "empresa_activa_nombre",
+            obtenerNombreEmpresa(empSel)
+          );
+        }
+        document.cookie = `empresa_activa=${encodeURIComponent(
+          nuevoId
+        )}; path=/; max-age=86400; SameSite=Lax`;
+      } else {
+        localStorage.removeItem("empresa_activa");
+        localStorage.removeItem("empresa_id");
+        localStorage.removeItem("empresa_activa_nombre");
+        document.cookie = "empresa_activa=; path=/; max-age=0; SameSite=Lax";
+      }
+      localStorage.removeItem("sucursal_activa");
+      localStorage.removeItem("sucursal_id");
+      localStorage.removeItem("sucursal_activa_nombre");
+      document.cookie = "sucursal_activa=; path=/; max-age=0; SameSite=Lax";
+    }
+
+    if (!nuevoId) {
+      await persistirContextoEnPerfil(null, null);
+      return;
+    }
+
+    const uid = await resolverUsuarioId();
+    const sucPermitidas = await getSucursalesPermitidas(nuevoId, uid);
+    const listaSuc: SucursalItem[] = Array.isArray(sucPermitidas)
+      ? (sucPermitidas as SucursalItem[])
+      : [];
+    setSucursales(listaSuc);
+    await persistirContextoEnPerfil(nuevoId, null);
+  };
+
+  const handleCambioSucursal = async (nuevoSucId: string) => {
+    setSucursalId(nuevoSucId);
+    setConsultado(false);
+    setMovimientos([]);
+
+    if (typeof window !== "undefined") {
+      if (nuevoSucId) {
+        const sucSel = sucursales.find((s) => String(s.id) === nuevoSucId);
+        localStorage.setItem("sucursal_activa", nuevoSucId);
+        localStorage.setItem("sucursal_id", nuevoSucId);
+        if (sucSel) {
+          localStorage.setItem(
+            "sucursal_activa_nombre",
+            obtenerNombreSucursal(sucSel)
+          );
+        }
+        document.cookie = `sucursal_activa=${encodeURIComponent(
+          nuevoSucId
+        )}; path=/; max-age=86400; SameSite=Lax`;
+      } else {
+        localStorage.removeItem("sucursal_activa");
+        localStorage.removeItem("sucursal_id");
+        localStorage.removeItem("sucursal_activa_nombre");
+        document.cookie = "sucursal_activa=; path=/; max-age=0; SameSite=Lax";
       }
     }
-    cargarSuc();
-  }, [empresaId, isMounted]);
 
-  useEffect(() => {
-    if (!empresaId || !isMounted) return;
-    async function cargarMovimientos() {
-      setLoading(true);
+    await persistirContextoEnPerfil(empresaId || null, nuevoSucId || null);
+  };
+
+  const handleEjecutarConsulta = async () => {
+    if (!empresaId) {
+      alert("Debe seleccionar una empresa antes de consultar.");
+      return;
+    }
+
+    setLoading(true);
+    setConsultado(true);
+    try {
       const res = await consultarMovimientosTransacciones(
         Number(empresaId),
         sucursalId ? Number(sucursalId) : null,
@@ -70,23 +418,23 @@ export default function ConsultaMovimientosPage() {
       );
 
       if (res.success) {
-        setMovimientos(res.data || []);
+        setMovimientos((res.data || []) as MovimientoRow[]);
       } else {
         alert("Error al cargar los movimientos: " + res.error);
         setMovimientos([]);
       }
+    } finally {
       setLoading(false);
     }
-    cargarMovimientos();
-  }, [empresaId, sucursalId, anio, mes, isMounted]);
+  };
 
   // Abrir Modal y Cargar Comprobante
-  const handleVerComprobante = async (transaccionId: number) => {
+  const handleVerComprobante = async (transaccionId: number | string) => {
     setLoadingComprobante(true);
     setModalOpen(true);
     const res = await obtenerComprobanteTransaccion(transaccionId);
     if (res.success) {
-      setComprobanteLineas(res.data || []);
+      setComprobanteLineas((res.data || []) as MovimientoRow[]);
     } else {
       alert("Error al consultar el comprobante: " + res.error);
       setModalOpen(false);
@@ -165,7 +513,7 @@ export default function ConsultaMovimientosPage() {
     );
   }, [comprobanteLineas]);
 
-  const fmt = (v: number) =>
+  const fmt = (v: number | string | undefined) =>
     `$ ${Number(v || 0).toLocaleString("es-CO", { minimumFractionDigits: 2 })}`;
 
   // Exportar a Excel
@@ -177,31 +525,31 @@ export default function ConsultaMovimientosPage() {
 
     const dataExport = movimientosFiltrados.map((m, idx) => ({
       "#": idx + 1,
-      "Fecha Contable": m.fecha_contable,
-      "Documento": m.numero_documento,
-      "Clase Documento": m.clase_documento,
+      "Fecha Contable": m.fecha_contable || "",
+      Documento: m.numero_documento || "",
+      "Clase Documento": m.clase_documento || "",
       "N° Cheque / Título": m.numero_titulo_valor || "—",
       "NIT Tercero": m.tercero_nit || "",
       "Tercero (Razón Social)": m.tercero_nombre || "",
-      "Cód. Auxiliar": m.concepto_auxiliar_codigo,
-      "Cuenta Auxiliar": m.concepto_auxiliar_nombre,
-      "Débito": Number(m.debito || 0),
-      "Crédito": Number(m.credito || 0),
-      "Glosa / Concepto": m.glosa_concepto,
+      "Cód. Auxiliar": m.concepto_auxiliar_codigo || "",
+      "Cuenta Auxiliar": m.concepto_auxiliar_nombre || "",
+      Débito: Number(m.debito || 0),
+      Crédito: Number(m.credito || 0),
+      "Glosa / Concepto": m.glosa_concepto || "",
     }));
 
     dataExport.push({
       "#": 0,
       "Fecha Contable": "TOTALES",
-      "Documento": "",
+      Documento: "",
       "Clase Documento": "",
       "N° Cheque / Título": "",
       "NIT Tercero": "",
       "Tercero (Razón Social)": "",
       "Cód. Auxiliar": "",
       "Cuenta Auxiliar": "",
-      "Débito": totales.debito,
-      "Crédito": totales.credito,
+      Débito: totales.debito,
+      Crédito: totales.credito,
       "Glosa / Concepto": "",
     });
 
@@ -209,9 +557,10 @@ export default function ConsultaMovimientosPage() {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Movimientos Contables");
 
-    const nombreEmpresa =
-      empresas.find((e) => String(e.id) === String(empresaId))?.razon_social ||
-      "Empresa";
+    const empActual = empresas.find((e) => String(e.id) === String(empresaId));
+    const nombreEmpresa = empActual
+      ? obtenerNombreEmpresa(empActual)
+      : "Empresa";
     const fechaDescarga = new Date().toISOString().split("T")[0];
     XLSX.writeFile(
       workbook,
@@ -237,29 +586,54 @@ export default function ConsultaMovimientosPage() {
   const primerRegistro = comprobanteLineas[0] || {};
 
   if (!isMounted) {
-    return <div className="p-4 text-center text-xs text-slate-400">Cargando módulo de movimientos...</div>;
+    return (
+      <div className="p-4 text-center text-xs text-slate-400">
+        Cargando módulo de movimientos...
+      </div>
+    );
   }
 
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-4 text-xs font-sans">
       <div className="border-b pb-2 flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
-        <div>
-          <h1 className="text-base font-bold text-slate-800">
-            Consulta Detallada de Movimientos
-          </h1>
-          <p className="text-[11px] text-slate-500">
-            Listado de partidas contables por empresa, sucursal, período y títulos valores.
-          </p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded text-xs transition border border-slate-200 cursor-pointer shrink-0"
+          >
+            ← Atrás
+          </button>
+          <div>
+            <h1 className="text-base font-bold text-slate-800">
+              Consulta Detallada de Movimientos
+            </h1>
+            <p className="text-[11px] text-slate-500">
+              Listado de partidas contables por empresa, sucursal, período y
+              títulos valores.
+            </p>
+          </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleExportarExcel}
-          disabled={loading || movimientosFiltrados.length === 0}
-          className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded shadow-sm transition flex items-center gap-1 text-xs"
-        >
-          📊 Exportar a Excel (.xlsx)
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleEjecutarConsulta}
+            disabled={loading || !empresaId}
+            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded shadow-sm transition flex items-center gap-1 text-xs cursor-pointer"
+          >
+            {loading ? "Consultando..." : "🔍 Consultar Movimientos"}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportarExcel}
+            disabled={loading || movimientosFiltrados.length === 0}
+            className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded shadow-sm transition flex items-center gap-1 text-xs cursor-pointer"
+          >
+            📊 Exportar a Excel (.xlsx)
+          </button>
+        </div>
       </div>
 
       {/* CONTROLES / FILTROS */}
@@ -270,12 +644,12 @@ export default function ConsultaMovimientosPage() {
           </label>
           <select
             value={empresaId}
-            onChange={(e) => setEmpresaId(e.target.value)}
+            onChange={(e) => handleCambioEmpresa(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
           >
             {empresas.map((emp) => (
               <option key={emp.id} value={emp.id}>
-                {emp.razon_social || emp.nombre_comercial}
+                {obtenerNombreEmpresa(emp)}
               </option>
             ))}
           </select>
@@ -287,13 +661,14 @@ export default function ConsultaMovimientosPage() {
           </label>
           <select
             value={sucursalId}
-            onChange={(e) => setSucursalId(e.target.value)}
+            onChange={(e) => handleCambioSucursal(e.target.value)}
             className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 font-medium outline-none truncate"
           >
             <option value="">-- Todas las Sucursales --</option>
             {sucursales.map((suc) => (
               <option key={suc.id} value={suc.id}>
-                {suc.nombre} {suc.codigo_sucursal ? `(${suc.codigo_sucursal})` : ""}
+                {obtenerNombreSucursal(suc)}{" "}
+                {suc.codigo_sucursal ? `(${suc.codigo_sucursal})` : ""}
               </option>
             ))}
           </select>
@@ -305,7 +680,10 @@ export default function ConsultaMovimientosPage() {
           </label>
           <select
             value={anio}
-            onChange={(e) => setAnio(e.target.value)}
+            onChange={(e) => {
+              setAnio(e.target.value);
+              setConsultado(false);
+            }}
             className="w-full bg-white border border-slate-300 rounded px-1 py-1 text-slate-800 font-medium outline-none text-center"
           >
             <option value="">Todos</option>
@@ -321,7 +699,10 @@ export default function ConsultaMovimientosPage() {
           </label>
           <select
             value={mes}
-            onChange={(e) => setMes(e.target.value)}
+            onChange={(e) => {
+              setMes(e.target.value);
+              setConsultado(false);
+            }}
             className="w-full bg-white border border-slate-300 rounded px-1.5 py-1 text-slate-800 font-medium outline-none"
           >
             <option value="">Acum. Año</option>
@@ -372,9 +753,18 @@ export default function ConsultaMovimientosPage() {
         <div className="p-8 text-center text-slate-400">
           Consultando movimientos contables...
         </div>
+      ) : !consultado ? (
+        <div className="p-8 text-center text-slate-500 italic bg-white border rounded-lg">
+          Seleccione los filtros deseados y presione{" "}
+          <span className="font-semibold text-slate-700 not-italic">
+            “Consultar Movimientos”
+          </span>{" "}
+          para cargar los registros.
+        </div>
       ) : movimientosFiltrados.length === 0 ? (
         <div className="p-8 text-center text-slate-400 italic bg-white border rounded-lg">
-          No se encontraron movimientos registrados para los filtros seleccionados.
+          No se encontraron movimientos registrados para los filtros
+          seleccionados.
         </div>
       ) : (
         <div className="bg-white border rounded-lg shadow-sm overflow-x-auto">
@@ -387,7 +777,9 @@ export default function ConsultaMovimientosPage() {
                 <th className="p-2 w-24">Documento</th>
                 <th className="p-2 w-20 text-[9px]">Clase Doc.</th>
                 <th className="p-2 w-24 text-[9px]">N° Cheque</th>
-                <th className="p-2 min-w-[200px]">Tercero (NIT - Razón Social)</th>
+                <th className="p-2 min-w-[200px]">
+                  Tercero (NIT - Razón Social)
+                </th>
                 <th className="p-2 min-w-[150px]">Cuenta Auxiliar</th>
                 <th className="p-2 text-right w-24">Débito</th>
                 <th className="p-2 text-right w-24">Crédito</th>
@@ -405,7 +797,7 @@ export default function ConsultaMovimientosPage() {
                       type="button"
                       onClick={() => handleVerComprobante(m.transaccion_id)}
                       title="Ver Comprobante Contable Completo"
-                      className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition"
+                      className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition cursor-pointer"
                     >
                       👁️
                     </button>
@@ -444,7 +836,7 @@ export default function ConsultaMovimientosPage() {
                   </td>
                   <td
                     className="p-2 text-slate-500 max-w-[150px] truncate"
-                    title={m.glosa_concepto}
+                    title={m.glosa_concepto || ""}
                   >
                     {m.glosa_concepto || "—"}
                   </td>
@@ -469,14 +861,15 @@ export default function ConsultaMovimientosPage() {
                   </span>
                 </h3>
                 <p className="text-[10px] text-slate-300">
-                  {primerRegistro.clase_documento} | Fecha: {primerRegistro.fecha_contable}
+                  {primerRegistro.clase_documento} | Fecha:{" "}
+                  {primerRegistro.fecha_contable}
                 </p>
               </div>
 
               <button
                 type="button"
                 onClick={() => setModalOpen(false)}
-                className="text-slate-400 hover:text-white text-base font-bold px-2 py-0.5 rounded"
+                className="text-slate-400 hover:text-white text-base font-bold px-2 py-0.5 rounded cursor-pointer"
               >
                 ✕
               </button>
@@ -496,7 +889,8 @@ export default function ConsultaMovimientosPage() {
                       Glosa / Concepto General:
                     </span>
                     <p className="text-slate-800 font-medium">
-                      {primerRegistro.glosa_concepto || "Sin descripción registrada."}
+                      {primerRegistro.glosa_concepto ||
+                        "Sin descripción registrada."}
                     </p>
                   </div>
 
@@ -515,7 +909,10 @@ export default function ConsultaMovimientosPage() {
                       </thead>
                       <tbody className="divide-y text-[10px]">
                         {comprobanteLineas.map((linea, lIdx) => (
-                          <tr key={linea.detalle_id || lIdx} className="hover:bg-slate-50">
+                          <tr
+                            key={linea.detalle_id || lIdx}
+                            className="hover:bg-slate-50"
+                          >
                             <td className="p-2 text-center text-slate-400 font-bold">
                               {lIdx + 1}
                             </td>
@@ -548,7 +945,10 @@ export default function ConsultaMovimientosPage() {
                       {/* Footer Totales Partida Doble */}
                       <tfoot className="bg-slate-100 font-bold border-t text-[11px]">
                         <tr>
-                          <td colSpan={4} className="p-2 text-right text-slate-600 uppercase">
+                          <td
+                            colSpan={4}
+                            className="p-2 text-right text-slate-600 uppercase"
+                          >
                             Totales Comprobante:
                           </td>
                           <td className="p-2 text-right font-mono text-slate-900">
@@ -564,14 +964,22 @@ export default function ConsultaMovimientosPage() {
 
                   {/* Verificación de Cuadre de Partida Doble */}
                   <div className="flex justify-end items-center gap-2 pt-1 text-[11px]">
-                    <span className="font-semibold text-slate-500">Estado Partida Doble:</span>
-                    {Math.abs(totalesComprobante.debito - totalesComprobante.credito) < 0.01 ? (
+                    <span className="font-semibold text-slate-500">
+                      Estado Partida Doble:
+                    </span>
+                    {Math.abs(
+                      totalesComprobante.debito - totalesComprobante.credito
+                    ) < 0.01 ? (
                       <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded font-bold">
                         ✔ Comprobante Cuadrado
                       </span>
                     ) : (
                       <span className="text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded font-bold">
-                        ⚠ Descuadrado (Dif: {fmt(totalesComprobante.debito - totalesComprobante.credito)})
+                        ⚠ Descuadrado (Dif:{" "}
+                        {fmt(
+                          totalesComprobante.debito - totalesComprobante.credito
+                        )}
+                        )
                       </span>
                     )}
                   </div>
@@ -584,7 +992,7 @@ export default function ConsultaMovimientosPage() {
               <button
                 type="button"
                 onClick={() => setModalOpen(false)}
-                className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white font-bold rounded text-xs transition"
+                className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white font-bold rounded text-xs transition cursor-pointer"
               >
                 Cerrar Comprobante
               </button>

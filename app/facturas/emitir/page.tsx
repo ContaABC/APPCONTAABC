@@ -1,16 +1,31 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { registrarFacturaEmitida, procesarFacturaEmitidaXmlAdmin, FacturaXmlData, ItemXml } from './actions';
+import {
+  registrarFacturaEmitida,
+  procesarFacturaEmitidaXmlAdmin,
+  FacturaXmlData,
+  ItemXml,
+} from './actions';
 import { supabase } from '@/lib/supabaseClient';
-import { validarPeriodoContable } from "@/lib/accounting-validations";
+import { validarPeriodoContable } from '@/lib/accounting-validations';
+import {
+  getEmpresasPermitidas,
+  getEmpresaActivaUsuario,
+  getSucursalActivaUsuario,
+  setEmpresaActivaUsuario,
+  setSucursalActivaUsuario,
+} from '@/app/actions/accionesEmpresas';
 
 interface Empresa {
   id: number | string;
+  empresa_id?: number | string;
   razon_social?: string;
+  nombre_comercial?: string;
   nombre?: string;
   nit_identificacion?: string;
+  dv?: string;
 }
 
 interface Sucursal {
@@ -66,10 +81,67 @@ interface FacturaXmlStaged {
   items: ItemXml[];
 }
 
+function getCookieValue(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie
+    .split('; ')
+    .find((row) => row.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split('=')[1]) : null;
+}
+
+function setCookieValue(name: string, value: string) {
+  if (typeof document === 'undefined') return;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=86400; SameSite=Lax`;
+}
+
+function clearCookieValue(name: string) {
+  if (typeof document === 'undefined') return;
+  document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`;
+}
+
+function getNombreEmpresa(emp: Empresa): string {
+  return emp.razon_social || emp.nombre_comercial || emp.nombre || '';
+}
+
+function obtenerUsuarioIdDesdeLocalStorage(): string | null {
+  if (typeof window === 'undefined') return null;
+
+  const clavesDirectas = ['usuario_id', 'user_id', 'uid'];
+  for (const clave of clavesDirectas) {
+    const val = localStorage.getItem(clave);
+    if (val && val.trim()) return val.trim();
+  }
+
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.includes('auth-token') || k.includes('supabase')) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const idEncontrado =
+          parsed?.user?.id ||
+          parsed?.currentSession?.user?.id ||
+          parsed?.session?.user?.id ||
+          null;
+        if (idEncontrado && typeof idEncontrado === 'string') {
+          return idEncontrado;
+        }
+      } catch {
+        // Ignorar entradas no JSON
+      }
+    }
+  }
+  return null;
+}
+
 export default function EmitirFacturaPage() {
   const router = useRouter();
 
   const [isMounted, setIsMounted] = useState(false);
+  const [usuarioId, setUsuarioId] = useState<string | null>(null);
+  const [loadingEmpresas, setLoadingEmpresas] = useState<boolean>(true);
 
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
@@ -88,7 +160,7 @@ export default function EmitirFacturaPage() {
 
   const [errorPeriodo, setErrorPeriodo] = useState<string | null>(null);
   const [validandoPeriodo, setValidandoPeriodo] = useState<boolean>(false);
-  
+
   const [itemsDetalle, setItemsDetalle] = useState<ItemSeleccionado[]>([]);
   const [xmlsStaged, setXmlsStaged] = useState<FacturaXmlStaged[]>([]);
 
@@ -110,11 +182,11 @@ export default function EmitirFacturaPage() {
         setFilaActivaMenu(null);
       }
     };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const verificarPeriodo = async (fecha: string) => {
+  const verificarPeriodo = useCallback(async (fecha: string) => {
     if (!empresaId || !sucursalId || !fecha) {
       setErrorPeriodo(null);
       return;
@@ -125,17 +197,17 @@ export default function EmitirFacturaPage() {
 
     const res = await validarPeriodoContable(String(empresaId), String(sucursalId), fecha);
     if (!res.valido) {
-      setErrorPeriodo(res.mensaje || "Periodo no habilitado para transacciones.");
+      setErrorPeriodo(res.mensaje || 'Periodo no habilitado para transacciones.');
     }
 
     setValidandoPeriodo(false);
-  };
+  }, [empresaId, sucursalId]);
 
   useEffect(() => {
     if (empresaId && sucursalId && fechaContable) {
       verificarPeriodo(fechaContable);
     }
-  }, [empresaId, sucursalId, fechaContable]);
+  }, [empresaId, sucursalId, fechaContable, verificarPeriodo]);
 
   useEffect(() => {
     setIsMounted(true);
@@ -151,19 +223,177 @@ export default function EmitirFacturaPage() {
     setFechaContable(hoyStr);
   }, []);
 
+  const cargarEmpresasAsignadas = useCallback(async () => {
+    setLoadingEmpresas(true);
+    try {
+      let uid: string | null = null;
+
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user?.id) uid = user.id;
+      } catch {
+        // Continuar con getSession
+      }
+
+      if (!uid) {
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          if (session?.user?.id) uid = session.user.id;
+        } catch {
+          // Continuar con localStorage
+        }
+      }
+
+      if (!uid) {
+        uid = obtenerUsuarioIdDesdeLocalStorage();
+      }
+
+      setUsuarioId(uid);
+
+      const permitidas = await getEmpresasPermitidas(uid);
+      const listaEmpresas: Empresa[] = Array.isArray(permitidas) ? permitidas : [];
+
+      if (listaEmpresas.length > 0) {
+        const ordenadas = [...listaEmpresas].sort((a, b) =>
+          getNombreEmpresa(a).localeCompare(getNombreEmpresa(b), 'es', {
+            sensitivity: 'base',
+          })
+        );
+        setEmpresas(ordenadas);
+
+        let empresaActivaBD: string | null = null;
+        try {
+          const bdVal = await getEmpresaActivaUsuario(uid);
+          if (bdVal !== null && bdVal !== undefined && String(bdVal).trim() !== '') {
+            empresaActivaBD = String(bdVal).trim();
+          }
+        } catch {
+          // Ignorar
+        }
+
+        const localEmp =
+          typeof window !== 'undefined'
+            ? localStorage.getItem('empresa_activa') ||
+              localStorage.getItem('empresa_id')
+            : null;
+        const cookieEmp = getCookieValue('empresa_activa');
+
+        const candidata = empresaActivaBD || localEmp || cookieEmp;
+        const empElegida = candidata
+          ? ordenadas.find(
+              (e) => String(e.id || e.empresa_id) === String(candidata)
+            ) || ordenadas[0]
+          : ordenadas[0];
+
+        const idRaw = empElegida.id ?? empElegida.empresa_id;
+        const idStr = String(idRaw);
+        const nombreFinal = getNombreEmpresa(empElegida);
+
+        setEmpresaId(!Number.isNaN(Number(idStr)) && idStr !== '' ? Number(idStr) : '');
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('empresa_activa', idStr);
+          localStorage.setItem('empresa_id', idStr);
+          if (nombreFinal) {
+            localStorage.setItem('empresa_activa_nombre', nombreFinal);
+          }
+        }
+        setCookieValue('empresa_activa', idStr);
+      } else {
+        setEmpresas([]);
+        setEmpresaId('');
+      }
+    } catch (error) {
+      console.error('Error al cargar empresas asignadas en emitir:', error);
+      setEmpresas([]);
+      setEmpresaId('');
+    } finally {
+      setLoadingEmpresas(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isMounted) return;
+    cargarEmpresasAsignadas();
+  }, [isMounted, cargarEmpresasAsignadas]);
 
-    async function cargarCatalogos() {
-      const { data: empData } = await supabase
-        .from('empresas')
-        .select('*')
-        .order('razon_social', { ascending: true });
-      if (empData) setEmpresas(empData);
+  const handleCambioEmpresa = async (valorRaw: string) => {
+    limpiarMensaje();
+    const nuevaEmpresa = valorRaw ? Number(valorRaw) : '';
+    setEmpresaId(nuevaEmpresa);
+    setSucursalId('');
+    setClaseDocId('');
+    setCliente(null);
+    setItemsDetalle([]);
+    setXmlsStaged([]);
+    setBusquedaItems({});
+
+    if (typeof window !== 'undefined') {
+      if (valorRaw) {
+        const empSel = empresas.find(
+          (item) => String(item.id || item.empresa_id) === String(valorRaw)
+        );
+        const nombreSel = empSel ? getNombreEmpresa(empSel) : '';
+
+        localStorage.setItem('empresa_activa', valorRaw);
+        localStorage.setItem('empresa_id', valorRaw);
+        if (nombreSel) {
+          localStorage.setItem('empresa_activa_nombre', nombreSel);
+        }
+        setCookieValue('empresa_activa', valorRaw);
+      } else {
+        localStorage.removeItem('empresa_activa');
+        localStorage.removeItem('empresa_id');
+        localStorage.removeItem('empresa_activa_nombre');
+        clearCookieValue('empresa_activa');
+      }
+
+      localStorage.removeItem('sucursal_activa');
+      localStorage.removeItem('sucursal_id');
+      localStorage.removeItem('sucursal_activa_nombre');
+      clearCookieValue('sucursal_activa');
     }
 
-    cargarCatalogos();
-  }, [isMounted]);
+    if (valorRaw) {
+      try {
+        await setEmpresaActivaUsuario(valorRaw, usuarioId, null);
+      } catch {
+        // Ignorar si no aplica
+      }
+    }
+  };
+
+  const handleCambioSucursal = async (valorRaw: string) => {
+    limpiarMensaje();
+    const nuevaSucursal = valorRaw ? Number(valorRaw) : '';
+    setSucursalId(nuevaSucursal);
+
+    if (typeof window !== 'undefined') {
+      if (valorRaw) {
+        const sucSel = sucursales.find((s) => String(s.id) === String(valorRaw));
+        localStorage.setItem('sucursal_activa', valorRaw);
+        localStorage.setItem('sucursal_id', valorRaw);
+        if (sucSel?.nombre) {
+          localStorage.setItem('sucursal_activa_nombre', sucSel.nombre);
+        }
+        setCookieValue('sucursal_activa', valorRaw);
+      } else {
+        localStorage.removeItem('sucursal_activa');
+        localStorage.removeItem('sucursal_id');
+        localStorage.removeItem('sucursal_activa_nombre');
+        clearCookieValue('sucursal_activa');
+      }
+    }
+
+    try {
+      await setSucursalActivaUsuario(valorRaw || null, usuarioId);
+    } catch {
+      // Ignorar si no aplica
+    }
+  };
 
   useEffect(() => {
     setSucursalId('');
@@ -181,20 +411,74 @@ export default function EmitirFacturaPage() {
       return;
     }
 
+    let cancelado = false;
+
     async function cargarDatosDependientes() {
       const { data: sucData } = await supabase
         .from('sucursales')
         .select('*')
         .eq('empresa_id', empresaId)
         .order('codigo_sucursal', { ascending: true });
-      if (sucData) setSucursales(sucData);
+
+      if (cancelado) return;
+
+      const listaSuc = sucData || [];
+      setSucursales(listaSuc);
+
+      let sucActivaBD: string | null = null;
+      try {
+        const bdSuc = await getSucursalActivaUsuario(usuarioId);
+        if (bdSuc !== null && bdSuc !== undefined && String(bdSuc).trim() !== '') {
+          sucActivaBD = String(bdSuc).trim();
+        }
+      } catch {
+        // Ignorar
+      }
+
+      const sucLocal =
+        typeof window !== 'undefined'
+          ? localStorage.getItem('sucursal_activa') ||
+            localStorage.getItem('sucursal_id')
+          : null;
+      const sucCookie = getCookieValue('sucursal_activa');
+
+      const candidataSuc = sucActivaBD || sucLocal || sucCookie;
+      const sucEncontrada = candidataSuc
+        ? listaSuc.find((s) => String(s.id) === String(candidataSuc))
+        : undefined;
+
+      if (sucEncontrada) {
+        const idSucStr = String(sucEncontrada.id);
+        setSucursalId(Number(sucEncontrada.id));
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('sucursal_activa', idSucStr);
+          localStorage.setItem('sucursal_id', idSucStr);
+          if (sucEncontrada.nombre) {
+            localStorage.setItem('sucursal_activa_nombre', sucEncontrada.nombre);
+          }
+        }
+        setCookieValue('sucursal_activa', idSucStr);
+      } else {
+        setSucursalId('');
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('sucursal_activa');
+          localStorage.removeItem('sucursal_id');
+          localStorage.removeItem('sucursal_activa_nombre');
+          clearCookieValue('sucursal_activa');
+        }
+        try {
+          await setSucursalActivaUsuario(null, usuarioId);
+        } catch {
+          // Ignorar
+        }
+      }
 
       const { data: docData } = await supabase
         .from('clases_documento')
         .select('*')
         .eq('empresa_id', empresaId)
         .order('codigo_clase', { ascending: true });
-      if (docData) setClasesDoc(docData);
+      if (!cancelado && docData) setClasesDoc(docData);
 
       const { data: terData } = await supabase
         .from('terceros')
@@ -202,7 +486,7 @@ export default function EmitirFacturaPage() {
         .eq('empresa_id', empresaId)
         .or('es_cliente.eq.true,es_cliente.eq.TRUE')
         .order('razon_social', { ascending: true });
-      if (terData) setTercerosClientes(terData);
+      if (!cancelado && terData) setTercerosClientes(terData);
 
       const { data: itemData } = await supabase
         .from('items_facturacion')
@@ -210,6 +494,8 @@ export default function EmitirFacturaPage() {
         .eq('empresa_id', empresaId)
         .eq('estado', true)
         .order('nombre', { ascending: true });
+
+      if (cancelado) return;
 
       if (itemData && itemData.length > 0) {
         setCatalogoItems(itemData);
@@ -219,12 +505,16 @@ export default function EmitirFacturaPage() {
           .select('*')
           .eq('empresa_id', empresaId)
           .limit(100);
-        setCatalogoItems(fallbackItems || []);
+        if (!cancelado) setCatalogoItems(fallbackItems || []);
       }
     }
 
     cargarDatosDependientes();
-  }, [empresaId]);
+
+    return () => {
+      cancelado = true;
+    };
+  }, [empresaId, usuarioId]);
 
   const formularioCompleto = Boolean(empresaId && sucursalId && claseDocId && cliente);
 
@@ -241,9 +531,13 @@ export default function EmitirFacturaPage() {
       return;
     }
 
-    const empresaSeleccionada = empresas.find(emp => Number(emp.id) === Number(empresaId));
-    const nitEmpresaSistema = String(empresaSeleccionada?.nit_identificacion || "").trim();
-    const nitClienteSistema = String(cliente?.nit || cliente?.numero_identificacion || "").trim();
+    const empresaSeleccionada = empresas.find(
+      (emp) => Number(emp.id ?? emp.empresa_id) === Number(empresaId)
+    );
+    const nitEmpresaSistema = String(empresaSeleccionada?.nit_identificacion || '').trim();
+    const nitClienteSistema = String(
+      cliente?.nit || cliente?.numero_identificacion || ''
+    ).trim();
 
     limpiarMensaje();
     setCargando(true);
@@ -256,94 +550,124 @@ export default function EmitirFacturaPage() {
       try {
         const xmlText = await file.text();
         const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+        const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
 
-        const numeroFactura = xmlDoc.querySelector("ID")?.textContent || 
-                            xmlDoc.getElementsByTagNameNS("*", "ID")[0]?.textContent || `DOC-${i+1}`;
-        
-        const fechaEm = xmlDoc.querySelector("IssueDate")?.textContent || 
-                        xmlDoc.getElementsByTagNameNS("*", "IssueDate")[0]?.textContent || fechaEmision;
-        
-        const fechaVen = xmlDoc.querySelector("DueDate")?.textContent || 
-                         xmlDoc.getElementsByTagNameNS("*", "DueDate")[0]?.textContent || fechaVencimiento;
+        const numeroFactura =
+          xmlDoc.querySelector('ID')?.textContent ||
+          xmlDoc.getElementsByTagNameNS('*', 'ID')[0]?.textContent ||
+          `DOC-${i + 1}`;
 
-        const cufe = xmlDoc.querySelector("UUID")?.textContent || 
-                     xmlDoc.getElementsByTagNameNS("*", "UUID")[0]?.textContent || undefined;
+        const fechaEm =
+          xmlDoc.querySelector('IssueDate')?.textContent ||
+          xmlDoc.getElementsByTagNameNS('*', 'IssueDate')[0]?.textContent ||
+          fechaEmision;
+
+        const fechaVen =
+          xmlDoc.querySelector('DueDate')?.textContent ||
+          xmlDoc.getElementsByTagNameNS('*', 'DueDate')[0]?.textContent ||
+          fechaVencimiento;
+
+        const cufe =
+          xmlDoc.querySelector('UUID')?.textContent ||
+          xmlDoc.getElementsByTagNameNS('*', 'UUID')[0]?.textContent ||
+          undefined;
 
         let lineasElements: Element[] = [];
-        const q1 = xmlDoc.querySelectorAll("InvoiceLine, CreditNoteLine");
+        const q1 = xmlDoc.querySelectorAll('InvoiceLine, CreditNoteLine');
         if (q1.length > 0) {
           lineasElements = Array.from(q1);
         } else {
-          const q2 = xmlDoc.getElementsByTagNameNS("*", "InvoiceLine");
+          const q2 = xmlDoc.getElementsByTagNameNS('*', 'InvoiceLine');
           if (q2.length > 0) {
             lineasElements = Array.from(q2);
           } else {
-            const q3 = xmlDoc.getElementsByTagNameNS("*", "CreditNoteLine");
+            const q3 = xmlDoc.getElementsByTagNameNS('*', 'CreditNoteLine');
             if (q3.length > 0) lineasElements = Array.from(q3);
           }
         }
 
         const parsedItems: ItemXml[] = [];
         lineasElements.forEach((line, idx) => {
-          const descNode = line.querySelector("Description") || line.getElementsByTagNameNS("*", "Description")[0];
+          const descNode =
+            line.querySelector('Description') ||
+            line.getElementsByTagNameNS('*', 'Description')[0];
           const nombre_item = descNode?.textContent || `Ítem ${idx + 1}`;
 
-          const qtyNode = line.querySelector("InvoicedQuantity, CreditedQuantity") || line.getElementsByTagNameNS("*", "InvoicedQuantity")[0];
+          const qtyNode =
+            line.querySelector('InvoicedQuantity, CreditedQuantity') ||
+            line.getElementsByTagNameNS('*', 'InvoicedQuantity')[0];
           const cantidad = Number(qtyNode?.textContent || 1);
 
-          const subNode = line.querySelector("LineExtensionAmount") || line.getElementsByTagNameNS("*", "LineExtensionAmount")[0];
+          const subNode =
+            line.querySelector('LineExtensionAmount') ||
+            line.getElementsByTagNameNS('*', 'LineExtensionAmount')[0];
           const lineSub = Number(subNode?.textContent || 0);
 
-          const priceNode = line.querySelector("PriceAmount") || line.getElementsByTagNameNS("*", "PriceAmount")[0];
+          const priceNode =
+            line.querySelector('PriceAmount') ||
+            line.getElementsByTagNameNS('*', 'PriceAmount')[0];
           let valor_unitario = Number(priceNode?.textContent || 0);
           if (valor_unitario === 0 && cantidad > 0 && lineSub > 0) {
             valor_unitario = lineSub / cantidad;
           }
 
-          const taxNode = line.querySelector("TaxAmount") || line.getElementsByTagNameNS("*", "TaxAmount")[0];
-          const valor_iva = Number(taxNode?.textContent || (lineSub * 0.19));
+          const taxNode =
+            line.querySelector('TaxAmount') ||
+            line.getElementsByTagNameNS('*', 'TaxAmount')[0];
+          const valor_iva = Number(taxNode?.textContent || lineSub * 0.19);
 
           parsedItems.push({
             item_id: null,
-            codigo_ref: "",
+            codigo_ref: '',
             nombre_item,
             cantidad,
             valor_unitario,
             subtotal: lineSub,
             porcentaje_iva: 19,
             valor_iva,
-            total: lineSub + valor_iva
+            total: lineSub + valor_iva,
           });
         });
 
         const subtotalXml = Number(
-          xmlDoc.querySelector("LegalMonetaryTotal LineExtensionAmount")?.textContent || 
-          xmlDoc.getElementsByTagNameNS("*", "LineExtensionAmount")[0]?.textContent || 
-          parsedItems.reduce((acc, it) => acc + it.subtotal, 0)
+          xmlDoc.querySelector('LegalMonetaryTotal LineExtensionAmount')?.textContent ||
+            xmlDoc.getElementsByTagNameNS('*', 'LineExtensionAmount')[0]?.textContent ||
+            parsedItems.reduce((acc, it) => acc + it.subtotal, 0)
         );
 
         const ivaXml = Number(
-          xmlDoc.querySelector("TaxTotal TaxAmount")?.textContent || 
-          xmlDoc.getElementsByTagNameNS("*", "TaxAmount")[0]?.textContent || 
-          parsedItems.reduce((acc, it) => acc + (it.valor_iva || 0), 0)
+          xmlDoc.querySelector('TaxTotal TaxAmount')?.textContent ||
+            xmlDoc.getElementsByTagNameNS('*', 'TaxAmount')[0]?.textContent ||
+            parsedItems.reduce((acc, it) => acc + (it.valor_iva || 0), 0)
         );
 
         const totalXml = Number(
-          xmlDoc.querySelector("LegalMonetaryTotal TaxInclusiveAmount")?.textContent || 
-          xmlDoc.querySelector("LegalMonetaryTotal PayableAmount")?.textContent ||
-          xmlDoc.getElementsByTagNameNS("*", "TaxInclusiveAmount")[0]?.textContent || 
-          xmlDoc.getElementsByTagNameNS("*", "PayableAmount")[0]?.textContent || 
-          (subtotalXml + ivaXml)
+          xmlDoc.querySelector('LegalMonetaryTotal TaxInclusiveAmount')?.textContent ||
+            xmlDoc.querySelector('LegalMonetaryTotal PayableAmount')?.textContent ||
+            xmlDoc.getElementsByTagNameNS('*', 'TaxInclusiveAmount')[0]?.textContent ||
+            xmlDoc.getElementsByTagNameNS('*', 'PayableAmount')[0]?.textContent ||
+            subtotalXml + ivaXml
         );
 
-        const emisorNit = xmlDoc.querySelector("AccountingSupplierParty PartyTaxScheme CompanyID")?.textContent || 
-                          xmlDoc.getElementsByTagNameNS("*", "CompanyID")[0]?.textContent || "";
-        const emisorNombre = xmlDoc.querySelector("AccountingSupplierParty PartyLegalEntity RegistrationName")?.textContent || "EMPRESA EMISORA";
+        const emisorNit =
+          xmlDoc.querySelector('AccountingSupplierParty PartyTaxScheme CompanyID')
+            ?.textContent ||
+          xmlDoc.getElementsByTagNameNS('*', 'CompanyID')[0]?.textContent ||
+          '';
+        const emisorNombre =
+          xmlDoc.querySelector(
+            'AccountingSupplierParty PartyLegalEntity RegistrationName'
+          )?.textContent || 'EMPRESA EMISORA';
 
-        const receptorNit = xmlDoc.querySelector("AccountingCustomerParty PartyTaxScheme CompanyID")?.textContent || 
-                            xmlDoc.getElementsByTagNameNS("*", "CompanyID")[1]?.textContent || "";
-        const receptorNombre = xmlDoc.querySelector("AccountingCustomerParty PartyLegalEntity RegistrationName")?.textContent || "CLIENTE RECEPTOR";
+        const receptorNit =
+          xmlDoc.querySelector('AccountingCustomerParty PartyTaxScheme CompanyID')
+            ?.textContent ||
+          xmlDoc.getElementsByTagNameNS('*', 'CompanyID')[1]?.textContent ||
+          '';
+        const receptorNombre =
+          xmlDoc.querySelector(
+            'AccountingCustomerParty PartyLegalEntity RegistrationName'
+          )?.textContent || 'CLIENTE RECEPTOR';
 
         if (nitEmpresaSistema && emisorNit && !emisorNit.includes(nitEmpresaSistema)) {
           erroresValidacion++;
@@ -371,9 +695,9 @@ export default function EmitirFacturaPage() {
             emisor_nombre: emisorNombre,
             receptor_nit: receptorNit,
             receptor_nombre: receptorNombre,
-            cufe
+            cufe,
           },
-          items: parsedItems
+          items: parsedItems,
         });
       } catch (err) {
         console.error(`Error leyendo el archivo ${file.name}:`, err);
@@ -385,19 +709,23 @@ export default function EmitirFacturaPage() {
 
     if (nuevasFacturasStaged.length > 0) {
       setXmlsStaged((prev) => [...prev, ...nuevasFacturasStaged]);
-      setMensaje({ tipo: 'ok', texto: `Se previsualizaron ${nuevasFacturasStaged.length} archivo(s) XML correctamente.` });
+      setMensaje({
+        tipo: 'ok',
+        texto: `Se previsualizaron ${nuevasFacturasStaged.length} archivo(s) XML correctamente.`,
+      });
     } else {
-      setMensaje({ 
-        tipo: 'error', 
-        texto: erroresValidacion > 0 
-          ? 'Los XMLs fueron rechazados porque el NIT del emisor o receptor no coincide con la Empresa o Cliente seleccionados.' 
-          : 'No se pudieron extraer datos válidos de los archivos XML.' 
+      setMensaje({
+        tipo: 'error',
+        texto:
+          erroresValidacion > 0
+            ? 'Los XMLs fueron rechazados porque el NIT del emisor o receptor no coincide con la Empresa o Cliente seleccionados.'
+            : 'No se pudieron extraer datos válidos de los archivos XML.',
       });
     }
   };
 
   const eliminarXmlStaged = (id: string) => {
-    setXmlsStaged((prev) => prev.filter(x => x.id !== id));
+    setXmlsStaged((prev) => prev.filter((x) => x.id !== id));
   };
 
   const confirmarYRegistrarLote = async () => {
@@ -422,8 +750,9 @@ export default function EmitirFacturaPage() {
       const datosAProcesar = {
         ...staged.datos,
         fecha_contable: fechaContable || staged.datos.fecha_emision,
-        fecha_vencimiento: fechaVencimiento || staged.datos.fecha_vencimiento || staged.datos.fecha_emision,
-        fecha_emision: fechaEmision || staged.datos.fecha_emision
+        fecha_vencimiento:
+          fechaVencimiento || staged.datos.fecha_vencimiento || staged.datos.fecha_emision,
+        fecha_emision: fechaEmision || staged.datos.fecha_emision,
       };
 
       const res = await procesarFacturaEmitidaXmlAdmin(
@@ -486,7 +815,7 @@ export default function EmitirFacturaPage() {
 
     setBusquedaItems((prev) => ({
       ...prev,
-      [filaId]: `${itemCatalog.codigo ? `[${itemCatalog.codigo}] ` : ''}${itemCatalog.nombre || itemCatalog.descripcion || ''}`
+      [filaId]: `${itemCatalog.codigo ? `[${itemCatalog.codigo}] ` : ''}${itemCatalog.nombre || itemCatalog.descripcion || ''}`,
     }));
 
     setItemsDetalle((prev) =>
@@ -667,24 +996,37 @@ export default function EmitirFacturaPage() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 bg-white rounded-xl shadow-md border border-gray-100 my-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
-        <h1 className="text-2xl font-bold text-gray-800">
-          Emitir o Importar Factura de Venta (XML / Manual)
-        </h1>
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="px-3.5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-lg text-xs transition cursor-pointer border border-gray-200 shrink-0 flex items-center gap-1.5"
+            title="Volver atrás"
+          >
+            <span>←</span>
+            <span>Atrás</span>
+          </button>
+          <h1 className="text-2xl font-bold text-gray-800 truncate">
+            Emitir o Importar Factura de Venta (XML / Manual)
+          </h1>
+        </div>
 
         <div className="flex items-center gap-2">
-          <label className={`inline-flex items-center gap-1.5 px-4 py-2 font-semibold text-xs rounded-lg transition shadow-sm ${
-            formularioCompleto 
-              ? 'cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white shadow' 
-              : 'cursor-not-allowed bg-gray-300 text-gray-500 opacity-60'
-          }`}>
+          <label
+            className={`inline-flex items-center gap-1.5 px-4 py-2 font-semibold text-xs rounded-lg transition shadow-sm ${
+              formularioCompleto
+                ? 'cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white shadow'
+                : 'cursor-not-allowed bg-gray-300 text-gray-500 opacity-60'
+            }`}
+          >
             <span>📁 Importar XML (Uno o Varios)</span>
-            <input 
-              type="file" 
-              accept=".xml" 
-              multiple 
+            <input
+              type="file"
+              accept=".xml"
+              multiple
               disabled={!formularioCompleto}
-              onChange={handleFileUpload} 
-              className="hidden" 
+              onChange={handleFileUpload}
+              className="hidden"
             />
           </label>
         </div>
@@ -731,18 +1073,26 @@ export default function EmitirFacturaPage() {
             <select
               required
               value={empresaId}
-              onChange={(e) => {
-                limpiarMensaje();
-                setEmpresaId(e.target.value ? Number(e.target.value) : '');
-              }}
+              onChange={(e) => handleCambioEmpresa(e.target.value)}
               className="w-full text-sm p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 bg-white"
             >
-              <option value="">Seleccione Empresa...</option>
-              {empresas.map((emp) => (
-                <option key={emp.id} value={emp.id}>
-                  {emp.razon_social || emp.nombre}
-                </option>
-              ))}
+              {loadingEmpresas ? (
+                <option value="">Cargando empresas...</option>
+              ) : empresas.length === 0 ? (
+                <option value="">Sin empresas asignadas</option>
+              ) : (
+                <>
+                  <option value="">Seleccione Empresa...</option>
+                  {empresas.map((emp) => {
+                    const id = String(emp.id ?? emp.empresa_id);
+                    return (
+                      <option key={id} value={id}>
+                        {getNombreEmpresa(emp)}
+                      </option>
+                    );
+                  })}
+                </>
+              )}
             </select>
           </div>
 
@@ -754,15 +1104,12 @@ export default function EmitirFacturaPage() {
               required
               disabled={!empresaId}
               value={sucursalId}
-              onChange={(e) => {
-                limpiarMensaje();
-                setSucursalId(e.target.value ? Number(e.target.value) : '');
-              }}
+              onChange={(e) => handleCambioSucursal(e.target.value)}
               className="w-full text-sm p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 bg-white"
             >
               <option value="">Seleccione Sucursal...</option>
               {sucursales.map((suc) => (
-                <option key={suc.id} value={suc.id}>
+                <option key={suc.id} value={String(suc.id)}>
                   {suc.nombre}
                 </option>
               ))}
@@ -808,7 +1155,9 @@ export default function EmitirFacturaPage() {
               value={cliente?.id || ''}
               onChange={(e) => {
                 limpiarMensaje();
-                const sel = tercerosClientes.find((t) => String(t.id) === String(e.target.value));
+                const sel = tercerosClientes.find(
+                  (t) => String(t.id) === String(e.target.value)
+                );
                 setCliente(sel || null);
               }}
               className="w-full text-sm p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 bg-white"
@@ -912,7 +1261,9 @@ export default function EmitirFacturaPage() {
                     <td className="p-2.5 font-mono text-gray-500">{staged.nombreArchivo}</td>
                     <td className="p-2.5 font-bold text-indigo-950">{staged.datos.numero_factura}</td>
                     <td className="p-2.5">{staged.datos.emisor_nit}</td>
-                    <td className="p-2.5">{staged.datos.receptor_nombre} ({staged.datos.receptor_nit})</td>
+                    <td className="p-2.5">
+                      {staged.datos.receptor_nombre} ({staged.datos.receptor_nit})
+                    </td>
                     <td className="p-2.5 text-center">{staged.datos.fecha_emision}</td>
                     <td className="p-2.5 text-right font-bold text-gray-900">
                       ${staged.datos.total.toLocaleString('es-CO', { minimumFractionDigits: 2 })}
@@ -976,7 +1327,11 @@ export default function EmitirFacturaPage() {
                   </tr>
                 ) : (
                   itemsDetalle.map((fila) => {
-                    const textoBusqueda = busquedaItems[fila.id] ?? (fila.nombre ? `${fila.codigo ? `[${fila.codigo}] ` : ''}${fila.nombre}` : '');
+                    const textoBusqueda =
+                      busquedaItems[fila.id] ??
+                      (fila.nombre
+                        ? `${fila.codigo ? `[${fila.codigo}] ` : ''}${fila.nombre}`
+                        : '');
                     const filtrados = catalogoItems.filter((item) => {
                       const txt = `${item.codigo || ''} ${item.nombre || ''} ${item.descripcion || ''}`.toLowerCase();
                       return txt.includes(textoBusqueda.toLowerCase());
@@ -994,7 +1349,13 @@ export default function EmitirFacturaPage() {
                               setBusquedaItems((prev) => ({ ...prev, [fila.id]: val }));
                               setFilaActivaMenu(fila.id);
                               if (!val) {
-                                seleccionarItemCatalogo(fila.id, { id: '', codigo: '', nombre: '', precio_venta: 0, porcentaje_iva: 19 });
+                                seleccionarItemCatalogo(fila.id, {
+                                  id: '',
+                                  codigo: '',
+                                  nombre: '',
+                                  precio_venta: 0,
+                                  porcentaje_iva: 19,
+                                });
                               }
                             }}
                             onFocus={() => setFilaActivaMenu(fila.id)}
@@ -1002,12 +1363,14 @@ export default function EmitirFacturaPage() {
                           />
 
                           {filaActivaMenu === fila.id && (
-                            <div 
-                              ref={menuRef} 
+                            <div
+                              ref={menuRef}
                               className="absolute z-50 left-2 right-2 top-full mt-1 bg-white border border-gray-300 rounded-md shadow-xl max-h-56 overflow-y-auto"
                             >
                               {filtrados.length === 0 ? (
-                                <div className="p-3 text-gray-400 text-xs italic">No se encontraron ítems</div>
+                                <div className="p-3 text-gray-400 text-xs italic">
+                                  No se encontraron ítems
+                                </div>
                               ) : (
                                 filtrados.map((item) => (
                                   <div
@@ -1016,10 +1379,14 @@ export default function EmitirFacturaPage() {
                                     className="p-2.5 hover:bg-blue-50 cursor-pointer text-xs border-b border-gray-100 flex justify-between items-center"
                                   >
                                     <span className="font-medium text-gray-800">
-                                      {item.codigo ? `[${item.codigo}] ` : ''}{item.nombre || item.descripcion}
+                                      {item.codigo ? `[${item.codigo}] ` : ''}
+                                      {item.nombre || item.descripcion}
                                     </span>
                                     <span className="text-blue-600 font-mono font-bold">
-                                      ${Number(item.precio_venta || item.valor_unitario || 0).toLocaleString('es-CO')}
+                                      $
+                                      {Number(
+                                        item.precio_venta || item.valor_unitario || 0
+                                      ).toLocaleString('es-CO')}
                                     </span>
                                   </div>
                                 ))
@@ -1033,7 +1400,9 @@ export default function EmitirFacturaPage() {
                             type="number"
                             min="1"
                             value={fila.cantidad}
-                            onChange={(e) => actualizarFila(fila.id, 'cantidad', e.target.value)}
+                            onChange={(e) =>
+                              actualizarFila(fila.id, 'cantidad', e.target.value)
+                            }
                             className="w-full p-2 border border-gray-300 rounded-md text-sm text-center bg-white"
                           />
                         </td>
@@ -1044,7 +1413,9 @@ export default function EmitirFacturaPage() {
                             min="0"
                             step="0.01"
                             value={fila.valorUnitario}
-                            onChange={(e) => actualizarFila(fila.id, 'valorUnitario', e.target.value)}
+                            onChange={(e) =>
+                              actualizarFila(fila.id, 'valorUnitario', e.target.value)
+                            }
                             className="w-full p-2 border border-gray-300 rounded-md text-sm text-right font-medium bg-white"
                           />
                         </td>
@@ -1052,7 +1423,9 @@ export default function EmitirFacturaPage() {
                         <td className="p-2">
                           <select
                             value={fila.porcentajeIva}
-                            onChange={(e) => actualizarFila(fila.id, 'porcentajeIva', e.target.value)}
+                            onChange={(e) =>
+                              actualizarFila(fila.id, 'porcentajeIva', e.target.value)
+                            }
                             className="w-full p-2 border border-gray-300 rounded-md text-sm text-center bg-white"
                           >
                             <option value={0}>0%</option>

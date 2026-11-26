@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Truck, ArrowLeft, ArrowRight, Building2, MapPin } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabaseClient";
 
 interface OpcionModulo {
   name: string;
@@ -14,6 +14,8 @@ interface UsuarioPerfil {
   nombres?: string;
   apellidos?: string;
   tipo_usuario?: string;
+  empresa_activa?: number | string | null;
+  sucursal_activa?: number | string | null;
   [key: string]: unknown;
 }
 
@@ -30,95 +32,110 @@ export default function ProveedoresPage() {
   const [sucursalActivaNombre, setSucursalActivaNombre] = useState<string>("Sucursal Principal");
   const [usuarioActual, setUsuarioActual] = useState<UsuarioPerfil | null>(null);
 
-  useEffect(() => {
-    async function initContexto() {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const initContexto = useCallback(async () => {
+    let empId = "";
+    let sucId = "";
 
-      let empId = "";
-      let sucId = "";
+    if (typeof window !== "undefined") {
+      empId =
+        localStorage.getItem("empresa_activa") ||
+        localStorage.getItem("empresa_id") ||
+        getCookieValue("empresa_activa") ||
+        "";
+      sucId =
+        localStorage.getItem("sucursal_activa") ||
+        localStorage.getItem("sucursal_id") ||
+        getCookieValue("sucursal_activa") ||
+        "";
+    }
 
-      if (typeof window !== "undefined") {
-        const storedEmpresaNombre = localStorage.getItem("empresa_activa_nombre");
-        const storedSucursalNombre = localStorage.getItem("sucursal_activa_nombre");
-        if (storedEmpresaNombre) setEmpresaActivaNombre(storedEmpresaNombre);
-        if (storedSucursalNombre) setSucursalActivaNombre(storedSucursalNombre);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-        empId =
-          localStorage.getItem("empresa_activa") ||
-          localStorage.getItem("empresa_id") ||
-          getCookieValue("empresa_activa") ||
-          "";
-        sucId =
-          localStorage.getItem("sucursal_activa") ||
-          localStorage.getItem("sucursal_id") ||
-          getCookieValue("sucursal_activa") ||
-          "";
-      }
+    if (user) {
+      const { data: perfil } = await supabase
+        .from("usuarios_perfiles")
+        .select("*")
+        .eq("id", user.id)
+        .maybeSingle();
 
-      if (!supabaseUrl || !supabaseAnonKey) return;
+      if (perfil) {
+        const perfilTyped = perfil as UsuarioPerfil;
+        setUsuarioActual(perfilTyped);
 
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (user) {
-        const { data: perfil } = await supabase
-          .from("usuarios_perfiles")
-          .select("*")
-          .eq("id", user.id)
-          .single();
-
-        if (perfil) {
-          const perfilTyped = perfil as UsuarioPerfil;
-          setUsuarioActual(perfilTyped);
-          if (!empId && perfilTyped.empresa_activa) {
-            empId = String(perfilTyped.empresa_activa);
-          }
-          if (!sucId && perfilTyped.sucursal_activa) {
-            sucId = String(perfilTyped.sucursal_activa);
-          }
+        if (!empId && perfilTyped.empresa_activa != null) {
+          empId = String(perfilTyped.empresa_activa).trim();
         }
-      }
-
-      if (empId && !Number.isNaN(Number(empId))) {
-        const { data: empData } = await supabase
-          .from("empresas")
-          .select("razon_social, nombre_comercial, nombre")
-          .eq("id", Number(empId))
-          .maybeSingle();
-
-        const nombreEmp =
-          empData?.razon_social || empData?.nombre_comercial || empData?.nombre || "";
-        if (nombreEmp) {
-          setEmpresaActivaNombre(nombreEmp);
-          if (typeof window !== "undefined") {
-            localStorage.setItem("empresa_activa_nombre", nombreEmp);
-          }
-        }
-      }
-
-      if (sucId && !Number.isNaN(Number(sucId))) {
-        const { data: sucData } = await supabase
-          .from("sucursales")
-          .select("nombre, nombre_sucursal")
-          .eq("id", Number(sucId))
-          .maybeSingle();
-
-        const nombreSuc = sucData?.nombre || sucData?.nombre_sucursal || "";
-        if (nombreSuc) {
-          setSucursalActivaNombre(nombreSuc);
-          if (typeof window !== "undefined") {
-            localStorage.setItem("sucursal_activa_nombre", nombreSuc);
-          }
+        if (!sucId && perfilTyped.sucursal_activa != null) {
+          sucId = String(perfilTyped.sucursal_activa).trim();
         }
       }
     }
 
-    initContexto();
+    if (empId) {
+      const filtroEmp = !Number.isNaN(Number(empId)) ? Number(empId) : empId;
+      const { data: empData } = await supabase
+        .from("empresas")
+        .select("razon_social, nombre_comercial, nombre")
+        .eq("id", filtroEmp)
+        .maybeSingle();
+
+      const nombreEmp =
+        empData?.razon_social || empData?.nombre_comercial || empData?.nombre || "";
+      if (nombreEmp) {
+        setEmpresaActivaNombre(nombreEmp);
+      } else if (typeof window !== "undefined") {
+        const storedEmp = localStorage.getItem("empresa_activa_nombre");
+        if (storedEmp) setEmpresaActivaNombre(storedEmp);
+      }
+    } else if (typeof window !== "undefined") {
+      const storedEmp = localStorage.getItem("empresa_activa_nombre");
+      if (storedEmp) setEmpresaActivaNombre(storedEmp);
+    }
+
+    if (sucId) {
+      const filtroSuc = !Number.isNaN(Number(sucId)) ? Number(sucId) : sucId;
+      const { data: sucData } = await supabase
+        .from("sucursales")
+        .select("nombre, nombre_sucursal")
+        .eq("id", filtroSuc)
+        .maybeSingle();
+
+      const nombreSuc = sucData?.nombre || sucData?.nombre_sucursal || "";
+      if (nombreSuc) {
+        setSucursalActivaNombre(nombreSuc);
+      } else if (typeof window !== "undefined") {
+        const storedSuc = localStorage.getItem("sucursal_activa_nombre");
+        if (storedSuc) setSucursalActivaNombre(storedSuc);
+      }
+    } else if (typeof window !== "undefined") {
+      const storedSuc = localStorage.getItem("sucursal_activa_nombre");
+      if (storedSuc) {
+        setSucursalActivaNombre(storedSuc);
+      } else {
+        setSucursalActivaNombre("Todas las sucursales");
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    initContexto();
+
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === "visible") {
+        initContexto();
+      }
+    };
+
+    window.addEventListener("focus", initContexto);
+    document.addEventListener("visibilitychange", onFocusOrVisible);
+
+    return () => {
+      window.removeEventListener("focus", initContexto);
+      document.removeEventListener("visibilitychange", onFocusOrVisible);
+    };
+  }, [initContexto]);
 
   const opciones: OpcionModulo[] = [
     { name: "Facturas de Proveedores", href: "/facturas/cargar?from=/modulos/contabilidad/proveedores" },
@@ -142,10 +159,10 @@ export default function ProveedoresPage() {
             {/* Empresa y Sucursal */}
             <div className="flex items-center gap-2 bg-zinc-50 dark:bg-zinc-800/60 px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700">
               <Building2 className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
-              <span className="font-bold truncate max-w-[140px]">{empresaActivaNombre}</span>
+              <span className="font-bold truncate max-w-[180px]">{empresaActivaNombre}</span>
               <span className="text-zinc-300 dark:text-zinc-600">|</span>
               <MapPin className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
-              <span className="truncate max-w-[120px]">{sucursalActivaNombre}</span>
+              <span className="truncate max-w-[160px]">{sucursalActivaNombre}</span>
             </div>
 
             {/* Usuario */}

@@ -4,10 +4,16 @@ import { GoogleGenAI } from "@google/genai";
 import { cookies } from "next/headers";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+function getGeminiClient() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Falta configurar la variable de entorno GEMINI_API_KEY.");
+  }
+  return new GoogleGenAI({ apiKey });
+}
 
 /**
- * Obtiene los saldos acumulados directamente de la tabla 'saldos_acumulados' 
+ * Obtiene los saldos acumulados directamente de la tabla 'saldos_acumulados'
  * utilizando la columna 'saldo_final' para un periodo y empresa determinados.
  */
 export async function obtenerSaldosAcumuladosReporte(
@@ -17,13 +23,23 @@ export async function obtenerSaldosAcumuladosReporte(
 ) {
   try {
     const cookieStore = await cookies();
-    const idEmpresa = empresaId || cookieStore.get("empresa_activa")?.value;
+    const rawEmpresa =
+      empresaId !== undefined &&
+      empresaId !== null &&
+      String(empresaId).trim() !== ""
+        ? empresaId
+        : cookieStore.get("empresa_activa")?.value;
 
-    if (!idEmpresa) {
-      return { success: false, mensaje: "No se especificó la empresa o no hay sesión activa." };
+    const parsedEmpresaId = rawEmpresa ? Number(rawEmpresa) : 0;
+
+    if (!parsedEmpresaId || Number.isNaN(parsedEmpresaId)) {
+      return {
+        success: false,
+        mensaje: "No se especificó la empresa o no hay sesión activa.",
+        datos: [],
+      };
     }
 
-    // Consulta directa a saldos_acumulados usando saldo_final
     let query = supabaseAdmin
       .from("saldos_acumulados")
       .select(`
@@ -51,23 +67,35 @@ export async function obtenerSaldosAcumuladosReporte(
           )
         )
       `)
-      .eq("empresa_id", Number(idEmpresa));
+      .eq("empresa_id", parsedEmpresaId);
 
-    if (anio) query = query.eq("anio", Number(anio));
-    if (mes) query = query.eq("mes", Number(mes));
+    if (anio !== undefined && anio !== null && String(anio).trim() !== "") {
+      const parsedAnio = Number(anio);
+      if (!Number.isNaN(parsedAnio)) {
+        query = query.eq("anio", parsedAnio);
+      }
+    }
+
+    if (mes !== undefined && mes !== null && String(mes).trim() !== "") {
+      const parsedMes = Number(mes);
+      if (!Number.isNaN(parsedMes)) {
+        query = query.eq("mes", parsedMes);
+      }
+    }
 
     const { data, error } = await query;
 
     if (error) {
       console.error("Error al consultar saldos_acumulados:", error);
-      return { success: false, mensaje: error.message };
+      return { success: false, mensaje: error.message, datos: [] };
     }
 
     return { success: true, datos: data || [] };
   } catch (error: unknown) {
-    const mensajeError = error instanceof Error ? error.message : "Error interno del servidor.";
+    const mensajeError =
+      error instanceof Error ? error.message : "Error interno del servidor.";
     console.error("Error inesperado en obtenerSaldosAcumuladosReporte:", error);
-    return { success: false, mensaje: mensajeError };
+    return { success: false, mensaje: mensajeError, datos: [] };
   }
 }
 
@@ -76,15 +104,26 @@ export async function obtenerSaldosAcumuladosReporte(
  */
 export async function analizarReporteFinanciero(
   tipoReporte: "BALANCE_GENERAL" | "ESTADO_RESULTADOS",
-  datosReporte: any,
+  datosReporte: unknown,
   empresaNombre: string,
   periodo: string
 ) {
   try {
-    let prompt = "";
+    if (
+      !datosReporte ||
+      (Array.isArray(datosReporte) && datosReporte.length === 0)
+    ) {
+      return {
+        success: false,
+        error: "No hay datos disponibles en el reporte para analizar.",
+      };
+    }
 
-    if (tipoReporte === "BALANCE_GENERAL") {
-      prompt = `
+    const ai = getGeminiClient();
+
+    const prompt =
+      tipoReporte === "BALANCE_GENERAL"
+        ? `
         Actúa como un Director Financiero y Auditor NIIF experto. Analiza el siguiente **BALANCE GENERAL** de la empresa "${empresaNombre}" correspondiente al periodo ${periodo}:
 
         DATOS DEL BALANCE GENERAL (Activos, Pasivos, Patrimonio basados en saldos finales):
@@ -94,9 +133,8 @@ export async function analizarReporteFinanciero(
         1. **Estructura Patrimonial y Solvencia**: Evaluación del peso de Activos vs Pasivos.
         2. **Liquidez y capital de trabajo**: Análisis de componentes corrientes y no corrientes.
         3. **Alertas o Recomendaciones Clave**: Observaciones críticas o puntos a vigilar.
-      `;
-    } else {
-      prompt = `
+      `
+        : `
         Actúa como un Director Financiero y Auditor NIIF experto. Analiza el siguiente **ESTADO DE RESULTADOS** de la empresa "${empresaNombre}" correspondiente al periodo ${periodo}:
 
         DATOS DEL ESTADO DE RESULTADOS (Ingresos, Costos, Gastos):
@@ -107,16 +145,19 @@ export async function analizarReporteFinanciero(
         2. **Estructura de Costos y Gastos**: Eficiencia del gasto operativo y márgenes.
         3. **Rentabilidad y Utilidad Neta**: Evaluación del resultado final del periodo.
       `;
-    }
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash", 
+      model: "gemini-2.5-flash",
       contents: prompt,
     });
 
-    return { success: true, analisis: response.text };
+    return {
+      success: true,
+      analisis: response.text || "No se recibió texto en el análisis.",
+    };
   } catch (error: unknown) {
-    const mensajeError = error instanceof Error ? error.message : "Error al conectar con la IA.";
+    const mensajeError =
+      error instanceof Error ? error.message : "Error al conectar con la IA.";
     console.error("Error al generar análisis:", error);
     return { success: false, error: mensajeError };
   }

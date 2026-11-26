@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef, FormEvent } f
 import Link from 'next/link'
 import { createClient } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabaseClient'
-import { obtenerEmpresas, obtenerSucursales } from '@/app/consultas/movimientos/movimientos-actions'
+import { obtenerEmpresas, obtenerSucursales } from '@/app/consultas/movimientos/actions'
 import {
   getEmpresasPermitidas,
   getEmpresaActivaUsuario,

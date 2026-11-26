@@ -27,7 +27,10 @@ export async function obtenerEmpresas() {
     if (error) throw new Error(error.message);
     return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const mensajeError = err instanceof Error ? err.message : "Error desconocido al obtener empresas.";
+    const mensajeError =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener empresas.";
     return { success: false, data: [], error: mensajeError };
   }
 }
@@ -35,9 +38,16 @@ export async function obtenerEmpresas() {
 export async function obtenerSucursales(empresaId?: number | string | null) {
   try {
     const cookieStore = await cookies();
-    const idEmpresa = empresaId || cookieStore.get("empresa_activa")?.value;
+    const rawEmpresa =
+      empresaId !== undefined &&
+      empresaId !== null &&
+      String(empresaId).trim() !== ""
+        ? empresaId
+        : cookieStore.get("empresa_activa")?.value;
 
-    if (!idEmpresa) {
+    const parsedEmpresaId = rawEmpresa ? Number(rawEmpresa) : 0;
+
+    if (!parsedEmpresaId || Number.isNaN(parsedEmpresaId)) {
       return { success: true, data: [], error: null };
     }
 
@@ -45,13 +55,16 @@ export async function obtenerSucursales(empresaId?: number | string | null) {
     const { data, error } = await supabase
       .from("sucursales")
       .select("id, nombre, codigo_sucursal")
-      .eq("empresa_id", Number(idEmpresa))
+      .eq("empresa_id", parsedEmpresaId)
       .order("nombre", { ascending: true });
 
     if (error) throw new Error(error.message);
     return { success: true, data: data || [], error: null };
   } catch (err: unknown) {
-    const mensajeError = err instanceof Error ? err.message : "Error desconocido al obtener sucursales.";
+    const mensajeError =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido al obtener sucursales.";
     return { success: false, data: [], error: mensajeError };
   }
 }

@@ -18,8 +18,22 @@ function getSupabaseAdmin() {
   });
 }
 
-async function resolverEmpresaId(empresaId?: number | string | null): Promise<number> {
-  if (empresaId !== null && empresaId !== undefined && String(empresaId).trim() !== "") {
+function parseNumericId(id: string | number | undefined | null): number {
+  if (id === null || id === undefined) return 0;
+  const strId = String(id).trim();
+  if (!/^\d+$/.test(strId)) return 0;
+  const parsed = parseInt(strId, 10);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+async function resolverEmpresaId(
+  empresaId?: number | string | null
+): Promise<number> {
+  if (
+    empresaId !== null &&
+    empresaId !== undefined &&
+    String(empresaId).trim() !== ""
+  ) {
     const parsed = parseNumericId(empresaId);
     if (parsed > 0) return parsed;
   }
@@ -28,9 +42,40 @@ async function resolverEmpresaId(empresaId?: number | string | null): Promise<nu
   return parseNumericId(idCookie);
 }
 
+async function validarEmpresaAsignadaUsuario(
+  empresaId: number
+): Promise<boolean> {
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const cookieStore = await cookies();
+    const token =
+      cookieStore.get("sb-access-token")?.value ||
+      cookieStore.get("supabase-auth-token")?.value;
+
+    if (!token) return true;
+
+    const {
+      data: { user },
+    } = await supabaseAdmin.auth.getUser(token);
+
+    if (!user) return true;
+
+    const { data: permisos, error } = await supabaseAdmin
+      .from("usuario_permisos_tx")
+      .select("empresa_id")
+      .eq("usuario_id", user.id)
+      .eq("empresa_id", empresaId);
+
+    if (error) return true;
+    return Array.isArray(permisos) && permisos.length > 0;
+  } catch {
+    return true;
+  }
+}
+
 function normalizarNit(nit?: string): string {
   if (!nit) return "";
-  return nit.replace(/[\.\-\s]/g, "").trim();
+  return nit.replace(/[.\-\s]/g, "").trim();
 }
 
 function nitBaseSinDv(nitLimpio: string): string {
@@ -49,20 +94,6 @@ function nitsCoinciden(nitA?: string, nitB?: string): boolean {
   return nitBaseSinDv(a) === nitBaseSinDv(b);
 }
 
-/**
- * Parsea un ID a número entero (BIGINT).
- */
-function parseNumericId(id: string | number | undefined | null): number {
-  if (id === null || id === undefined) return 0;
-  const strId = String(id).trim();
-  if (!/^\d+$/.test(strId)) return 0;
-  const parsed = parseInt(strId, 10);
-  return isNaN(parsed) ? 0 : parsed;
-}
-
-/**
- * Parsea un valor numérico/moneda de forma segura.
- */
 function parseSafeNumber(val: unknown): number {
   if (val === null || val === undefined) return 0;
   if (typeof val === "number") return isNaN(val) ? 0 : val;
@@ -80,9 +111,6 @@ function parseSafeNumber(val: unknown): number {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-/**
- * Garantiza una fecha en formato YYYY-MM-DD válida.
- */
 function parseSafeDate(fechaStr?: string): string {
   const hoy = new Date().toISOString().split("T")[0];
   if (!fechaStr) return hoy;
@@ -159,18 +187,33 @@ export async function procesarFacturaXmlAdmin(
     const parsedSucursalId = parseNumericId(sucursalId);
     const parsedClaseDocId = parseNumericId(claseDocumentoId);
 
-    if (!parsedEmpresaId) throw new Error("Debe seleccionar una empresa válida (ID numérico inválido).");
-    if (!parsedSucursalId) throw new Error("Debe seleccionar una sucursal válida (ID numérico inválido).");
+    if (!parsedEmpresaId) {
+      throw new Error(
+        "Debe seleccionar una empresa válida (ID numérico inválido)."
+      );
+    }
+    if (!parsedSucursalId) {
+      throw new Error(
+        "Debe seleccionar una sucursal válida (ID numérico inválido)."
+      );
+    }
     if (!parsedClaseDocId) {
-      throw new Error("Debe seleccionar una clase de documento válida (ID numérico inválido).");
+      throw new Error(
+        "Debe seleccionar una clase de documento válida (ID numérico inválido)."
+      );
     }
 
     const nitEmisorRaw = datosXml.emisor_nit?.trim();
-    const nombreEmisor = datosXml.emisor_nombre?.trim() || "PROVEEDOR DESCONOCIDO";
+    const nombreEmisor =
+      datosXml.emisor_nombre?.trim() || "PROVEEDOR DESCONOCIDO";
     const nitReceptorXml = datosXml.receptor_nit?.trim();
 
-    if (!nitEmisorRaw) throw new Error("El NIT del emisor es obligatorio en el XML.");
-    if (!nitReceptorXml) throw new Error("El NIT del receptor no se encontró en el XML.");
+    if (!nitEmisorRaw) {
+      throw new Error("El NIT del emisor es obligatorio en el XML.");
+    }
+    if (!nitReceptorXml) {
+      throw new Error("El NIT del receptor no se encontró en el XML.");
+    }
 
     // 1. Validar Empresa
     const { data: empresaData, error: errorEmpresa } = await supabaseAdmin
@@ -180,7 +223,19 @@ export async function procesarFacturaXmlAdmin(
       .single();
 
     if (errorEmpresa || !empresaData) {
-      throw new Error("No se pudo obtener la información de la empresa seleccionada.");
+      throw new Error(
+        "No se pudo obtener la información de la empresa seleccionada."
+      );
+    }
+
+    // 1.1 Validar permisos de empresa asignada al usuario
+    const tienePermisoEmpresa = await validarEmpresaAsignadaUsuario(
+      parsedEmpresaId
+    );
+    if (!tienePermisoEmpresa) {
+      throw new Error(
+        "No tiene permisos asignados para operar en la empresa seleccionada."
+      );
     }
 
     // 2. Validar que la Sucursal pertenezca a la Empresa seleccionada
@@ -192,7 +247,9 @@ export async function procesarFacturaXmlAdmin(
       .maybeSingle();
 
     if (errorSucursal || !sucursalData) {
-      throw new Error("La sucursal seleccionada no pertenece a la empresa activa.");
+      throw new Error(
+        "La sucursal seleccionada no pertenece a la empresa activa."
+      );
     }
 
     const nitEmpresaDB =
@@ -204,7 +261,9 @@ export async function procesarFacturaXmlAdmin(
 
     if (nitEmpresaLimpio && !nitsCoinciden(nitEmpresaDB, nitReceptorXml)) {
       const nombreEmpresa =
-        empresaData.razon_social || empresaData.nombre_comercial || "la empresa activa";
+        empresaData.razon_social ||
+        empresaData.nombre_comercial ||
+        "la empresa activa";
       throw new Error(
         `La factura fue emitida para el NIT ${nitReceptorXml}, pero la empresa seleccionada es ${nombreEmpresa} (NIT ${nitEmpresaDB}).`
       );
@@ -213,10 +272,14 @@ export async function procesarFacturaXmlAdmin(
     // 3. Buscar Tercero por Empresa (Incluyendo sus retenciones por defecto configuradas)
     const { data: tercerosEmpresa, error: errorTercero } = await supabaseAdmin
       .from("terceros")
-      .select("id, numero_identificacion, retencion_renta_id, retencion_iva_id, retencion_ica_id")
+      .select(
+        "id, numero_identificacion, retencion_renta_id, retencion_iva_id, retencion_ica_id"
+      )
       .eq("empresa_id", parsedEmpresaId);
 
-    if (errorTercero) throw new Error(`Error al consultar tercero: ${errorTercero.message}`);
+    if (errorTercero) {
+      throw new Error(`Error al consultar tercero: ${errorTercero.message}`);
+    }
 
     const terceroEncontrado = tercerosEmpresa?.find((t) =>
       nitsCoinciden(String(t.numero_identificacion || ""), nitEmisorRaw)
@@ -259,7 +322,8 @@ export async function procesarFacturaXmlAdmin(
       .eq("id", parsedClaseDocId)
       .maybeSingle();
 
-    const prefijoClase = claseDocData?.sigla || claseDocData?.codigo_clase || "FC";
+    const prefijoClase =
+      claseDocData?.sigla || claseDocData?.codigo_clase || "FC";
 
     // 5. Obtener Conceptos Auxiliares (Débito y Crédito)
     const { data: mapaConceptos } = await supabaseAdmin
@@ -269,8 +333,12 @@ export async function procesarFacturaXmlAdmin(
       .eq("empresa_id", parsedEmpresaId)
       .maybeSingle();
 
-    const conceptoDebitoId = parseNumericId(mapaConceptos?.concepto_auxiliar_debito);
-    const conceptoCreditoId = parseNumericId(mapaConceptos?.concepto_auxiliar_credito);
+    const conceptoDebitoId = parseNumericId(
+      mapaConceptos?.concepto_auxiliar_debito
+    );
+    const conceptoCreditoId = parseNumericId(
+      mapaConceptos?.concepto_auxiliar_credito
+    );
 
     if (!conceptoDebitoId || !conceptoCreditoId) {
       throw new Error(
@@ -283,7 +351,10 @@ export async function procesarFacturaXmlAdmin(
     let xmlUrlStored: string | null = null;
 
     if (xmlFinalContent) {
-      const numFacturaClean = (datosXml.numero_factura || "FAC").replace(/[^a-zA-Z0-9_.-]/g, "_");
+      const numFacturaClean = (datosXml.numero_factura || "FAC").replace(
+        /[^a-zA-Z0-9_.-]/g,
+        "_"
+      );
       const storagePath = `${parsedEmpresaId}/${Date.now()}_${numFacturaClean}.xml`;
 
       const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
@@ -294,7 +365,10 @@ export async function procesarFacturaXmlAdmin(
         });
 
       if (uploadError) {
-        console.warn("Error al subir archivo a Storage 'facturas-xml':", uploadError.message);
+        console.warn(
+          "Error al subir archivo a Storage 'facturas-xml':",
+          uploadError.message
+        );
       } else if (uploadData) {
         uploadedStoragePath = storagePath;
         const { data: publicUrlData } = supabaseAdmin.storage
@@ -321,7 +395,9 @@ export async function procesarFacturaXmlAdmin(
 
     const pdfFinalRaw = pdfUrl || datosXml.pdfUrl;
     const pdfUrlFinal =
-      pdfFinalRaw && String(pdfFinalRaw).trim() !== "" ? String(pdfFinalRaw).trim() : null;
+      pdfFinalRaw && String(pdfFinalRaw).trim() !== ""
+        ? String(pdfFinalRaw).trim()
+        : null;
 
     // 7. Payload con inclusión de retenciones resueltas para la RPC
     const rpcPayload = {
@@ -358,9 +434,14 @@ export async function procesarFacturaXmlAdmin(
 
     if (errorRpc) {
       if (uploadedStoragePath) {
-        await supabaseAdmin.storage.from("facturas-xml").remove([uploadedStoragePath]);
+        await supabaseAdmin.storage
+          .from("facturas-xml")
+          .remove([uploadedStoragePath]);
       }
-      console.error("Error en RPC fn_registrar_factura_recibida_completa:", errorRpc);
+      console.error(
+        "Error en RPC fn_registrar_factura_recibida_completa:",
+        errorRpc
+      );
       throw new Error(errorRpc.message);
     }
 
@@ -378,7 +459,8 @@ export async function procesarFacturaXmlAdmin(
       error: null,
     };
   } catch (err: unknown) {
-    const mensaje = err instanceof Error ? err.message : "Error al procesar la factura.";
+    const mensaje =
+      err instanceof Error ? err.message : "Error al procesar la factura.";
     console.error("Error en procesarFacturaXmlAdmin:", mensaje);
     return {
       success: false,
@@ -408,6 +490,21 @@ export async function procesarFacturasXmlMasivoAdmin(
     };
   }
 
+  const empresaLoteId = await resolverEmpresaId(empresaId);
+  if (!empresaLoteId) {
+    return {
+      success: false,
+      error:
+        "No se pudo determinar una empresa activa válida para el cargue masivo.",
+      resumen: { total: listaXml.length, exitosos: 0, fallidos: listaXml.length },
+      detalle: listaXml.map((item) => ({
+        numeroFactura: item.numero_factura || "SIN_NUMERO",
+        exito: false,
+        error: "Empresa activa no válida.",
+      })),
+    };
+  }
+
   const detalleResultados: ResultadoFacturaItem[] = [];
   let exitososCount = 0;
   let fallidosCount = 0;
@@ -418,7 +515,7 @@ export async function procesarFacturasXmlMasivoAdmin(
     try {
       const res = await procesarFacturaXmlAdmin(
         itemXml,
-        empresaId,
+        empresaLoteId,
         sucursalId,
         claseDocumentoId,
         itemXml.contenidoXml,
@@ -449,7 +546,10 @@ export async function procesarFacturasXmlMasivoAdmin(
       }
     } catch (err: unknown) {
       fallidosCount++;
-      const mensaje = err instanceof Error ? err.message : "Error desconocido durante la ejecución.";
+      const mensaje =
+        err instanceof Error
+          ? err.message
+          : "Error desconocido durante la ejecución.";
       detalleResultados.push({
         numeroFactura: numFactura,
         exito: false,
